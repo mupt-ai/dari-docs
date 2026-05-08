@@ -1,30 +1,27 @@
 package agenttemplates
 
 import (
-	"embed"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/mupt-ai/dari-docs/agents"
 )
 
-//go:embed templates/**
-var templates embed.FS
-
 func Extract(dest string) error {
-	return fs.WalkDir(templates, "templates", func(path string, d fs.DirEntry, err error) error {
+	return fs.WalkDir(agents.FS, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if path == "templates" {
+		if path == "." {
 			return nil
 		}
-		rel := strings.TrimPrefix(path, "templates/")
-		out := filepath.Join(dest, filepath.FromSlash(rel))
+		out := filepath.Join(dest, filepath.FromSlash(path))
 		if d.IsDir() {
 			return os.MkdirAll(out, 0o755)
 		}
-		b, err := templates.ReadFile(path)
+		b, err := agents.FS.ReadFile(path)
 		if err != nil {
 			return err
 		}
