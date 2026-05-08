@@ -1,0 +1,33 @@
+name: docs-editor-agent
+harness: pi
+
+instructions:
+  system: prompts/system.md
+
+sandbox:
+  provider: e2b
+  secrets:
+    - DARI_DOCS_RUNTIME_SECRETS_JSON
+  runtimes:
+    python: "3.13"
+  packages:
+    apt:
+      - ca-certificates
+      - curl
+      - git
+      - jq
+      - ripgrep
+      - diffutils
+
+llm:
+  model: openai/gpt-5.5
+
+built_in_tools:
+  - read
+  - bash
+  - edit
+  - write
+
+skills:
+  - name: documentation-editor
+    path: skills/documentation-editor
