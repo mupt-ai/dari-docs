@@ -1,6 +1,13 @@
 # Bundled Dari agents
 
-The CLI embeds these agent templates:
+The agent template folders live at the repo root:
+
+```text
+agents/docs-user-tester-agent/dari.yml
+agents/docs-editor-agent/dari.yml
+```
+
+They are normal Dari agent projects with `dari.yml`, prompts, skills, and setup scripts. The CLI embeds these folders into the Go binary.
 
 - `docs-user-tester-agent` — lightweight simulated-user testing agent
 - `docs-editor-agent` — remote editor agent

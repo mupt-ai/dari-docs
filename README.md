@@ -16,6 +16,17 @@ Or from this repo:
 go build ./cmd/dari-docs
 ```
 
+## Agent templates
+
+The Dari agent definitions are checked in at the repo root:
+
+```text
+agents/docs-user-tester-agent/dari.yml
+agents/docs-editor-agent/dari.yml
+```
+
+`dari-docs init --deploy` deploys those agents into your Dari org.
+
 ## Setup
 
 ```bash
