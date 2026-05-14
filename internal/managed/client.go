@@ -150,6 +150,10 @@ func (c *Client) Logout(ctx context.Context) error {
 	return c.doJSON(ctx, http.MethodPost, "/v1/auth/logout", nil, nil)
 }
 
+func (c *Client) LogoutAll(ctx context.Context) error {
+	return c.doJSON(ctx, http.MethodPost, "/v1/auth/logout-all", nil, nil)
+}
+
 func (c *Client) CreateAgentSetDeploy(ctx context.Context, opts CreateAgentSetOptions) (AgentSetResponse, error) {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)

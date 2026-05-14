@@ -409,16 +409,7 @@ func runAuthLogin(args []string) error {
 		return err
 	}
 	ctx := context.Background()
-	authConfig, err := platformauth.FetchConfig(ctx, "https://api.dari.dev")
-	if err != nil {
-		return err
-	}
-	session, err := platformauth.LoginWithBrowser(ctx, authConfig, os.Stdin, os.Stderr)
-	if err != nil {
-		return err
-	}
-	client := managed.New(managed.DefaultBaseURL, "")
-	verified, err := client.ExchangeDariToken(ctx, session.AccessToken)
+	verified, err := exchangeManagedBrowserLogin(ctx)
 	if err != nil {
 		return err
 	}
@@ -429,17 +420,35 @@ func runAuthLogin(args []string) error {
 	return nil
 }
 
+func exchangeManagedBrowserLogin(ctx context.Context) (managed.DariExchangeResponse, error) {
+	authConfig, err := platformauth.FetchConfig(ctx, "https://api.dari.dev")
+	if err != nil {
+		return managed.DariExchangeResponse{}, err
+	}
+	session, err := platformauth.LoginWithBrowser(ctx, authConfig, os.Stdin, os.Stderr)
+	if err != nil {
+		return managed.DariExchangeResponse{}, err
+	}
+	client := managed.New(managed.DefaultBaseURL, "")
+	return client.ExchangeDariToken(ctx, session.AccessToken)
+}
+
 func runAuthLogout(args []string) error {
 	fs := flag.NewFlagSet("dari-docs auth logout", flag.ExitOnError)
+	var all bool
+	fs.BoolVar(&all, "all", false, "revoke all managed service tokens for this account")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if all {
+		return runAuthLogoutAll(context.Background())
 	}
 	token, err := managed.LoadToken(managed.DefaultBaseURL)
 	if err != nil {
 		return err
 	}
 	if token == "" {
-		fmt.Printf("Already logged out of %s\n", managed.DefaultBaseURL)
+		fmt.Printf("Already logged out locally.\nTo revoke server-side tokens from other devices or deleted local sessions, run `dari-docs auth logout --all`.\n")
 		return nil
 	}
 	client := managed.New(managed.DefaultBaseURL, token)
@@ -453,6 +462,44 @@ func runAuthLogout(args []string) error {
 		return err
 	}
 	fmt.Printf("Logged out of %s\n", managed.DefaultBaseURL)
+	return nil
+}
+
+func runAuthLogoutAll(ctx context.Context) error {
+	token, err := managed.LoadToken(managed.DefaultBaseURL)
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		client := managed.New(managed.DefaultBaseURL, token)
+		if err := client.LogoutAll(ctx); err == nil {
+			if err := managed.DeleteToken(managed.DefaultBaseURL); err != nil {
+				return err
+			}
+			fmt.Printf("Revoked all Dari Docs managed tokens for this account.\n")
+			return nil
+		} else {
+			var httpErr *managed.HTTPError
+			if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusUnauthorized {
+				return err
+			}
+			if err := managed.DeleteToken(managed.DefaultBaseURL); err != nil {
+				return err
+			}
+			fmt.Fprintln(os.Stderr, "Stored login was invalid; re-authenticating to revoke server-side tokens.")
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "No local login found; re-authenticating to revoke server-side tokens.")
+	}
+	verified, err := exchangeManagedBrowserLogin(ctx)
+	if err != nil {
+		return err
+	}
+	client := managed.New(managed.DefaultBaseURL, verified.Token)
+	if err := client.LogoutAll(ctx); err != nil {
+		return err
+	}
+	fmt.Printf("Revoked all Dari Docs managed tokens for %s.\n", verified.Email)
 	return nil
 }
 
@@ -1040,6 +1087,7 @@ func usage() {
 Usage:
   dari-docs --version
   dari-docs auth login
+  dari-docs auth logout [--all]
   dari-docs init [repo]
   dari-docs agents deploy --managed [--resume|--force-new]
   dari-docs billing balance

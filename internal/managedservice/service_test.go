@@ -654,6 +654,63 @@ func TestDariAuthExchangeRequiresBearer(t *testing.T) {
 	}
 }
 
+func TestLogoutAllRevokesOnlyCurrentUserTokens(t *testing.T) {
+	dsn := os.Getenv("MANAGEDSERVICE_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set MANAGEDSERVICE_TEST_DATABASE_URL to run managed service database integration tests")
+	}
+	ctx := context.Background()
+	db, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if err := runMigrations(ctx, dsn); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{db: db}
+	userID := "usr_test_" + randomToken(8)
+	otherUserID := "usr_test_" + randomToken(8)
+	token := "managed_token_" + randomToken(8)
+	token2 := "managed_token_" + randomToken(8)
+	otherToken := "managed_token_" + randomToken(8)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), `DELETE FROM api_tokens WHERE user_id IN ($1, $2)`, userID, otherUserID)
+		_, _ = db.Exec(context.Background(), `DELETE FROM users WHERE id IN ($1, $2)`, userID, otherUserID)
+	})
+	if _, err := db.Exec(ctx, `INSERT INTO users (id, auth_subject, email) VALUES ($1, $2, $3), ($4, $5, $6)`,
+		userID, "auth_"+userID, userID+"@example.test",
+		otherUserID, "auth_"+otherUserID, otherUserID+"@example.test",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+INSERT INTO api_tokens (id, user_id, token_hash)
+VALUES ($1, $2, $3), ($4, $2, $5), ($6, $7, $8)
+`, "tok_"+randomToken(8), userID, sha256Hex(token), "tok_"+randomToken(8), sha256Hex(token2), "tok_"+randomToken(8), otherUserID, sha256Hex(otherToken)); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/logout-all", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", rec.Code, rec.Body.String())
+	}
+	var currentRevoked, otherRevoked int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM api_tokens WHERE user_id=$1 AND revoked_at IS NOT NULL`, userID).Scan(&currentRevoked); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM api_tokens WHERE user_id=$1 AND revoked_at IS NOT NULL`, otherUserID).Scan(&otherRevoked); err != nil {
+		t.Fatal(err)
+	}
+	if currentRevoked != 2 || otherRevoked != 0 {
+		t.Fatalf("revoked current=%d other=%d, want current=2 other=0", currentRevoked, otherRevoked)
+	}
+}
+
 func TestActiveRunLimitErrorMessageUsesLimit(t *testing.T) {
 	err := (&activeRunLimitError{Limit: 3}).Error()
 	want := "you already have 3 active managed runs; wait for one to finish before starting another run"
