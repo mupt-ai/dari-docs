@@ -471,7 +471,11 @@ func LoadToken(baseURL string) (string, error) {
 }
 
 func LoadAuthToken(baseURL string) (AuthToken, error) {
-	if token := strings.TrimSpace(os.Getenv(EnvTokenName)); token != "" {
+	if rawToken, ok := os.LookupEnv(EnvTokenName); ok {
+		token := strings.TrimSpace(rawToken)
+		if token == "" {
+			return AuthToken{}, fmt.Errorf("%s is set but empty; unset it or provide a valid token", EnvTokenName)
+		}
 		return AuthToken{Token: token, Source: AuthSourceEnv}, nil
 	}
 	token, err := LoadToken(baseURL)

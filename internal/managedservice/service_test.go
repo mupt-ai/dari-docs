@@ -207,6 +207,11 @@ func TestPersistedErrorStripsHTTPBodiesAndTruncates(t *testing.T) {
 	if strings.Contains(got, "dari_abcdefghijklmnopqrstuvwxyz0123456789") || !strings.Contains(got, "[redacted]") {
 		t.Fatalf("persistedError did not redact credential: %q", got)
 	}
+
+	got = persistedError(fmt.Errorf("managed token mdt_v1_tok_abc123_secretvalue failed"))
+	if strings.Contains(got, "mdt_v1_tok_abc123_secretvalue") || !strings.Contains(got, "[redacted]") {
+		t.Fatalf("persistedError did not redact managed token: %q", got)
+	}
 }
 
 func TestRuntimeSecretNamesFromJSON(t *testing.T) {

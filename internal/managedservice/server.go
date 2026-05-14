@@ -38,7 +38,7 @@ type Server struct {
 	httpClient *http.Client
 }
 
-var persistedSecretPattern = regexp.MustCompile(`\b(?:sk_(?:live|test)_[A-Za-z0-9_-]+|rk_(?:live|test)_[A-Za-z0-9_-]+|whsec_[A-Za-z0-9_-]+|dari_[A-Za-z0-9_-]{12,})\b`)
+var persistedSecretPattern = regexp.MustCompile(`\b(?:sk_(?:live|test)_[A-Za-z0-9_-]+|rk_(?:live|test)_[A-Za-z0-9_-]+|whsec_[A-Za-z0-9_-]+|dari_[A-Za-z0-9_-]{12,}|mdt_v1_tok_[A-Za-z0-9_-]+_[A-Za-z0-9_-]+)\b`)
 
 func Run(ctx context.Context, cfg Config) error {
 	if err := runMigrations(ctx, cfg.DatabaseURL); err != nil {

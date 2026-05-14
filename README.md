@@ -134,6 +134,8 @@ The token value is shown once. Add it to your repository or environment secrets 
 
 By default, automation tokens can read managed account/run state and create managed checks. Add scopes explicitly for broader workflows, for example `--scope managed:read --scope managed:optimize` if CI should generate proposed revisions.
 
+Automation tokens do not expire by default. To set an expiration, pass `--expires-in 90d` or `--expires-in 24h`, for example.
+
 Deploy agents locally and commit `.dari-docs/config.json` if you want CI and local runs to use the same managed agent set:
 
 ```bash

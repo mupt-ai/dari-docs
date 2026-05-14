@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -46,6 +47,20 @@ func TestLoadAuthTokenPrefersEnvToken(t *testing.T) {
 	}
 	if got.Token != "env-token" || got.Source != AuthSourceEnv {
 		t.Fatalf("auth token = %#v, want env token", got)
+	}
+}
+
+func TestLoadAuthTokenEmptyEnvDoesNotFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(EnvTokenName, " ")
+	if err := SaveToken("https://service.example.com", "local-token"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadAuthToken("https://service.example.com"); err == nil {
+		t.Fatal("expected empty env token error")
+	} else if !strings.Contains(err.Error(), EnvTokenName+" is set but empty") {
+		t.Fatalf("err = %v, want empty env token error", err)
 	}
 }
 
