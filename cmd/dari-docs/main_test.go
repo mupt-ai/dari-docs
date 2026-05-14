@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mupt-ai/dari-docs/internal/managed"
 )
@@ -27,6 +28,29 @@ func TestParseDollarsToCents(t *testing.T) {
 	}
 	if _, err := parseDollarsToCents("1.234"); err == nil {
 		t.Fatal("expected too many decimal places error")
+	}
+}
+
+func TestParseExpiresIn(t *testing.T) {
+	got, err := parseExpiresIn("2d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || time.Until(*got) < 47*time.Hour || time.Until(*got) > 49*time.Hour {
+		t.Fatalf("expires in 2d parsed to %v", got)
+	}
+	got, err = parseExpiresIn("24h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || time.Until(*got) < 23*time.Hour || time.Until(*got) > 25*time.Hour {
+		t.Fatalf("expires in 24h parsed to %v", got)
+	}
+	if got, err := parseExpiresIn(""); err != nil || got != nil {
+		t.Fatalf("empty expires = %v, %v; want nil nil", got, err)
+	}
+	if _, err := parseExpiresIn("0d"); err == nil {
+		t.Fatal("expected error for zero duration")
 	}
 }
 
@@ -71,6 +95,59 @@ func TestExpandCSVListTrimsDeduplicatesAndSplits(t *testing.T) {
 	want := []string{"dumb-claude", "medium-claude", "smart-gpt"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("expandCSVList = %#v, want %#v", got, want)
+	}
+}
+
+func TestManagedCheckRequiresLoginBeforeAgentSet(t *testing.T) {
+	repo := t.TempDir()
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
+
+	err := runCheckOrOptimize("check", []string{repo, "--managed", "--task", "Run echo ok"})
+	if err == nil {
+		t.Fatal("expected missing login error")
+	}
+	if !strings.Contains(err.Error(), "not logged in to managed service") {
+		t.Fatalf("error = %q, want login error", err.Error())
+	}
+	if strings.Contains(err.Error(), "missing managed agent set") {
+		t.Fatalf("error = %q, should not mention missing agent set before login", err.Error())
+	}
+}
+
+func TestManagedAgentDeployRequiresLoginBeforeInit(t *testing.T) {
+	repo := t.TempDir()
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
+
+	err := runAgents([]string{"deploy", "--managed", repo})
+	if err == nil {
+		t.Fatal("expected missing login error")
+	}
+	if !strings.Contains(err.Error(), "not logged in to managed service") {
+		t.Fatalf("error = %q, want login error", err.Error())
+	}
+	if strings.Contains(err.Error(), "missing local agents") {
+		t.Fatalf("error = %q, should not mention missing local agents before login", err.Error())
+	}
+}
+
+func TestAuthLogoutWithoutTokenSucceeds(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	t.Setenv("HOME", home)
+
+	if err := runAuthLogout(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".dari-docs", "credentials.json")); !os.IsNotExist(err) {
+		t.Fatalf("credentials file should not be created on no-op logout, stat err=%v", err)
+	}
+}
+
+func TestVersionLine(t *testing.T) {
+	original := version
+	t.Cleanup(func() { version = original })
+	version = "v0.1.0"
+	if got, want := versionLine(), "dari-docs v0.1.0"; got != want {
+		t.Fatalf("versionLine() = %q, want %q", got, want)
 	}
 }
 
@@ -152,6 +229,36 @@ llm:
 	got := string(b)
 	if strings.Count(got, "api_key_secret: ANTHROPIC_KEY") != 1 || strings.Count(got, "api_key_secret: OPENAI_KEY") != 1 {
 		t.Fatalf("provider-specific api_key_secret values were not inserted:\n%s", got)
+	}
+}
+
+func TestSetLLMAPIKeySecretReplacesExistingSecret(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dari.yml")
+	original := `name: test
+llm:
+  default: medium-claude
+  options:
+    medium-claude:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      api_key_secret: OLD_KEY
+`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := setLLMAPIKeySecret(path, "MY_KEY"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	if strings.Contains(got, "OLD_KEY") {
+		t.Fatalf("old api_key_secret was preserved:\n%s", got)
+	}
+	if strings.Count(got, "api_key_secret: MY_KEY") != 1 {
+		t.Fatalf("api_key_secret was not replaced:\n%s", got)
 	}
 }
 

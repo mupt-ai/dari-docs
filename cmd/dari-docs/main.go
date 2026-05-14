@@ -17,8 +17,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/mupt-ai/dari-docs/internal/agentbundle"
@@ -30,6 +32,7 @@ import (
 	"github.com/mupt-ai/dari-docs/internal/platformauth"
 	"github.com/mupt-ai/dari-docs/internal/runner"
 	"github.com/mupt-ai/dari-docs/internal/workspace"
+	"gopkg.in/yaml.v3"
 )
 
 type repeated []string
@@ -40,6 +43,8 @@ func (r *repeated) Set(v string) error { *r = append(*r, v); return nil }
 func defaultFeedbackLLMIDs() []string {
 	return runner.DefaultFeedbackLLMIDs()
 }
+
+var version = "dev"
 
 func main() {
 	if err := run(); err != nil {
@@ -53,13 +58,17 @@ func run() error {
 	args := os.Args[1:]
 	if len(args) > 0 {
 		switch args[0] {
-		case "init", "optimize", "check", "auth", "billing", "agents", "help", "-h", "--help":
+		case "init", "optimize", "check", "auth", "billing", "agents", "help", "-h", "--help", "version", "-v", "--version":
 			cmd = args[0]
 			args = args[1:]
 		}
 	}
 	if cmd == "help" || cmd == "-h" || cmd == "--help" {
 		usage()
+		return nil
+	}
+	if cmd == "version" || cmd == "-v" || cmd == "--version" {
+		fmt.Println(versionLine())
 		return nil
 	}
 	if cmd == "init" {
@@ -173,6 +182,9 @@ func runCheckOrOptimize(cmd string, args []string) error {
 		if apiKey != "" || apiBaseURL != "" || feedbackAgent != "" || editorAgent != "" || llmID != "" || feedbackLLMExplicit || editorLLMID != "" {
 			return fmt.Errorf("--managed cannot be combined with --api-key, --api-base-url, --feedback-agent, --editor-agent, or LLM selection flags")
 		}
+		if _, err := loadManagedToken(); err != nil {
+			return err
+		}
 		c, ok, err := appconfig.Load(absRepo)
 		if err != nil {
 			return err
@@ -255,14 +267,11 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 	if err := os.MkdirAll(cfg.OutDir, 0o755); err != nil {
 		return err
 	}
-	token, err := managed.LoadToken(managed.DefaultBaseURL)
+	auth, err := loadManagedAuthToken()
 	if err != nil {
 		return err
 	}
-	if token == "" {
-		return fmt.Errorf("not logged in to managed service; run `dari-docs auth login`")
-	}
-	client := managed.New(managed.DefaultBaseURL, token)
+	client := managed.NewWithAuthToken(managed.DefaultBaseURL, auth)
 	runCfg, err := client.RunConfig(ctx)
 	if err != nil {
 		return err
@@ -409,15 +418,19 @@ func writeManagedFeedback(outDir string, reports []string, aggregate string) err
 
 func runAuth(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: dari-docs auth [login|logout]")
+		return fmt.Errorf("usage: dari-docs auth [login|logout|status|token]")
 	}
 	switch args[0] {
 	case "login":
 		return runAuthLogin(args[1:])
 	case "logout":
 		return runAuthLogout(args[1:])
+	case "status":
+		return runAuthStatus(args[1:])
+	case "token":
+		return runAuthToken(args[1:])
 	default:
-		return fmt.Errorf("usage: dari-docs auth [login|logout]")
+		return fmt.Errorf("usage: dari-docs auth [login|logout|status|token]")
 	}
 }
 
@@ -427,16 +440,7 @@ func runAuthLogin(args []string) error {
 		return err
 	}
 	ctx := context.Background()
-	authConfig, err := platformauth.FetchConfig(ctx, "https://api.dari.dev")
-	if err != nil {
-		return err
-	}
-	session, err := platformauth.LoginWithBrowser(ctx, authConfig, os.Stdin, os.Stderr)
-	if err != nil {
-		return err
-	}
-	client := managed.New(managed.DefaultBaseURL, "")
-	verified, err := client.ExchangeDariToken(ctx, session.AccessToken)
+	verified, err := exchangeManagedBrowserLogin(ctx)
 	if err != nil {
 		return err
 	}
@@ -447,22 +451,271 @@ func runAuthLogin(args []string) error {
 	return nil
 }
 
+func exchangeManagedBrowserLogin(ctx context.Context) (managed.DariExchangeResponse, error) {
+	authConfig, err := platformauth.FetchConfig(ctx, "https://api.dari.dev")
+	if err != nil {
+		return managed.DariExchangeResponse{}, err
+	}
+	session, err := platformauth.LoginWithBrowser(ctx, authConfig, os.Stdin, os.Stderr)
+	if err != nil {
+		return managed.DariExchangeResponse{}, err
+	}
+	client := managed.New(managed.DefaultBaseURL, "")
+	return client.ExchangeDariToken(ctx, session.AccessToken)
+}
+
 func runAuthLogout(args []string) error {
 	fs := flag.NewFlagSet("dari-docs auth logout", flag.ExitOnError)
+	var all bool
+	var interactiveOnly bool
+	var automationOnly bool
+	fs.BoolVar(&all, "all", false, "revoke all managed service tokens for this account")
+	fs.BoolVar(&interactiveOnly, "interactive-only", false, "with --all, revoke only browser-login tokens")
+	fs.BoolVar(&automationOnly, "automation-only", false, "with --all, revoke only automation tokens")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	client, err := managedClientWithToken()
+	if interactiveOnly && automationOnly {
+		return fmt.Errorf("--interactive-only cannot be combined with --automation-only")
+	}
+	if (interactiveOnly || automationOnly) && !all {
+		return fmt.Errorf("--interactive-only and --automation-only require --all")
+	}
+	if all {
+		kind := ""
+		switch {
+		case interactiveOnly:
+			kind = "interactive"
+		case automationOnly:
+			kind = "automation"
+		}
+		return runAuthLogoutAll(context.Background(), kind)
+	}
+	auth, err := managed.LoadAuthToken(managed.DefaultBaseURL)
 	if err != nil {
 		return err
 	}
+	if auth.Token == "" {
+		fmt.Printf("Already logged out locally.\nTo revoke server-side tokens from other devices or deleted local sessions, run `dari-docs auth logout --all`.\n")
+		return nil
+	}
+	client := managed.NewWithAuthToken(managed.DefaultBaseURL, auth)
 	if err := client.Logout(context.Background()); err != nil {
+		var httpErr *managed.HTTPError
+		var invalidEnv *managed.InvalidEnvTokenError
+		if errors.As(err, &invalidEnv) {
+			return err
+		}
+		if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusUnauthorized {
+			return err
+		}
+	}
+	if auth.Source == managed.AuthSourceLocal {
+		if err := managed.DeleteToken(managed.DefaultBaseURL); err != nil {
+			return err
+		}
+		fmt.Printf("Logged out of %s\n", managed.DefaultBaseURL)
+	} else {
+		fmt.Printf("Revoked token from %s. Unset %s to stop using it locally.\n", managed.EnvTokenName, managed.EnvTokenName)
+	}
+	return nil
+}
+
+func runAuthLogoutAll(ctx context.Context, kind string) error {
+	auth, err := managed.LoadAuthToken(managed.DefaultBaseURL)
+	if err != nil {
 		return err
 	}
-	if err := managed.DeleteToken(managed.DefaultBaseURL); err != nil {
+	if auth.Token != "" {
+		client := managed.NewWithAuthToken(managed.DefaultBaseURL, auth)
+		if err := client.LogoutAllKind(ctx, kind); err == nil {
+			if auth.Source == managed.AuthSourceLocal && kind != "automation" {
+				if err := managed.DeleteToken(managed.DefaultBaseURL); err != nil {
+					return err
+				}
+			}
+			fmt.Printf("%s.\n", logoutAllMessage(kind))
+			return nil
+		} else {
+			var httpErr *managed.HTTPError
+			var invalidEnv *managed.InvalidEnvTokenError
+			if errors.As(err, &invalidEnv) {
+				return err
+			}
+			if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusUnauthorized {
+				return err
+			}
+			if auth.Source == managed.AuthSourceLocal {
+				if err := managed.DeleteToken(managed.DefaultBaseURL); err != nil {
+					return err
+				}
+				fmt.Fprintln(os.Stderr, "Stored login was invalid; re-authenticating to revoke server-side tokens.")
+			} else {
+				return err
+			}
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "No local login found; re-authenticating to revoke server-side tokens.")
+	}
+	verified, err := exchangeManagedBrowserLogin(ctx)
+	if err != nil {
 		return err
 	}
-	fmt.Printf("Logged out of %s\n", managed.DefaultBaseURL)
+	client := managed.New(managed.DefaultBaseURL, verified.Token)
+	if err := client.LogoutAllKind(ctx, kind); err != nil {
+		return err
+	}
+	if kind == "automation" {
+		if err := client.Logout(ctx); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("%s for %s.\n", logoutAllMessage(kind), verified.Email)
+	return nil
+}
+
+func logoutAllMessage(kind string) string {
+	switch kind {
+	case "interactive":
+		return "Revoked all interactive Dari Docs managed tokens"
+	case "automation":
+		return "Revoked all automation Dari Docs managed tokens"
+	default:
+		return "Revoked all Dari Docs managed tokens"
+	}
+}
+
+func runAuthStatus(args []string) error {
+	fs := flag.NewFlagSet("dari-docs auth status", flag.ExitOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	client, auth, err := managedClientWithAuth()
+	if err != nil {
+		return err
+	}
+	me, err := client.Me(context.Background())
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Authenticated to %s\n", managed.DefaultBaseURL)
+	fmt.Printf("Email: %s\n", me.Email)
+	fmt.Printf("Source: %s\n", authSourceLabel(auth.Source))
+	if me.Token.ID != "" {
+		name := me.Token.Name
+		if name == "" {
+			name = me.Token.ID
+		}
+		fmt.Printf("Token: %s (%s)\n", name, me.Token.Kind)
+	}
+	if len(me.Token.Scopes) > 0 {
+		fmt.Printf("Scopes: %s\n", strings.Join(me.Token.Scopes, ", "))
+	}
+	return nil
+}
+
+func runAuthToken(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: dari-docs auth token [create|list|revoke]")
+	}
+	switch args[0] {
+	case "create":
+		return runAuthTokenCreate(args[1:])
+	case "list":
+		return runAuthTokenList(args[1:])
+	case "revoke":
+		return runAuthTokenRevoke(args[1:])
+	default:
+		return fmt.Errorf("usage: dari-docs auth token [create|list|revoke]")
+	}
+}
+
+func runAuthTokenCreate(args []string) error {
+	fs := flag.NewFlagSet("dari-docs auth token create", flag.ExitOnError)
+	var name string
+	var scopes repeated
+	var expiresIn string
+	fs.StringVar(&name, "name", "", "automation token name, for example github-actions")
+	fs.Var(&scopes, "scope", "token scope; repeatable (default: managed:read and managed:check)")
+	fs.StringVar(&expiresIn, "expires-in", "", "optional expiration such as 90d or 24h")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	expiresAt, err := parseExpiresIn(expiresIn)
+	if err != nil {
+		return err
+	}
+	client, _, err := managedClientWithAuth()
+	if err != nil {
+		return err
+	}
+	resp, err := client.CreateAuthToken(context.Background(), managed.TokenCreateRequest{
+		Name:      name,
+		Scopes:    expandCSVList(scopes),
+		ExpiresAt: expiresAt,
+	})
+	if err != nil {
+		return err
+	}
+	displayName := resp.Name
+	if displayName == "" {
+		displayName = resp.ID
+	}
+	fmt.Printf("Created automation token %q.\n\n", displayName)
+	fmt.Printf("%s=%s\n\n", managed.EnvTokenName, resp.Token)
+	fmt.Println("Copy this value now. It will not be shown again.")
+	return nil
+}
+
+func runAuthTokenList(args []string) error {
+	fs := flag.NewFlagSet("dari-docs auth token list", flag.ExitOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	client, _, err := managedClientWithAuth()
+	if err != nil {
+		return err
+	}
+	resp, err := client.ListAuthTokens(context.Background())
+	if err != nil {
+		return err
+	}
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tNAME\tKIND\tSCOPES\tLAST USED\tEXPIRES")
+	for _, token := range resp.Tokens {
+		name := token.Name
+		if name == "" {
+			name = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			token.ID,
+			name,
+			token.Kind,
+			strings.Join(token.Scopes, ","),
+			formatOptionalTime(token.LastUsedAt),
+			formatOptionalTime(token.ExpiresAt),
+		)
+	}
+	return tw.Flush()
+}
+
+func runAuthTokenRevoke(args []string) error {
+	fs := flag.NewFlagSet("dari-docs auth token revoke", flag.ExitOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: dari-docs auth token revoke <token-id>")
+	}
+	client, _, err := managedClientWithAuth()
+	if err != nil {
+		return err
+	}
+	tokenID := fs.Arg(0)
+	if err := client.RevokeAuthToken(context.Background(), tokenID); err != nil {
+		return err
+	}
+	fmt.Printf("Revoked token %s\n", tokenID)
 	return nil
 }
 
@@ -543,6 +796,10 @@ func runAgents(args []string) error {
 	if err != nil {
 		return err
 	}
+	auth, err := loadManagedAuthToken()
+	if err != nil {
+		return err
+	}
 	cfg, ok, err := appconfig.Load(absRepo)
 	if err != nil {
 		return err
@@ -572,14 +829,7 @@ func runAgents(args []string) error {
 	if err := agentbundle.ValidateManagedBundle(editorBundle.Content, "editor agent"); err != nil {
 		return err
 	}
-	token, err := managed.LoadToken(managed.DefaultBaseURL)
-	if err != nil {
-		return err
-	}
-	if token == "" {
-		return fmt.Errorf("not logged in to managed service; run `dari-docs auth login`")
-	}
-	tokenHash := managedTokenHash(token)
+	tokenHash := managedTokenHash(auth.Token)
 	state, _ := loadLocalState(absRepo)
 	var retryPending *pendingManagedDeploy
 	if pending := state.PendingManagedDeploy; pending != nil && !forceNew {
@@ -592,13 +842,13 @@ func runAgents(args []string) error {
 				retryPending = pending
 				break
 			}
-			client := managed.New(managed.DefaultBaseURL, token)
+			client := managed.NewWithAuthToken(managed.DefaultBaseURL, auth)
 			return waitForManagedAgentDeploy(context.Background(), absRepo, cfg, client, *pending)
 		case resumeOnly:
 			if pending.DeployID == "" {
 				return fmt.Errorf("pending managed deploy did not reach the service and agent files changed; rerun with --force-new")
 			}
-			client := managed.New(managed.DefaultBaseURL, token)
+			client := managed.NewWithAuthToken(managed.DefaultBaseURL, auth)
 			return waitForManagedAgentDeploy(context.Background(), absRepo, cfg, client, *pending)
 		default:
 			return fmt.Errorf("a previous managed deploy is pending for this repo but the agent files changed; rerun with --resume to wait for it or --force-new to queue a new deploy")
@@ -620,7 +870,7 @@ func runAgents(args []string) error {
 	if err := os.WriteFile(editorPath, editorBundle.Content, 0o600); err != nil {
 		return err
 	}
-	client := managed.New(managed.DefaultBaseURL, token)
+	client := managed.NewWithAuthToken(managed.DefaultBaseURL, auth)
 	pending := pendingManagedDeploy{}
 	if retryPending != nil {
 		pending = *retryPending
@@ -818,14 +1068,79 @@ func openBrowserURL(url string) error {
 }
 
 func managedClientWithToken() (*managed.Client, error) {
-	token, err := managed.LoadToken(managed.DefaultBaseURL)
+	auth, err := loadManagedAuthToken()
 	if err != nil {
 		return nil, err
 	}
-	if token == "" {
-		return nil, fmt.Errorf("not logged in to managed service; run `dari-docs auth login`")
+	return managed.NewWithAuthToken(managed.DefaultBaseURL, auth), nil
+}
+
+func managedClientWithAuth() (*managed.Client, managed.AuthToken, error) {
+	auth, err := loadManagedAuthToken()
+	if err != nil {
+		return nil, managed.AuthToken{}, err
 	}
-	return managed.New(managed.DefaultBaseURL, token), nil
+	return managed.NewWithAuthToken(managed.DefaultBaseURL, auth), auth, nil
+}
+
+func loadManagedToken() (string, error) {
+	auth, err := loadManagedAuthToken()
+	if err != nil {
+		return "", err
+	}
+	return auth.Token, nil
+}
+
+func loadManagedAuthToken() (managed.AuthToken, error) {
+	auth, err := managed.LoadAuthToken(managed.DefaultBaseURL)
+	if err != nil {
+		return managed.AuthToken{}, err
+	}
+	if auth.Token == "" {
+		return managed.AuthToken{}, managedAuthRequiredError()
+	}
+	return auth, nil
+}
+
+func managedAuthRequiredError() error {
+	return fmt.Errorf("not logged in to managed service\n\nFor local use:\n  dari-docs auth login\n\nFor CI:\n  dari-docs auth token create --name github-actions\n  Set %s in your CI secret store", managed.EnvTokenName)
+}
+
+func authSourceLabel(source string) string {
+	if source == managed.AuthSourceEnv {
+		return managed.EnvTokenName
+	}
+	return "local credentials"
+}
+
+func formatOptionalTime(t *time.Time) string {
+	if t == nil || t.IsZero() {
+		return "never"
+	}
+	return t.Local().Format("2006-01-02 15:04")
+}
+
+func parseExpiresIn(raw string) (*time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var d time.Duration
+	if strings.HasSuffix(raw, "d") {
+		days, err := strconv.Atoi(strings.TrimSuffix(raw, "d"))
+		if err != nil || days <= 0 {
+			return nil, fmt.Errorf("--expires-in must be a positive duration like 90d or 24h")
+		}
+		d = time.Duration(days) * 24 * time.Hour
+	} else {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed <= 0 {
+			return nil, fmt.Errorf("--expires-in must be a positive duration like 90d or 24h")
+		}
+		d = parsed
+	}
+	t := time.Now().UTC().Add(d)
+	return &t, nil
 }
 
 func parseDollarsToCents(v string) (int64, error) {
@@ -865,6 +1180,10 @@ func formatCents(cents int64) string {
 		cents = -cents
 	}
 	return fmt.Sprintf("%s$%d.%02d", sign, cents/100, cents%100)
+}
+
+func versionLine() string {
+	return "dari-docs " + version
 }
 
 func runInit(args []string) error {
@@ -995,132 +1314,126 @@ func deployAgent(env []string, dir string) (string, error) {
 }
 
 type llmModelEntry struct {
-	lineIndex int
-	indent    string
-	provider  string
+	node     *yaml.Node
+	provider string
+}
+
+type llmManifest struct {
+	path    string
+	doc     yaml.Node
+	entries []llmModelEntry
 }
 
 func setLLMAPIKeySecret(path, secret string) error {
-	return patchLLMAPIKeySecrets(path, func(entries []llmModelEntry) (map[int]string, error) {
-		providers := map[string]bool{}
-		for _, entry := range entries {
-			providers[entry.provider] = true
-		}
-		if len(providers) > 1 {
-			var names []string
-			for provider := range providers {
-				if provider == "" {
-					provider = "unspecified"
-				}
-				names = append(names, provider)
-			}
-			return nil, fmt.Errorf("--llm-api-key-secret cannot be applied to multiple LLM providers (%s); use --anthropic-api-key-secret and/or --openai-api-key-secret", strings.Join(names, ", "))
-		}
-		secrets := map[int]string{}
-		for _, entry := range entries {
-			secrets[entry.lineIndex] = secret
-		}
-		return secrets, nil
-	})
+	manifest, err := loadLLMManifest(path)
+	if err != nil {
+		return err
+	}
+	providers := map[string]bool{}
+	for _, entry := range manifest.entries {
+		providers[entry.provider] = true
+	}
+	if len(providers) > 1 {
+		return fmt.Errorf("--llm-api-key-secret cannot be applied to multiple LLM providers (%s); use --anthropic-api-key-secret and/or --openai-api-key-secret", strings.Join(providerNames(providers), ", "))
+	}
+	for _, entry := range manifest.entries {
+		yamlSetMappingScalar(entry.node, "api_key_secret", secret)
+	}
+	return manifest.write()
 }
 
 func setLLMAPIKeySecretsByProvider(path string, providerSecrets map[string]string) error {
-	normalized := map[string]string{}
-	for provider, secret := range providerSecrets {
-		provider = strings.ToLower(strings.TrimSpace(provider))
-		if provider != "" && strings.TrimSpace(secret) != "" {
-			normalized[provider] = strings.TrimSpace(secret)
+	providerSecrets = normalizeProviderSecrets(providerSecrets)
+	if len(providerSecrets) == 0 {
+		return nil
+	}
+
+	manifest, err := loadLLMManifest(path)
+	if err != nil {
+		return err
+	}
+	matched := map[string]bool{}
+	for _, entry := range manifest.entries {
+		secret, ok := providerSecrets[entry.provider]
+		if !ok {
+			continue
+		}
+		matched[entry.provider] = true
+		yamlSetMappingScalar(entry.node, "api_key_secret", secret)
+	}
+	for provider := range providerSecrets {
+		if !matched[provider] {
+			return fmt.Errorf("could not find %s llm option in %s", provider, path)
 		}
 	}
-	return patchLLMAPIKeySecrets(path, func(entries []llmModelEntry) (map[int]string, error) {
-		matched := map[string]bool{}
-		secrets := map[int]string{}
-		for _, entry := range entries {
-			secret, ok := normalized[entry.provider]
-			if !ok {
-				continue
-			}
-			matched[entry.provider] = true
-			secrets[entry.lineIndex] = secret
-		}
-		for provider := range normalized {
-			if !matched[provider] {
-				return nil, fmt.Errorf("could not find %s llm option in %s", provider, path)
-			}
-		}
-		return secrets, nil
-	})
+	return manifest.write()
 }
 
-func patchLLMAPIKeySecrets(path string, secretsForEntries func([]llmModelEntry) (map[int]string, error)) error {
+func normalizeProviderSecrets(in map[string]string) map[string]string {
+	out := map[string]string{}
+	for provider, secret := range in {
+		provider = normalizeProvider(provider)
+		secret = strings.TrimSpace(secret)
+		if provider != "" && secret != "" {
+			out[provider] = secret
+		}
+	}
+	return out
+}
+
+func loadLLMManifest(path string) (*llmManifest, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	text := string(b)
-	lines := strings.SplitAfter(text, "\n")
-	entries, err := collectLLMModelEntries(path, lines)
+	manifest := &llmManifest{path: path}
+	if err := yaml.Unmarshal(b, &manifest.doc); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	entries, err := collectLLMModelEntries(path, &manifest.doc)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	secretsByLine, err := secretsForEntries(entries)
-	if err != nil {
-		return err
-	}
-	if len(secretsByLine) == 0 {
-		return nil
-	}
-	insertions := map[int]string{}
-	for _, entry := range entries {
-		secret, ok := secretsByLine[entry.lineIndex]
-		if !ok || hasSiblingLLMAPIKeySecret(lines, entry.lineIndex, entry.indent) {
-			continue
-		}
-		insertions[entry.lineIndex+1] = entry.indent + "api_key_secret: " + secret + "\n"
-	}
-	if len(insertions) == 0 {
-		return nil
-	}
-	var out strings.Builder
-	for i, line := range lines {
-		out.WriteString(line)
-		if insert, ok := insertions[i+1]; ok {
-			out.WriteString(insert)
-		}
-	}
-	return os.WriteFile(path, []byte(out.String()), 0o644)
+	manifest.entries = entries
+	return manifest, nil
 }
 
-func collectLLMModelEntries(path string, lines []string) ([]llmModelEntry, error) {
-	llmStart := -1
-	for i := range lines {
-		if strings.TrimSpace(lines[i]) == "llm:" {
-			llmStart = i
-			break
-		}
+func (m *llmManifest) write() error {
+	var out bytes.Buffer
+	enc := yaml.NewEncoder(&out)
+	enc.SetIndent(2)
+	if err := enc.Encode(&m.doc); err != nil {
+		_ = enc.Close()
+		return fmt.Errorf("encode %s: %w", m.path, err)
 	}
-	if llmStart == -1 {
+	if err := enc.Close(); err != nil {
+		return fmt.Errorf("encode %s: %w", m.path, err)
+	}
+	return os.WriteFile(m.path, out.Bytes(), 0o644)
+}
+
+func collectLLMModelEntries(path string, doc *yaml.Node) ([]llmModelEntry, error) {
+	root := yamlDocumentRoot(doc)
+	llm := yamlMappingValue(root, "llm")
+	if llm == nil {
 		return nil, fmt.Errorf("could not find llm block in %s", path)
 	}
+
 	var entries []llmModelEntry
-	for i := llmStart + 1; i < len(lines); i++ {
-		line := lines[i]
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
+	if options := yamlMappingValue(llm, "options"); options != nil {
+		if options.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("llm.options in %s must be a mapping", path)
 		}
-		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
-			break
+		for i := 1; i < len(options.Content); i += 2 {
+			option := options.Content[i]
+			model := yamlMappingValue(option, "model")
+			if model == nil {
+				continue
+			}
+			entries = append(entries, llmModelEntry{node: option, provider: providerForLLMNode(option, model.Value)})
 		}
-		if !strings.HasPrefix(trimmed, "model:") {
-			continue
-		}
-		indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-		entries = append(entries, llmModelEntry{
-			lineIndex: i,
-			indent:    indent,
-			provider:  llmProviderForModelLine(lines, llmStart, i, indent),
-		})
+	} else if model := yamlMappingValue(llm, "model"); model != nil {
+		entries = append(entries, llmModelEntry{node: llm, provider: providerForLLMNode(llm, model.Value)})
 	}
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("could not find llm.model in %s", path)
@@ -1128,73 +1441,60 @@ func collectLLMModelEntries(path string, lines []string) ([]llmModelEntry, error
 	return entries, nil
 }
 
-func llmProviderForModelLine(lines []string, llmStart, modelLine int, indent string) string {
-	for j := modelLine - 1; j > llmStart; j-- {
-		line := lines[j]
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
-			break
-		}
-		lineIndent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-		if len(lineIndent) < len(indent) {
-			break
-		}
-		if len(lineIndent) == len(indent) && strings.HasPrefix(trimmed, "provider:") {
-			return normalizeProvider(yamlScalarValue(trimmed))
-		}
+func providerForLLMNode(node *yaml.Node, model string) string {
+	if provider := yamlMappingValue(node, "provider"); provider != nil {
+		return normalizeProvider(provider.Value)
 	}
-	for j := modelLine + 1; j < len(lines); j++ {
-		line := lines[j]
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
-			break
-		}
-		lineIndent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-		if len(lineIndent) < len(indent) || (len(lineIndent) == len(indent) && strings.HasSuffix(trimmed, ":")) {
-			break
-		}
-		if len(lineIndent) == len(indent) && strings.HasPrefix(trimmed, "provider:") {
-			return normalizeProvider(yamlScalarValue(trimmed))
-		}
-	}
-	return inferProviderFromModel(yamlScalarValue(strings.TrimSpace(lines[modelLine])))
+	return inferProviderFromModel(model)
 }
 
-func hasSiblingLLMAPIKeySecret(lines []string, modelLine int, indent string) bool {
-	for j := modelLine + 1; j < len(lines); j++ {
-		line := lines[j]
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
+func providerNames(providers map[string]bool) []string {
+	names := make([]string, 0, len(providers))
+	for provider := range providers {
+		if provider == "" {
+			provider = "unspecified"
 		}
-		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
-			break
-		}
-		lineIndent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-		if len(lineIndent) < len(indent) || (len(lineIndent) == len(indent) && strings.HasSuffix(trimmed, ":")) {
-			break
-		}
-		if len(lineIndent) == len(indent) && strings.HasPrefix(trimmed, "api_key_secret:") {
-			return true
-		}
+		names = append(names, provider)
 	}
-	return false
+	sort.Strings(names)
+	return names
 }
 
-func yamlScalarValue(trimmedLine string) string {
-	_, value, ok := strings.Cut(trimmedLine, ":")
-	if !ok {
-		return ""
+func yamlDocumentRoot(doc *yaml.Node) *yaml.Node {
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 {
+		return doc.Content[0]
 	}
-	value = strings.TrimSpace(value)
-	value = strings.Trim(value, `"'`)
-	return value
+	return doc
+}
+
+func yamlMappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
+}
+
+func yamlSetMappingScalar(node *yaml.Node, key, value string) {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			node.Content[i+1].Kind = yaml.ScalarNode
+			node.Content[i+1].Tag = "!!str"
+			node.Content[i+1].Value = value
+			return
+		}
+	}
+	node.Content = append(node.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value},
+	)
 }
 
 func normalizeProvider(provider string) string {
@@ -1260,7 +1560,13 @@ func usage() {
 	fmt.Print(`dari-docs runs lightweight user-test sessions, feeds the results into a hosted editor, and pulls updated docs back to your repo.
 
 Usage:
+  dari-docs --version
   dari-docs auth login
+  dari-docs auth status
+  dari-docs auth token create --name github-actions
+  dari-docs auth token list
+  dari-docs auth token revoke <token-id>
+  dari-docs auth logout [--all] [--interactive-only|--automation-only]
   dari-docs init [repo]
   dari-docs agents deploy --managed [--resume|--force-new]
   dari-docs billing balance

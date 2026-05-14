@@ -38,7 +38,7 @@ type Server struct {
 	httpClient *http.Client
 }
 
-var persistedSecretPattern = regexp.MustCompile(`\b(?:sk_(?:live|test)_[A-Za-z0-9_-]+|rk_(?:live|test)_[A-Za-z0-9_-]+|whsec_[A-Za-z0-9_-]+|dari_[A-Za-z0-9_-]{12,})\b`)
+var persistedSecretPattern = regexp.MustCompile(`\b(?:sk_(?:live|test)_[A-Za-z0-9_-]+|rk_(?:live|test)_[A-Za-z0-9_-]+|whsec_[A-Za-z0-9_-]+|dari_[A-Za-z0-9_-]{12,}|mdt_v1_tok_[A-Za-z0-9_-]+_[A-Za-z0-9_-]+)\b`)
 
 func Run(ctx context.Context, cfg Config) error {
 	if err := runMigrations(ctx, cfg.DatabaseURL); err != nil {
@@ -82,6 +82,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/readyz", s.handleReady)
 	mux.HandleFunc("/v1/auth/dari/exchange", s.handleDariAuthExchange)
 	mux.HandleFunc("/v1/auth/logout", s.withAuth(s.handleLogout))
+	mux.HandleFunc("/v1/auth/logout-all", s.withAuth(s.handleLogoutAll))
+	mux.HandleFunc("/v1/auth/tokens", s.withAuth(s.handleAuthTokens))
+	mux.HandleFunc("/v1/auth/tokens/", s.withAuth(s.handleAuthTokenByID))
 	mux.HandleFunc("/v1/me", s.withAuth(s.handleMe))
 	mux.HandleFunc("/v1/billing/balance", s.withAuth(s.handleBalance))
 	mux.HandleFunc("/v1/billing/checkout", s.withAuth(s.handleCheckout))

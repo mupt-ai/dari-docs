@@ -15,17 +15,24 @@ import (
 	"time"
 )
 
-const DefaultBaseURL = "https://dari-docs.dari.dev"
+const (
+	DefaultBaseURL = "https://dari-docs.dari.dev"
+	EnvTokenName   = "DARI_DOCS_TOKEN"
+)
 
 const (
 	defaultHTTPTimeout  = 120 * time.Second
 	agentSetHTTPTimeout = 10 * time.Minute
+
+	AuthSourceEnv   = "env"
+	AuthSourceLocal = "local"
 )
 
 type Client struct {
-	BaseURL string
-	Token   string
-	HTTP    *http.Client
+	BaseURL     string
+	Token       string
+	TokenSource string
+	HTTP        *http.Client
 }
 
 type HTTPError struct {
@@ -39,16 +46,72 @@ func (e *HTTPError) Error() string {
 	return fmt.Sprintf("%s %s: http %d: %s", e.Method, e.Path, e.StatusCode, strings.TrimSpace(e.Body))
 }
 
+type InvalidEnvTokenError struct {
+	Method string
+	Path   string
+}
+
+func (e *InvalidEnvTokenError) Error() string {
+	return fmt.Sprintf("%s is set, but it is invalid, expired, or revoked. Create a new token with `dari-docs auth token create --name github-actions`, then update your CI secret store.", EnvTokenName)
+}
+
 func New(baseURL, token string) *Client {
+	return NewWithAuthToken(baseURL, AuthToken{Token: token})
+}
+
+func NewWithAuthToken(baseURL string, auth AuthToken) *Client {
 	if baseURL == "" {
 		baseURL = DefaultBaseURL
 	}
-	return &Client{BaseURL: strings.TrimRight(baseURL, "/"), Token: token, HTTP: &http.Client{Timeout: defaultHTTPTimeout}}
+	return &Client{
+		BaseURL:     strings.TrimRight(baseURL, "/"),
+		Token:       auth.Token,
+		TokenSource: auth.Source,
+		HTTP:        &http.Client{Timeout: defaultHTTPTimeout},
+	}
+}
+
+type AuthToken struct {
+	Token  string
+	Source string
 }
 
 type BalanceResponse struct {
 	Email        string `json:"email"`
 	BalanceCents int64  `json:"balance_cents"`
+}
+
+type MeResponse struct {
+	Email        string        `json:"email"`
+	BalanceCents int64         `json:"balance_cents"`
+	Token        AuthTokenInfo `json:"token"`
+}
+
+type AuthTokenInfo struct {
+	ID          string     `json:"id"`
+	Name        string     `json:"name,omitempty"`
+	Kind        string     `json:"kind"`
+	TokenPrefix string     `json:"token_prefix,omitempty"`
+	Scopes      []string   `json:"scopes"`
+	CreatedAt   *time.Time `json:"created_at,omitempty"`
+	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
+}
+
+type TokenCreateRequest struct {
+	Name      string     `json:"name"`
+	Scopes    []string   `json:"scopes,omitempty"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+}
+
+type TokenCreateResponse struct {
+	AuthTokenInfo
+	Token string `json:"token"`
+}
+
+type TokenListResponse struct {
+	Tokens []AuthTokenInfo `json:"tokens"`
 }
 
 type DariExchangeResponse struct {
@@ -134,6 +197,12 @@ func (c *Client) RunConfig(ctx context.Context) (RunConfig, error) {
 	return out, err
 }
 
+func (c *Client) Me(ctx context.Context) (MeResponse, error) {
+	var out MeResponse
+	err := c.doJSON(ctx, http.MethodGet, "/v1/me", nil, &out)
+	return out, err
+}
+
 func (c *Client) Balance(ctx context.Context) (BalanceResponse, error) {
 	var out BalanceResponse
 	err := c.doJSON(ctx, http.MethodGet, "/v1/billing/balance", nil, &out)
@@ -148,6 +217,37 @@ func (c *Client) CreateCheckout(ctx context.Context, amountCents int64) (Checkou
 
 func (c *Client) Logout(ctx context.Context) error {
 	return c.doJSON(ctx, http.MethodPost, "/v1/auth/logout", nil, nil)
+}
+
+func (c *Client) LogoutAll(ctx context.Context) error {
+	return c.LogoutAllKind(ctx, "")
+}
+
+func (c *Client) LogoutAllKind(ctx context.Context, kind string) error {
+	path := "/v1/auth/logout-all"
+	if kind != "" {
+		path += "?kind=" + url.QueryEscape(kind)
+	}
+	return c.doJSON(ctx, http.MethodPost, path, nil, nil)
+}
+
+func (c *Client) CreateAuthToken(ctx context.Context, req TokenCreateRequest) (TokenCreateResponse, error) {
+	var out TokenCreateResponse
+	err := c.doJSON(ctx, http.MethodPost, "/v1/auth/tokens", req, &out)
+	return out, err
+}
+
+func (c *Client) ListAuthTokens(ctx context.Context) (TokenListResponse, error) {
+	var out TokenListResponse
+	err := c.doJSON(ctx, http.MethodGet, "/v1/auth/tokens", nil, &out)
+	return out, err
+}
+
+func (c *Client) RevokeAuthToken(ctx context.Context, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("token id is required")
+	}
+	return c.doJSON(ctx, http.MethodPost, "/v1/auth/tokens/"+url.PathEscape(strings.TrimSpace(id))+"/revoke", nil, nil)
 }
 
 func (c *Client) CreateAgentSetDeploy(ctx context.Context, opts CreateAgentSetOptions) (AgentSetResponse, error) {
@@ -254,6 +354,9 @@ func (c *Client) DownloadUpdatedDocs(ctx context.Context, id, outPath string) er
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if resp.StatusCode == http.StatusUnauthorized && c.TokenSource == AuthSourceEnv {
+			return &InvalidEnvTokenError{Method: http.MethodGet, Path: "/v1/runs/" + url.PathEscape(id) + "/updated-docs.zip"}
+		}
 		return fmt.Errorf("download updated docs: http %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
@@ -316,6 +419,9 @@ func (c *Client) doWithBearerHTTP(ctx context.Context, client *http.Client, meth
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode == http.StatusUnauthorized && bearer == c.Token && c.TokenSource == AuthSourceEnv {
+			return &InvalidEnvTokenError{Method: method, Path: path}
+		}
 		return &HTTPError{Method: method, Path: path, StatusCode: resp.StatusCode, Body: string(b)}
 	}
 	if out == nil || len(b) == 0 {
@@ -362,6 +468,24 @@ func LoadToken(baseURL string) (string, error) {
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
 	return creds.Services[baseURL].Token, nil
+}
+
+func LoadAuthToken(baseURL string) (AuthToken, error) {
+	if rawToken, ok := os.LookupEnv(EnvTokenName); ok {
+		token := strings.TrimSpace(rawToken)
+		if token == "" {
+			return AuthToken{}, fmt.Errorf("%s is set but empty; unset it or provide a valid token", EnvTokenName)
+		}
+		return AuthToken{Token: token, Source: AuthSourceEnv}, nil
+	}
+	token, err := LoadToken(baseURL)
+	if err != nil {
+		return AuthToken{}, err
+	}
+	if token == "" {
+		return AuthToken{}, nil
+	}
+	return AuthToken{Token: token, Source: AuthSourceLocal}, nil
 }
 
 func SaveToken(baseURL, token string) error {

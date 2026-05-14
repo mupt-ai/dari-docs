@@ -106,6 +106,9 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 				writeError(w, http.StatusBadRequest, "mode must be check or optimize")
 				return
 			}
+			if !requireScope(w, u, runModeScope(mode)) {
+				return
+			}
 		case "tasks_json":
 			v, err := readTextPart(part, maxTasksJSONFieldBytes(s.cfg.MaxTasksPerRun, s.cfg.MaxTaskBytes))
 			if err != nil {
@@ -367,6 +370,13 @@ func reserveCentsForRun(mode string, taskCount int, cfg Config) int64 {
 	return reserve
 }
 
+func runModeScope(mode string) string {
+	if mode == "optimize" {
+		return scopeManagedOptimize
+	}
+	return scopeManagedCheck
+}
+
 func (s *Server) maxActiveRunsPerUser() int {
 	if s.cfg.MaxActiveRunsPerUser > 0 {
 		return s.cfg.MaxActiveRunsPerUser
@@ -459,6 +469,9 @@ func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	if !requireScope(w, u, scopeManagedRead) {
+		return
+	}
 	runID := strings.Trim(rest, "/")
 	rs, err := s.loadRunStatus(r.Context(), u.ID, runID)
 	if err != nil {
@@ -477,6 +490,9 @@ func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request, u user) {
 func (s *Server) handleUpdatedZip(w http.ResponseWriter, r *http.Request, u user, runID string) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !requireScope(w, u, scopeManagedOptimize) {
 		return
 	}
 	var editorSessionID string

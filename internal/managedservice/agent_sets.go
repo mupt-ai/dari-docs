@@ -46,6 +46,9 @@ func (s *Server) handleAgentSets(w http.ResponseWriter, r *http.Request, u user)
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	if !requireScope(w, u, scopeManagedAgentsDeploy) {
+		return
+	}
 	maxBytes := 2*managedMaxAgentBundleBytes + 1<<20
 	if r.ContentLength > maxBytes {
 		writeError(w, http.StatusRequestEntityTooLarge, "agent bundle exceeds managed size limit")
@@ -174,6 +177,9 @@ RETURNING true
 func (s *Server) handleAgentSetDeployByID(w http.ResponseWriter, r *http.Request, u user) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !requireScope(w, u, scopeManagedRead) {
 		return
 	}
 	deployID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/agent-set-deploys/"), "/")

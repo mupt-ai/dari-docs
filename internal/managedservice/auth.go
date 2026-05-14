@@ -11,13 +11,46 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type user struct {
-	ID        string
-	Email     string
-	TokenHash string
+	ID          string
+	Email       string
+	TokenID     string
+	TokenHash   string
+	TokenKind   string
+	TokenName   string
+	TokenPrefix string
+	TokenScopes []string
 }
+
+const (
+	tokenKindInteractive = "interactive"
+	tokenKindAutomation  = "automation"
+
+	scopeManagedRead         = "managed:read"
+	scopeManagedCheck        = "managed:check"
+	scopeManagedOptimize     = "managed:optimize"
+	scopeManagedAgentsDeploy = "managed:agents:deploy"
+	scopeManagedBilling      = "managed:billing"
+	scopeManagedTokens       = "managed:tokens"
+)
+
+var (
+	allManagedScopes = []string{
+		scopeManagedRead,
+		scopeManagedCheck,
+		scopeManagedOptimize,
+		scopeManagedAgentsDeploy,
+		scopeManagedBilling,
+		scopeManagedTokens,
+	}
+	defaultAutomationScopes = []string{
+		scopeManagedRead,
+		scopeManagedCheck,
+	}
+)
 
 func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, user)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -37,13 +70,24 @@ func (s *Server) authenticate(ctx context.Context, header string) (user, error) 
 	}
 	hash := sha256Hex(token)
 	var u user
+	var scopesJSON string
 	err = s.db.QueryRow(ctx, `
-SELECT users.id, users.email, api_tokens.token_hash
+SELECT users.id, users.email, api_tokens.id, api_tokens.token_hash,
+       coalesce(api_tokens.kind, 'interactive'), coalesce(api_tokens.name, ''),
+       coalesce(api_tokens.token_prefix, ''), coalesce(api_tokens.scopes, '[]'::jsonb)::text
 FROM api_tokens
 JOIN users ON users.id = api_tokens.user_id
 WHERE api_tokens.token_hash=$1 AND (api_tokens.expires_at IS NULL OR api_tokens.expires_at > now()) AND api_tokens.revoked_at IS NULL
-`, hash).Scan(&u.ID, &u.Email, &u.TokenHash)
-	return u, err
+`, hash).Scan(&u.ID, &u.Email, &u.TokenID, &u.TokenHash, &u.TokenKind, &u.TokenName, &u.TokenPrefix, &scopesJSON)
+	if err != nil {
+		return user{}, err
+	}
+	u.TokenScopes = parseScopesJSON(scopesJSON)
+	_, _ = s.db.Exec(ctx, `
+UPDATE api_tokens SET last_used_at=now()
+WHERE id=$1 AND (last_used_at IS NULL OR last_used_at < now() - interval '10 minutes')
+`, u.TokenID)
+	return u, nil
 }
 
 func bearerToken(header string) (string, error) {
@@ -56,6 +100,57 @@ func bearerToken(header string) (string, error) {
 		return "", errors.New("missing bearer token")
 	}
 	return token, nil
+}
+
+func parseScopesJSON(raw string) []string {
+	var scopes []string
+	if err := json.Unmarshal([]byte(raw), &scopes); err != nil {
+		return nil
+	}
+	return normalizeScopes(scopes)
+}
+
+func normalizeScopes(scopes []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, scope := range scopes {
+		scope = strings.TrimSpace(scope)
+		if scope == "" || seen[scope] {
+			continue
+		}
+		seen[scope] = true
+		out = append(out, scope)
+	}
+	return out
+}
+
+func validScope(scope string) bool {
+	for _, allowed := range allManagedScopes {
+		if scope == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func (u user) hasScope(scope string) bool {
+	if effectiveTokenKind(u.TokenKind) == tokenKindInteractive {
+		return true
+	}
+	for _, s := range u.TokenScopes {
+		if s == scope {
+			return true
+		}
+	}
+	return false
+}
+
+func requireScope(w http.ResponseWriter, u user, scope string) bool {
+	if u.hasScope(scope) {
+		return true
+	}
+	writeError(w, http.StatusForbidden, fmt.Sprintf("token missing required scope %s", scope))
+	return false
 }
 
 func (s *Server) handleDariAuthExchange(w http.ResponseWriter, r *http.Request) {
@@ -95,9 +190,9 @@ func (s *Server) handleDariAuthExchange(w http.ResponseWriter, r *http.Request) 
 	}
 	token := randomToken(32)
 	_, err = tx.Exec(r.Context(), `
-INSERT INTO api_tokens (id, user_id, token_hash, expires_at)
-VALUES ($1, $2, $3, NULL)
-	`, "tok_"+randomToken(18), userID, sha256Hex(token))
+INSERT INTO api_tokens (id, user_id, token_hash, expires_at, kind, scopes, created_by_user_id)
+VALUES ($1, $2, $3, NULL, $4, $5, $2)
+	`, "tok_"+randomToken(18), userID, sha256Hex(token), tokenKindInteractive, mustJSON(allManagedScopes))
 	if err != nil {
 		writeLoggedError(w, http.StatusInternalServerError, "could not complete login", err)
 		return
@@ -115,7 +210,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	_, err := s.db.Exec(r.Context(), `
-UPDATE api_tokens SET revoked_at=coalesce(revoked_at, now())
+UPDATE api_tokens SET revoked_at=coalesce(revoked_at, now()), revoked_by_user_id=coalesce(revoked_by_user_id, $2)
 WHERE token_hash=$1 AND user_id=$2
 `, u.TokenHash, u.ID)
 	if err != nil {
@@ -123,6 +218,215 @@ WHERE token_hash=$1 AND user_id=$2
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"revoked": true})
+}
+
+func (s *Server) handleLogoutAll(w http.ResponseWriter, r *http.Request, u user) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if u.TokenKind != tokenKindInteractive && !u.hasScope(scopeManagedTokens) {
+		writeError(w, http.StatusForbidden, fmt.Sprintf("token missing required scope %s", scopeManagedTokens))
+		return
+	}
+	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
+	if kind != "" && kind != tokenKindInteractive && kind != tokenKindAutomation {
+		writeError(w, http.StatusBadRequest, "kind must be interactive or automation")
+		return
+	}
+	query := `
+UPDATE api_tokens SET revoked_at=coalesce(revoked_at, now()), revoked_by_user_id=coalesce(revoked_by_user_id, $2)
+WHERE user_id=$1 AND revoked_at IS NULL`
+	args := []any{u.ID, u.ID}
+	if kind != "" {
+		query += ` AND kind=$3`
+		args = append(args, kind)
+	}
+	tag, err := s.db.Exec(r.Context(), query, args...)
+	if err != nil {
+		writeLoggedError(w, http.StatusInternalServerError, "could not log out", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"revoked": true, "tokens_revoked": tag.RowsAffected()})
+}
+
+type authTokenResponse struct {
+	ID          string     `json:"id"`
+	Name        string     `json:"name,omitempty"`
+	Kind        string     `json:"kind"`
+	TokenPrefix string     `json:"token_prefix,omitempty"`
+	Scopes      []string   `json:"scopes"`
+	Token       string     `json:"token,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
+}
+
+func (s *Server) handleAuthTokens(w http.ResponseWriter, r *http.Request, u user) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleListAuthTokens(w, r, u)
+	case http.MethodPost:
+		s.handleCreateAuthToken(w, r, u)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleAuthTokenByID(w http.ResponseWriter, r *http.Request, u user) {
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/auth/tokens/"), "/")
+	tokenID, action, ok := strings.Cut(rest, "/")
+	if tokenID == "" || !ok || action != "revoke" {
+		writeError(w, http.StatusNotFound, "token not found")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !requireScope(w, u, scopeManagedTokens) {
+		return
+	}
+	tag, err := s.db.Exec(r.Context(), `
+UPDATE api_tokens SET revoked_at=coalesce(revoked_at, now()), revoked_by_user_id=coalesce(revoked_by_user_id, $3)
+WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL
+`, tokenID, u.ID, u.ID)
+	if err != nil {
+		writeLoggedError(w, http.StatusInternalServerError, "could not revoke token", err)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "token not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"revoked": true})
+}
+
+func (s *Server) handleCreateAuthToken(w http.ResponseWriter, r *http.Request, u user) {
+	if !requireScope(w, u, scopeManagedTokens) {
+		return
+	}
+	var req struct {
+		Name      string     `json:"name"`
+		Scopes    []string   `json:"scopes"`
+		ExpiresAt *time.Time `json:"expires_at"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if len(name) > 80 || strings.ContainsAny(name, "\r\n\t") {
+		writeError(w, http.StatusBadRequest, "name must be 1-80 printable characters")
+		return
+	}
+	scopes := normalizeScopes(req.Scopes)
+	if len(scopes) == 0 {
+		scopes = append([]string{}, defaultAutomationScopes...)
+	}
+	for _, scope := range scopes {
+		if !validScope(scope) {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown scope %s", scope))
+			return
+		}
+		if !u.hasScope(scope) {
+			writeError(w, http.StatusForbidden, fmt.Sprintf("token cannot grant scope %s", scope))
+			return
+		}
+	}
+	var activeNameExists bool
+	if err := s.db.QueryRow(r.Context(), `
+SELECT EXISTS (
+  SELECT 1 FROM api_tokens
+  WHERE user_id=$1 AND kind=$2 AND lower(name)=lower($3) AND revoked_at IS NULL
+)
+`, u.ID, tokenKindAutomation, name).Scan(&activeNameExists); err != nil {
+		writeLoggedError(w, http.StatusInternalServerError, "could not create token", err)
+		return
+	}
+	if activeNameExists {
+		writeError(w, http.StatusConflict, "an active automation token with this name already exists")
+		return
+	}
+	tokenID := "tok_" + randomToken(12)
+	prefix := "mdt_v1_" + tokenID
+	rawToken := prefix + "_" + randomToken(32)
+	scopesJSON := mustJSON(scopes)
+	var createdAt time.Time
+	err := s.db.QueryRow(r.Context(), `
+INSERT INTO api_tokens (id, user_id, name, kind, token_prefix, token_hash, scopes, expires_at, created_by_user_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $2)
+RETURNING created_at
+`, tokenID, u.ID, name, tokenKindAutomation, prefix, sha256Hex(rawToken), scopesJSON, req.ExpiresAt).Scan(&createdAt)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			writeError(w, http.StatusConflict, "an active automation token with this name already exists")
+			return
+		}
+		writeLoggedError(w, http.StatusInternalServerError, "could not create token", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, authTokenResponse{
+		ID:          tokenID,
+		Name:        name,
+		Kind:        tokenKindAutomation,
+		TokenPrefix: prefix,
+		Scopes:      scopes,
+		Token:       rawToken,
+		CreatedAt:   createdAt,
+		ExpiresAt:   req.ExpiresAt,
+	})
+}
+
+func (s *Server) handleListAuthTokens(w http.ResponseWriter, r *http.Request, u user) {
+	if !requireScope(w, u, scopeManagedTokens) {
+		return
+	}
+	rows, err := s.db.Query(r.Context(), `
+SELECT id, coalesce(name,''), coalesce(kind,'interactive'), coalesce(token_prefix,''),
+       coalesce(scopes, '[]'::jsonb)::text, created_at, last_used_at, expires_at, revoked_at
+FROM api_tokens
+WHERE user_id=$1 AND revoked_at IS NULL
+ORDER BY created_at DESC
+`, u.ID)
+	if err != nil {
+		writeLoggedError(w, http.StatusInternalServerError, "could not list tokens", err)
+		return
+	}
+	defer rows.Close()
+	var tokens []authTokenResponse
+	for rows.Next() {
+		var token authTokenResponse
+		var scopesJSON string
+		if err := rows.Scan(&token.ID, &token.Name, &token.Kind, &token.TokenPrefix, &scopesJSON, &token.CreatedAt, &token.LastUsedAt, &token.ExpiresAt, &token.RevokedAt); err != nil {
+			writeLoggedError(w, http.StatusInternalServerError, "could not list tokens", err)
+			return
+		}
+		token.Scopes = parseScopesJSON(scopesJSON)
+		if token.Kind == tokenKindInteractive {
+			token.Scopes = append([]string{}, allManagedScopes...)
+		}
+		tokens = append(tokens, token)
+	}
+	if rows.Err() != nil {
+		writeLoggedError(w, http.StatusInternalServerError, "could not list tokens", rows.Err())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tokens": tokens})
+}
+
+func mustJSON(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
 }
 
 type dariUserInfo struct {
@@ -229,10 +533,37 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	if !requireScope(w, u, scopeManagedRead) {
+		return
+	}
 	bal, err := s.balanceCents(r.Context(), u.ID)
 	if err != nil {
 		writeLoggedError(w, http.StatusInternalServerError, "could not load account balance", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"email": u.Email, "balance_cents": bal})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"email":         u.Email,
+		"balance_cents": bal,
+		"token": map[string]any{
+			"id":           u.TokenID,
+			"name":         u.TokenName,
+			"kind":         effectiveTokenKind(u.TokenKind),
+			"token_prefix": u.TokenPrefix,
+			"scopes":       effectiveScopes(u),
+		},
+	})
+}
+
+func effectiveTokenKind(kind string) string {
+	if kind == tokenKindAutomation {
+		return tokenKindAutomation
+	}
+	return tokenKindInteractive
+}
+
+func effectiveScopes(u user) []string {
+	if effectiveTokenKind(u.TokenKind) == tokenKindInteractive {
+		return append([]string{}, allManagedScopes...)
+	}
+	return append([]string{}, u.TokenScopes...)
 }
