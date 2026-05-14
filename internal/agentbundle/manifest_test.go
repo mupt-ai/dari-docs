@@ -14,11 +14,11 @@ llm:
   default: medium-claude
   options:
     medium-claude:
-      provider: openrouter
-      model: anthropic/claude-sonnet-4.6
+      provider: anthropic
+      model: claude-sonnet-4-6
     smart-gpt:
-      provider: openrouter
-      model: openai/gpt-5.5
+      provider: openai
+      model: gpt-5.5
 sandbox:
   secrets:
     - DARI_DOCS_RUNTIME_SECRETS_JSON
@@ -45,9 +45,9 @@ llm:
   default: medium-claude
   options:
     medium-claude:
-      provider: openrouter
-      model: anthropic/claude-sonnet-4.6
-      api_key_secret: OPENROUTER_API_KEY
+      provider: anthropic
+      model: claude-sonnet-4-6
+      api_key_secret: ANTHROPIC_API_KEY
 `,
 		"sandbox provider secret": `
 llm:
@@ -117,7 +117,7 @@ func TestValidateManagedBundleRejectsDuplicateArchiveEntries(t *testing.T) {
 	}
 }
 
-const validManagedDariYAMLForTest = "llm:\n  default: medium-claude\n  options:\n    medium-claude:\n      provider: openrouter\n      model: anthropic/claude-sonnet-4.6\n"
+const validManagedDariYAMLForTest = "llm:\n  default: medium-claude\n  options:\n    medium-claude:\n      provider: anthropic\n      model: claude-sonnet-4-6\n"
 
 type bundleFileForTest struct {
 	Name    string

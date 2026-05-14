@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -1188,11 +1189,13 @@ func versionLine() string {
 func runInit(args []string) error {
 	fs := flag.NewFlagSet("dari-docs init", flag.ExitOnError)
 	var deploy bool
-	var apiKeyEnv, apiKey, llmAPIKeySecret, agentsDir string
+	var apiKeyEnv, apiKey, llmAPIKeySecret, anthropicAPIKeySecret, openAIAPIKeySecret, agentsDir string
 	fs.BoolVar(&deploy, "deploy", false, "deploy bundled agents into the current Dari org")
 	fs.StringVar(&apiKeyEnv, "api-key-env", "DARI_API_KEY", "env var containing Dari API key for deploy")
 	fs.StringVar(&apiKey, "api-key", "", "Dari API key for deploy (prefer --api-key-env)")
-	fs.StringVar(&llmAPIKeySecret, "llm-api-key-secret", "", "optional stored Dari credential name for BYOK LLM at agent publish time; omit to use platform-managed LLM")
+	fs.StringVar(&llmAPIKeySecret, "llm-api-key-secret", "", "optional stored Dari credential name for BYOK LLM at agent publish time; only valid when all LLM options use one provider")
+	fs.StringVar(&anthropicAPIKeySecret, "anthropic-api-key-secret", "", "optional stored Dari credential name for Anthropic BYOK LLM at agent publish time")
+	fs.StringVar(&openAIAPIKeySecret, "openai-api-key-secret", "", "optional stored Dari credential name for OpenAI BYOK LLM at agent publish time")
 	fs.StringVar(&agentsDir, "agents-dir", "", "where to extract agent templates (default: <repo>/.dari-docs/agents)")
 	repoArg := "."
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -1217,6 +1220,17 @@ func runInit(args []string) error {
 	}
 	fmt.Printf("Extracted bundled agents to %s\n", agentsDir)
 
+	providerSecrets := map[string]string{}
+	if anthropicAPIKeySecret != "" {
+		providerSecrets["anthropic"] = anthropicAPIKeySecret
+	}
+	if openAIAPIKeySecret != "" {
+		providerSecrets["openai"] = openAIAPIKeySecret
+	}
+	if llmAPIKeySecret != "" && len(providerSecrets) > 0 {
+		return fmt.Errorf("--llm-api-key-secret cannot be combined with provider-specific LLM key secret flags")
+	}
+
 	cfg := appconfig.Config{AgentsDir: agentsDir, LLMMode: "platform-managed", LLMAPIKeySecret: llmAPIKeySecret}
 	if llmAPIKeySecret != "" {
 		cfg.LLMMode = "byok-publish-time"
@@ -1224,6 +1238,16 @@ func runInit(args []string) error {
 			return err
 		}
 		if err := setLLMAPIKeySecret(filepath.Join(agentsDir, "docs-editor-agent", "dari.yml"), llmAPIKeySecret); err != nil {
+			return err
+		}
+	}
+	if len(providerSecrets) > 0 {
+		cfg.LLMMode = "byok-publish-time"
+		cfg.LLMAPIKeySecrets = providerSecrets
+		if err := setLLMAPIKeySecretsByProvider(filepath.Join(agentsDir, "docs-user-tester-agent", "dari.yml"), providerSecrets); err != nil {
+			return err
+		}
+		if err := setLLMAPIKeySecretsByProvider(filepath.Join(agentsDir, "docs-editor-agent", "dari.yml"), providerSecrets); err != nil {
 			return err
 		}
 	}
@@ -1289,54 +1313,151 @@ func deployAgent(env []string, dir string) (string, error) {
 	return resp.AgentID, nil
 }
 
+type llmModelEntry struct {
+	node     *yaml.Node
+	provider string
+}
+
+type llmManifest struct {
+	path    string
+	doc     yaml.Node
+	entries []llmModelEntry
+}
+
 func setLLMAPIKeySecret(path, secret string) error {
-	b, err := os.ReadFile(path)
+	manifest, err := loadLLMManifest(path)
 	if err != nil {
 		return err
 	}
-
-	var doc yaml.Node
-	if err := yaml.Unmarshal(b, &doc); err != nil {
-		return fmt.Errorf("parse %s: %w", path, err)
+	providers := map[string]bool{}
+	for _, entry := range manifest.entries {
+		providers[entry.provider] = true
 	}
-	root := yamlDocumentRoot(&doc)
-	llm := yamlMappingValue(root, "llm")
-	if llm == nil {
-		return fmt.Errorf("could not find llm block in %s", path)
+	if len(providers) > 1 {
+		return fmt.Errorf("--llm-api-key-secret cannot be applied to multiple LLM providers (%s); use --anthropic-api-key-secret and/or --openai-api-key-secret", strings.Join(providerNames(providers), ", "))
+	}
+	for _, entry := range manifest.entries {
+		yamlSetMappingScalar(entry.node, "api_key_secret", secret)
+	}
+	return manifest.write()
+}
+
+func setLLMAPIKeySecretsByProvider(path string, providerSecrets map[string]string) error {
+	providerSecrets = normalizeProviderSecrets(providerSecrets)
+	if len(providerSecrets) == 0 {
+		return nil
 	}
 
-	updated := 0
-	if options := yamlMappingValue(llm, "options"); options != nil {
-		if options.Kind != yaml.MappingNode {
-			return fmt.Errorf("llm.options in %s must be a mapping", path)
+	manifest, err := loadLLMManifest(path)
+	if err != nil {
+		return err
+	}
+	matched := map[string]bool{}
+	for _, entry := range manifest.entries {
+		secret, ok := providerSecrets[entry.provider]
+		if !ok {
+			continue
 		}
-		for i := 1; i < len(options.Content); i += 2 {
-			option := options.Content[i]
-			if yamlMappingValue(option, "model") == nil {
-				continue
-			}
-			yamlSetMappingScalar(option, "api_key_secret", secret)
-			updated++
+		matched[entry.provider] = true
+		yamlSetMappingScalar(entry.node, "api_key_secret", secret)
+	}
+	for provider := range providerSecrets {
+		if !matched[provider] {
+			return fmt.Errorf("could not find %s llm option in %s", provider, path)
 		}
-	} else if yamlMappingValue(llm, "model") != nil {
-		yamlSetMappingScalar(llm, "api_key_secret", secret)
-		updated++
 	}
-	if updated == 0 {
-		return fmt.Errorf("could not find llm.model in %s", path)
-	}
+	return manifest.write()
+}
 
+func normalizeProviderSecrets(in map[string]string) map[string]string {
+	out := map[string]string{}
+	for provider, secret := range in {
+		provider = normalizeProvider(provider)
+		secret = strings.TrimSpace(secret)
+		if provider != "" && secret != "" {
+			out[provider] = secret
+		}
+	}
+	return out
+}
+
+func loadLLMManifest(path string) (*llmManifest, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	manifest := &llmManifest{path: path}
+	if err := yaml.Unmarshal(b, &manifest.doc); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	entries, err := collectLLMModelEntries(path, &manifest.doc)
+	if err != nil {
+		return nil, err
+	}
+	manifest.entries = entries
+	return manifest, nil
+}
+
+func (m *llmManifest) write() error {
 	var out bytes.Buffer
 	enc := yaml.NewEncoder(&out)
 	enc.SetIndent(2)
-	if err := enc.Encode(&doc); err != nil {
+	if err := enc.Encode(&m.doc); err != nil {
 		_ = enc.Close()
-		return fmt.Errorf("encode %s: %w", path, err)
+		return fmt.Errorf("encode %s: %w", m.path, err)
 	}
 	if err := enc.Close(); err != nil {
-		return fmt.Errorf("encode %s: %w", path, err)
+		return fmt.Errorf("encode %s: %w", m.path, err)
 	}
-	return os.WriteFile(path, out.Bytes(), 0o644)
+	return os.WriteFile(m.path, out.Bytes(), 0o644)
+}
+
+func collectLLMModelEntries(path string, doc *yaml.Node) ([]llmModelEntry, error) {
+	root := yamlDocumentRoot(doc)
+	llm := yamlMappingValue(root, "llm")
+	if llm == nil {
+		return nil, fmt.Errorf("could not find llm block in %s", path)
+	}
+
+	var entries []llmModelEntry
+	if options := yamlMappingValue(llm, "options"); options != nil {
+		if options.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("llm.options in %s must be a mapping", path)
+		}
+		for i := 1; i < len(options.Content); i += 2 {
+			option := options.Content[i]
+			model := yamlMappingValue(option, "model")
+			if model == nil {
+				continue
+			}
+			entries = append(entries, llmModelEntry{node: option, provider: providerForLLMNode(option, model.Value)})
+		}
+	} else if model := yamlMappingValue(llm, "model"); model != nil {
+		entries = append(entries, llmModelEntry{node: llm, provider: providerForLLMNode(llm, model.Value)})
+	}
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("could not find llm.model in %s", path)
+	}
+	return entries, nil
+}
+
+func providerForLLMNode(node *yaml.Node, model string) string {
+	if provider := yamlMappingValue(node, "provider"); provider != nil {
+		return normalizeProvider(provider.Value)
+	}
+	return inferProviderFromModel(model)
+}
+
+func providerNames(providers map[string]bool) []string {
+	names := make([]string, 0, len(providers))
+	for provider := range providers {
+		if provider == "" {
+			provider = "unspecified"
+		}
+		names = append(names, provider)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func yamlDocumentRoot(doc *yaml.Node) *yaml.Node {
@@ -1374,6 +1495,21 @@ func yamlSetMappingScalar(node *yaml.Node, key, value string) {
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value},
 	)
+}
+
+func normalizeProvider(provider string) string {
+	return strings.ToLower(strings.TrimSpace(provider))
+}
+
+func inferProviderFromModel(model string) string {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if strings.HasPrefix(model, "openai/") {
+		return "openai"
+	}
+	if strings.HasPrefix(model, "anthropic/") {
+		return "anthropic"
+	}
+	return ""
 }
 
 func expandCSVList(values []string) []string {
@@ -1462,6 +1598,8 @@ Important flags:
   --llm ID                    select a manifest LLM option for all self-managed sessions
   --feedback-llm ID           select tester LLM option(s); default is all bundled tester LLMs
   --editor-llm ID             select a manifest LLM option for the editor session
+  --anthropic-api-key-secret  stored Dari credential name for Anthropic BYOK deploys
+  --openai-api-key-secret     stored Dari credential name for OpenAI BYOK deploys
 
 Outputs:
   .dari-docs/config.json

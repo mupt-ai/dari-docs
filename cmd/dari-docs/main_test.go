@@ -181,23 +181,45 @@ func TestReadTasksFileParsesParagraphsAndBullets(t *testing.T) {
 	}
 }
 
-func TestSetLLMAPIKeySecretUpdatesLLMOptions(t *testing.T) {
+func TestSetLLMAPIKeySecretRejectsMultipleProviders(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dari.yml")
 	original := `name: test
 llm:
   default: medium-claude
   options:
     medium-claude:
-      provider: openrouter
-      model: anthropic/claude-sonnet-4.6
+      provider: anthropic
+      model: claude-sonnet-4-6
     smart-gpt:
-      provider: openrouter
-      model: openai/gpt-5.5
+      provider: openai
+      model: gpt-5.5
 `
 	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := setLLMAPIKeySecret(path, "MY_KEY"); err != nil {
+	err := setLLMAPIKeySecret(path, "MY_KEY")
+	if err == nil || !strings.Contains(err.Error(), "multiple LLM providers") {
+		t.Fatalf("err = %v, want multiple-provider rejection", err)
+	}
+}
+
+func TestSetLLMAPIKeySecretsByProviderUpdatesMatchingOptions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dari.yml")
+	original := `name: test
+llm:
+  default: medium-claude
+  options:
+    medium-claude:
+      provider: anthropic
+      model: claude-sonnet-4-6
+    smart-gpt:
+      provider: openai
+      model: gpt-5.5
+`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := setLLMAPIKeySecretsByProvider(path, map[string]string{"anthropic": "ANTHROPIC_KEY", "openai": "OPENAI_KEY"}); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(path)
@@ -205,8 +227,8 @@ llm:
 		t.Fatal(err)
 	}
 	got := string(b)
-	if strings.Count(got, "api_key_secret: MY_KEY") != 2 {
-		t.Fatalf("api_key_secret was not inserted for each option:\n%s", got)
+	if strings.Count(got, "api_key_secret: ANTHROPIC_KEY") != 1 || strings.Count(got, "api_key_secret: OPENAI_KEY") != 1 {
+		t.Fatalf("provider-specific api_key_secret values were not inserted:\n%s", got)
 	}
 }
 
@@ -217,8 +239,8 @@ llm:
   default: medium-claude
   options:
     medium-claude:
-      provider: openrouter
-      model: anthropic/claude-sonnet-4.6
+      provider: anthropic
+      model: claude-sonnet-4-6
       api_key_secret: OLD_KEY
 `
 	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
