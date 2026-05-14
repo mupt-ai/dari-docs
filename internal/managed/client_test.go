@@ -74,3 +74,23 @@ func TestExchangeDariTokenUsesSupabaseBearer(t *testing.T) {
 		t.Fatalf("response = %#v", got)
 	}
 }
+
+func TestLogoutAllUsesEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/auth/logout-all" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer managed-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	if err := New(server.URL, "managed-token").LogoutAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -26,6 +26,13 @@ The tester agent acts like a developer trying to complete each task and reports 
 
 ## Install
 
+Install with Homebrew:
+
+```bash
+brew install mupt-ai/tap/dari-docs
+dari-docs --help
+```
+
 Install with Go:
 
 ```bash
@@ -103,6 +110,8 @@ Log out:
 ```bash
 dari-docs auth logout
 ```
+
+To revoke managed tokens from all devices, run `dari-docs auth logout --all`.
 
 Before a managed run starts, the CLI prints a bundle summary and credit estimate. Credits are reserved before the run, then reconciled to the actual session cost after completion.
 
