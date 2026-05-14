@@ -334,6 +334,10 @@ func (s *Server) handleCreateAuthToken(w http.ResponseWriter, r *http.Request, u
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown scope %s", scope))
 			return
 		}
+		if !u.hasScope(scope) {
+			writeError(w, http.StatusForbidden, fmt.Sprintf("token cannot grant scope %s", scope))
+			return
+		}
 	}
 	var activeNameExists bool
 	if err := s.db.QueryRow(r.Context(), `
