@@ -26,6 +26,13 @@ The tester agent acts like a developer trying to complete each task and reports 
 
 ## Install
 
+Install with Homebrew:
+
+```bash
+brew install mupt-ai/tap/dari-docs
+dari-docs --help
+```
+
 Install with Go:
 
 ```bash

@@ -58,6 +58,15 @@ func TestManagedSessionSummary(t *testing.T) {
 	}
 }
 
+func TestVersionLine(t *testing.T) {
+	original := version
+	t.Cleanup(func() { version = original })
+	version = "v0.1.0"
+	if got, want := versionLine(), "dari-docs v0.1.0"; got != want {
+		t.Fatalf("versionLine() = %q, want %q", got, want)
+	}
+}
+
 func TestReadTasksFileParsesParagraphsAndBullets(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tasks.txt")
 	input := strings.Join([]string{

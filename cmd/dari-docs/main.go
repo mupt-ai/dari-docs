@@ -37,6 +37,8 @@ type repeated []string
 func (r *repeated) String() string     { return strings.Join(*r, ",") }
 func (r *repeated) Set(v string) error { *r = append(*r, v); return nil }
 
+var version = "dev"
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "dari-docs: %v\n", err)
@@ -49,13 +51,17 @@ func run() error {
 	args := os.Args[1:]
 	if len(args) > 0 {
 		switch args[0] {
-		case "init", "optimize", "check", "auth", "billing", "agents", "help", "-h", "--help":
+		case "init", "optimize", "check", "auth", "billing", "agents", "help", "-h", "--help", "version", "-v", "--version":
 			cmd = args[0]
 			args = args[1:]
 		}
 	}
 	if cmd == "help" || cmd == "-h" || cmd == "--help" {
 		usage()
+		return nil
+	}
+	if cmd == "version" || cmd == "-v" || cmd == "--version" {
+		fmt.Println(versionLine())
 		return nil
 	}
 	if cmd == "init" {
@@ -843,6 +849,10 @@ func formatCents(cents int64) string {
 	return fmt.Sprintf("%s$%d.%02d", sign, cents/100, cents%100)
 }
 
+func versionLine() string {
+	return "dari-docs " + version
+}
+
 func runInit(args []string) error {
 	fs := flag.NewFlagSet("dari-docs init", flag.ExitOnError)
 	var deploy bool
@@ -1015,6 +1025,7 @@ func usage() {
 	fmt.Print(`dari-docs runs lightweight user-test sessions, feeds the results into a hosted editor, and pulls updated docs back to your repo.
 
 Usage:
+  dari-docs --version
   dari-docs auth login
   dari-docs init [repo]
   dari-docs agents deploy --managed [--resume|--force-new]
