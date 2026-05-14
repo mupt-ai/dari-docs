@@ -207,6 +207,11 @@ func TestPersistedErrorStripsHTTPBodiesAndTruncates(t *testing.T) {
 	if strings.Contains(got, "dari_abcdefghijklmnopqrstuvwxyz0123456789") || !strings.Contains(got, "[redacted]") {
 		t.Fatalf("persistedError did not redact credential: %q", got)
 	}
+
+	got = persistedError(fmt.Errorf("managed token mdt_v1_tok_abc123_secretvalue failed"))
+	if strings.Contains(got, "mdt_v1_tok_abc123_secretvalue") || !strings.Contains(got, "[redacted]") {
+		t.Fatalf("persistedError did not redact managed token: %q", got)
+	}
 }
 
 func TestRuntimeSecretNamesFromJSON(t *testing.T) {
@@ -651,6 +656,73 @@ func TestDariAuthExchangeRequiresBearer(t *testing.T) {
 	s.handleDariAuthExchange(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestNormalizeScopesTrimsAndDeduplicates(t *testing.T) {
+	got := normalizeScopes([]string{" managed:read ", "managed:check", "managed:read", ""})
+	want := []string{"managed:read", "managed:check"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("scopes = %#v, want %#v", got, want)
+	}
+}
+
+func TestInteractiveTokenHasAllScopes(t *testing.T) {
+	u := user{TokenKind: tokenKindInteractive}
+	for _, scope := range allManagedScopes {
+		if !u.hasScope(scope) {
+			t.Fatalf("interactive token missing scope %s", scope)
+		}
+	}
+}
+
+func TestAutomationTokenRequiresExplicitScope(t *testing.T) {
+	u := user{TokenKind: tokenKindAutomation, TokenScopes: []string{scopeManagedRead}}
+	if !u.hasScope(scopeManagedRead) {
+		t.Fatal("automation token should have explicit read scope")
+	}
+	if u.hasScope(scopeManagedBilling) {
+		t.Fatal("automation token should not inherit billing scope")
+	}
+}
+
+func TestCreateAuthTokenCannotGrantScopesCallerDoesNotHave(t *testing.T) {
+	body := strings.NewReader(`{"name":"github-actions","scopes":["managed:read","managed:billing"]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/tokens", body)
+	rec := httptest.NewRecorder()
+
+	s := &Server{}
+	s.handleCreateAuthToken(rec, req, user{
+		ID:          "usr_test",
+		TokenKind:   tokenKindAutomation,
+		TokenScopes: []string{scopeManagedRead, scopeManagedTokens},
+	})
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "token cannot grant scope managed:billing") {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
+func TestCreateAuthTokenDefaultScopesMustBeGrantableByCaller(t *testing.T) {
+	body := strings.NewReader(`{"name":"github-actions"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/tokens", body)
+	rec := httptest.NewRecorder()
+
+	s := &Server{}
+	s.handleCreateAuthToken(rec, req, user{
+		ID:          "usr_test",
+		TokenKind:   tokenKindAutomation,
+		TokenScopes: []string{scopeManagedRead, scopeManagedTokens},
+	})
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "token cannot grant scope managed:check") {
+		t.Fatalf("body = %s", rec.Body.String())
 	}
 }
 

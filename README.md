@@ -111,13 +111,39 @@ Log out:
 dari-docs auth logout
 ```
 
-To revoke managed tokens from all devices, run `dari-docs auth logout --all`.
+To revoke managed tokens from all devices, run `dari-docs auth logout --all`. You can narrow that to browser-login tokens with `--interactive-only` or automation tokens with `--automation-only`.
 
 Before a managed run starts, the CLI prints a bundle summary and credit estimate. Credits are reserved before the run, then reconciled to the actual session cost after completion.
 
 - Managed runs currently support up to three tasks per run.
 - Managed runs currently support up to three active runs per account at a time.
 - Managed runs execute tasks sequentially; use self-managed mode if you need parallel tester sessions.
+
+## GitHub Actions
+
+Managed checks can run in CI with a named automation token.
+
+Create the token locally after logging in:
+
+```bash
+dari-docs auth login
+dari-docs auth token create --name github-actions
+```
+
+Add it to your repository or environment secrets as `DARI_DOCS_TOKEN`.
+
+By default, automation tokens can read managed account/run state and create managed checks. Add scopes explicitly for broader workflows, for example `--scope managed:read --scope managed:optimize` if CI should generate proposed revisions.
+
+Automation tokens do not expire by default. To set an expiration, pass `--expires-in 90d` or `--expires-in 24h`, for example.
+
+The CLI waits until the managed run finishes, so the Actions job status reflects the docs check result.
+
+Manage automation tokens:
+
+```bash
+dari-docs auth token list
+dari-docs auth token revoke tok_...
+```
 
 ## Tasks
 

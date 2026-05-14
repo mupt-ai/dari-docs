@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mupt-ai/dari-docs/internal/managed"
 )
@@ -27,6 +28,29 @@ func TestParseDollarsToCents(t *testing.T) {
 	}
 	if _, err := parseDollarsToCents("1.234"); err == nil {
 		t.Fatal("expected too many decimal places error")
+	}
+}
+
+func TestParseExpiresIn(t *testing.T) {
+	got, err := parseExpiresIn("2d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || time.Until(*got) < 47*time.Hour || time.Until(*got) > 49*time.Hour {
+		t.Fatalf("expires in 2d parsed to %v", got)
+	}
+	got, err = parseExpiresIn("24h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || time.Until(*got) < 23*time.Hour || time.Until(*got) > 25*time.Hour {
+		t.Fatalf("expires in 24h parsed to %v", got)
+	}
+	if got, err := parseExpiresIn(""); err != nil || got != nil {
+		t.Fatalf("empty expires = %v, %v; want nil nil", got, err)
+	}
+	if _, err := parseExpiresIn("0d"); err == nil {
+		t.Fatal("expected error for zero duration")
 	}
 }
 

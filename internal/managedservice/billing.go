@@ -24,6 +24,9 @@ func (s *Server) handleRunConfig(w http.ResponseWriter, r *http.Request, u user)
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	if !requireScope(w, u, scopeManagedRead) {
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"free_credit_cents":             s.cfg.FreeGrantCents,
 		"tester_session_reserve_cents":  s.cfg.TesterReserveCents,
@@ -41,6 +44,9 @@ func (s *Server) handleRunConfig(w http.ResponseWriter, r *http.Request, u user)
 func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request, u user) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !requireScope(w, u, scopeManagedBilling) {
 		return
 	}
 	if s.cfg.StripeSecretKey == "" {
