@@ -83,6 +83,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/v1/auth/dari/exchange", s.handleDariAuthExchange)
 	mux.HandleFunc("/v1/auth/logout", s.withAuth(s.handleLogout))
 	mux.HandleFunc("/v1/auth/logout-all", s.withAuth(s.handleLogoutAll))
+	mux.HandleFunc("/v1/auth/tokens", s.withAuth(s.handleAuthTokens))
+	mux.HandleFunc("/v1/auth/tokens/", s.withAuth(s.handleAuthTokenByID))
 	mux.HandleFunc("/v1/me", s.withAuth(s.handleMe))
 	mux.HandleFunc("/v1/billing/balance", s.withAuth(s.handleBalance))
 	mux.HandleFunc("/v1/billing/checkout", s.withAuth(s.handleCheckout))

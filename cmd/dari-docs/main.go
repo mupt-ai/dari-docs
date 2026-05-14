@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/mupt-ai/dari-docs/internal/agentbundle"
@@ -265,11 +266,11 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 	if err := os.MkdirAll(cfg.OutDir, 0o755); err != nil {
 		return err
 	}
-	token, err := loadManagedToken()
+	auth, err := loadManagedAuthToken()
 	if err != nil {
 		return err
 	}
-	client := managed.New(managed.DefaultBaseURL, token)
+	client := managed.NewWithAuthToken(managed.DefaultBaseURL, auth)
 	runCfg, err := client.RunConfig(ctx)
 	if err != nil {
 		return err
@@ -416,15 +417,19 @@ func writeManagedFeedback(outDir string, reports []string, aggregate string) err
 
 func runAuth(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: dari-docs auth [login|logout]")
+		return fmt.Errorf("usage: dari-docs auth [login|logout|status|token]")
 	}
 	switch args[0] {
 	case "login":
 		return runAuthLogin(args[1:])
 	case "logout":
 		return runAuthLogout(args[1:])
+	case "status":
+		return runAuthStatus(args[1:])
+	case "token":
+		return runAuthToken(args[1:])
 	default:
-		return fmt.Errorf("usage: dari-docs auth [login|logout]")
+		return fmt.Errorf("usage: dari-docs auth [login|logout|status|token]")
 	}
 }
 
@@ -461,57 +466,92 @@ func exchangeManagedBrowserLogin(ctx context.Context) (managed.DariExchangeRespo
 func runAuthLogout(args []string) error {
 	fs := flag.NewFlagSet("dari-docs auth logout", flag.ExitOnError)
 	var all bool
+	var interactiveOnly bool
+	var automationOnly bool
 	fs.BoolVar(&all, "all", false, "revoke all managed service tokens for this account")
+	fs.BoolVar(&interactiveOnly, "interactive-only", false, "with --all, revoke only browser-login tokens")
+	fs.BoolVar(&automationOnly, "automation-only", false, "with --all, revoke only automation tokens")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if all {
-		return runAuthLogoutAll(context.Background())
+	if interactiveOnly && automationOnly {
+		return fmt.Errorf("--interactive-only cannot be combined with --automation-only")
 	}
-	token, err := managed.LoadToken(managed.DefaultBaseURL)
+	if (interactiveOnly || automationOnly) && !all {
+		return fmt.Errorf("--interactive-only and --automation-only require --all")
+	}
+	if all {
+		kind := ""
+		switch {
+		case interactiveOnly:
+			kind = "interactive"
+		case automationOnly:
+			kind = "automation"
+		}
+		return runAuthLogoutAll(context.Background(), kind)
+	}
+	auth, err := managed.LoadAuthToken(managed.DefaultBaseURL)
 	if err != nil {
 		return err
 	}
-	if token == "" {
+	if auth.Token == "" {
 		fmt.Printf("Already logged out locally.\nTo revoke server-side tokens from other devices or deleted local sessions, run `dari-docs auth logout --all`.\n")
 		return nil
 	}
-	client := managed.New(managed.DefaultBaseURL, token)
+	client := managed.NewWithAuthToken(managed.DefaultBaseURL, auth)
 	if err := client.Logout(context.Background()); err != nil {
 		var httpErr *managed.HTTPError
+		var invalidEnv *managed.InvalidEnvTokenError
+		if errors.As(err, &invalidEnv) {
+			return err
+		}
 		if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusUnauthorized {
 			return err
 		}
 	}
-	if err := managed.DeleteToken(managed.DefaultBaseURL); err != nil {
-		return err
+	if auth.Source == managed.AuthSourceLocal {
+		if err := managed.DeleteToken(managed.DefaultBaseURL); err != nil {
+			return err
+		}
+		fmt.Printf("Logged out of %s\n", managed.DefaultBaseURL)
+	} else {
+		fmt.Printf("Revoked token from %s. Unset %s to stop using it locally.\n", managed.EnvTokenName, managed.EnvTokenName)
 	}
-	fmt.Printf("Logged out of %s\n", managed.DefaultBaseURL)
 	return nil
 }
 
-func runAuthLogoutAll(ctx context.Context) error {
-	token, err := managed.LoadToken(managed.DefaultBaseURL)
+func runAuthLogoutAll(ctx context.Context, kind string) error {
+	auth, err := managed.LoadAuthToken(managed.DefaultBaseURL)
 	if err != nil {
 		return err
 	}
-	if token != "" {
-		client := managed.New(managed.DefaultBaseURL, token)
-		if err := client.LogoutAll(ctx); err == nil {
-			if err := managed.DeleteToken(managed.DefaultBaseURL); err != nil {
-				return err
+	if auth.Token != "" {
+		client := managed.NewWithAuthToken(managed.DefaultBaseURL, auth)
+		if err := client.LogoutAllKind(ctx, kind); err == nil {
+			if auth.Source == managed.AuthSourceLocal && kind != "automation" {
+				if err := managed.DeleteToken(managed.DefaultBaseURL); err != nil {
+					return err
+				}
 			}
-			fmt.Printf("Revoked all Dari Docs managed tokens for this account.\n")
+			fmt.Printf("%s.\n", logoutAllMessage(kind))
 			return nil
 		} else {
 			var httpErr *managed.HTTPError
+			var invalidEnv *managed.InvalidEnvTokenError
+			if errors.As(err, &invalidEnv) {
+				return err
+			}
 			if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusUnauthorized {
 				return err
 			}
-			if err := managed.DeleteToken(managed.DefaultBaseURL); err != nil {
+			if auth.Source == managed.AuthSourceLocal {
+				if err := managed.DeleteToken(managed.DefaultBaseURL); err != nil {
+					return err
+				}
+				fmt.Fprintln(os.Stderr, "Stored login was invalid; re-authenticating to revoke server-side tokens.")
+			} else {
 				return err
 			}
-			fmt.Fprintln(os.Stderr, "Stored login was invalid; re-authenticating to revoke server-side tokens.")
 		}
 	} else {
 		fmt.Fprintln(os.Stderr, "No local login found; re-authenticating to revoke server-side tokens.")
@@ -521,10 +561,161 @@ func runAuthLogoutAll(ctx context.Context) error {
 		return err
 	}
 	client := managed.New(managed.DefaultBaseURL, verified.Token)
-	if err := client.LogoutAll(ctx); err != nil {
+	if err := client.LogoutAllKind(ctx, kind); err != nil {
 		return err
 	}
-	fmt.Printf("Revoked all Dari Docs managed tokens for %s.\n", verified.Email)
+	if kind == "automation" {
+		if err := client.Logout(ctx); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("%s for %s.\n", logoutAllMessage(kind), verified.Email)
+	return nil
+}
+
+func logoutAllMessage(kind string) string {
+	switch kind {
+	case "interactive":
+		return "Revoked all interactive Dari Docs managed tokens"
+	case "automation":
+		return "Revoked all automation Dari Docs managed tokens"
+	default:
+		return "Revoked all Dari Docs managed tokens"
+	}
+}
+
+func runAuthStatus(args []string) error {
+	fs := flag.NewFlagSet("dari-docs auth status", flag.ExitOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	client, auth, err := managedClientWithAuth()
+	if err != nil {
+		return err
+	}
+	me, err := client.Me(context.Background())
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Authenticated to %s\n", managed.DefaultBaseURL)
+	fmt.Printf("Email: %s\n", me.Email)
+	fmt.Printf("Source: %s\n", authSourceLabel(auth.Source))
+	if me.Token.ID != "" {
+		name := me.Token.Name
+		if name == "" {
+			name = me.Token.ID
+		}
+		fmt.Printf("Token: %s (%s)\n", name, me.Token.Kind)
+	}
+	if len(me.Token.Scopes) > 0 {
+		fmt.Printf("Scopes: %s\n", strings.Join(me.Token.Scopes, ", "))
+	}
+	fmt.Printf("Balance: %s\n", formatCents(me.BalanceCents))
+	return nil
+}
+
+func runAuthToken(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: dari-docs auth token [create|list|revoke]")
+	}
+	switch args[0] {
+	case "create":
+		return runAuthTokenCreate(args[1:])
+	case "list":
+		return runAuthTokenList(args[1:])
+	case "revoke":
+		return runAuthTokenRevoke(args[1:])
+	default:
+		return fmt.Errorf("usage: dari-docs auth token [create|list|revoke]")
+	}
+}
+
+func runAuthTokenCreate(args []string) error {
+	fs := flag.NewFlagSet("dari-docs auth token create", flag.ExitOnError)
+	var name string
+	var scopes repeated
+	var expiresIn string
+	fs.StringVar(&name, "name", "", "automation token name, for example github-actions")
+	fs.Var(&scopes, "scope", "token scope; repeatable (default: managed:read and managed:check)")
+	fs.StringVar(&expiresIn, "expires-in", "", "optional expiration such as 90d or 24h")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	expiresAt, err := parseExpiresIn(expiresIn)
+	if err != nil {
+		return err
+	}
+	client, _, err := managedClientWithAuth()
+	if err != nil {
+		return err
+	}
+	resp, err := client.CreateAuthToken(context.Background(), managed.TokenCreateRequest{
+		Name:      name,
+		Scopes:    expandCSVList(scopes),
+		ExpiresAt: expiresAt,
+	})
+	if err != nil {
+		return err
+	}
+	displayName := resp.Name
+	if displayName == "" {
+		displayName = resp.ID
+	}
+	fmt.Printf("Created automation token %q.\n\n", displayName)
+	fmt.Printf("%s=%s\n\n", managed.EnvTokenName, resp.Token)
+	fmt.Println("Copy this value now. It will not be shown again.")
+	return nil
+}
+
+func runAuthTokenList(args []string) error {
+	fs := flag.NewFlagSet("dari-docs auth token list", flag.ExitOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	client, _, err := managedClientWithAuth()
+	if err != nil {
+		return err
+	}
+	resp, err := client.ListAuthTokens(context.Background())
+	if err != nil {
+		return err
+	}
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tNAME\tKIND\tSCOPES\tLAST USED\tEXPIRES")
+	for _, token := range resp.Tokens {
+		name := token.Name
+		if name == "" {
+			name = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			token.ID,
+			name,
+			token.Kind,
+			strings.Join(token.Scopes, ","),
+			formatOptionalTime(token.LastUsedAt),
+			formatOptionalTime(token.ExpiresAt),
+		)
+	}
+	return tw.Flush()
+}
+
+func runAuthTokenRevoke(args []string) error {
+	fs := flag.NewFlagSet("dari-docs auth token revoke", flag.ExitOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: dari-docs auth token revoke <token-id>")
+	}
+	client, _, err := managedClientWithAuth()
+	if err != nil {
+		return err
+	}
+	tokenID := fs.Arg(0)
+	if err := client.RevokeAuthToken(context.Background(), tokenID); err != nil {
+		return err
+	}
+	fmt.Printf("Revoked token %s\n", tokenID)
 	return nil
 }
 
@@ -605,7 +796,7 @@ func runAgents(args []string) error {
 	if err != nil {
 		return err
 	}
-	token, err := loadManagedToken()
+	auth, err := loadManagedAuthToken()
 	if err != nil {
 		return err
 	}
@@ -638,7 +829,7 @@ func runAgents(args []string) error {
 	if err := agentbundle.ValidateManagedBundle(editorBundle.Content, "editor agent"); err != nil {
 		return err
 	}
-	tokenHash := managedTokenHash(token)
+	tokenHash := managedTokenHash(auth.Token)
 	state, _ := loadLocalState(absRepo)
 	var retryPending *pendingManagedDeploy
 	if pending := state.PendingManagedDeploy; pending != nil && !forceNew {
@@ -651,13 +842,13 @@ func runAgents(args []string) error {
 				retryPending = pending
 				break
 			}
-			client := managed.New(managed.DefaultBaseURL, token)
+			client := managed.NewWithAuthToken(managed.DefaultBaseURL, auth)
 			return waitForManagedAgentDeploy(context.Background(), absRepo, cfg, client, *pending)
 		case resumeOnly:
 			if pending.DeployID == "" {
 				return fmt.Errorf("pending managed deploy did not reach the service and agent files changed; rerun with --force-new")
 			}
-			client := managed.New(managed.DefaultBaseURL, token)
+			client := managed.NewWithAuthToken(managed.DefaultBaseURL, auth)
 			return waitForManagedAgentDeploy(context.Background(), absRepo, cfg, client, *pending)
 		default:
 			return fmt.Errorf("a previous managed deploy is pending for this repo but the agent files changed; rerun with --resume to wait for it or --force-new to queue a new deploy")
@@ -679,7 +870,7 @@ func runAgents(args []string) error {
 	if err := os.WriteFile(editorPath, editorBundle.Content, 0o600); err != nil {
 		return err
 	}
-	client := managed.New(managed.DefaultBaseURL, token)
+	client := managed.NewWithAuthToken(managed.DefaultBaseURL, auth)
 	pending := pendingManagedDeploy{}
 	if retryPending != nil {
 		pending = *retryPending
@@ -877,22 +1068,79 @@ func openBrowserURL(url string) error {
 }
 
 func managedClientWithToken() (*managed.Client, error) {
-	token, err := loadManagedToken()
+	auth, err := loadManagedAuthToken()
 	if err != nil {
 		return nil, err
 	}
-	return managed.New(managed.DefaultBaseURL, token), nil
+	return managed.NewWithAuthToken(managed.DefaultBaseURL, auth), nil
+}
+
+func managedClientWithAuth() (*managed.Client, managed.AuthToken, error) {
+	auth, err := loadManagedAuthToken()
+	if err != nil {
+		return nil, managed.AuthToken{}, err
+	}
+	return managed.NewWithAuthToken(managed.DefaultBaseURL, auth), auth, nil
 }
 
 func loadManagedToken() (string, error) {
-	token, err := managed.LoadToken(managed.DefaultBaseURL)
+	auth, err := loadManagedAuthToken()
 	if err != nil {
 		return "", err
 	}
-	if token == "" {
-		return "", fmt.Errorf("not logged in to managed service; run `dari-docs auth login`")
+	return auth.Token, nil
+}
+
+func loadManagedAuthToken() (managed.AuthToken, error) {
+	auth, err := managed.LoadAuthToken(managed.DefaultBaseURL)
+	if err != nil {
+		return managed.AuthToken{}, err
 	}
-	return token, nil
+	if auth.Token == "" {
+		return managed.AuthToken{}, managedAuthRequiredError()
+	}
+	return auth, nil
+}
+
+func managedAuthRequiredError() error {
+	return fmt.Errorf("not logged in to managed service\n\nFor local use:\n  dari-docs auth login\n\nFor CI:\n  dari-docs auth token create --name github-actions\n  Set %s in your CI secret store", managed.EnvTokenName)
+}
+
+func authSourceLabel(source string) string {
+	if source == managed.AuthSourceEnv {
+		return managed.EnvTokenName
+	}
+	return "local credentials"
+}
+
+func formatOptionalTime(t *time.Time) string {
+	if t == nil || t.IsZero() {
+		return "never"
+	}
+	return t.Local().Format("2006-01-02 15:04")
+}
+
+func parseExpiresIn(raw string) (*time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var d time.Duration
+	if strings.HasSuffix(raw, "d") {
+		days, err := strconv.Atoi(strings.TrimSuffix(raw, "d"))
+		if err != nil || days <= 0 {
+			return nil, fmt.Errorf("--expires-in must be a positive duration like 90d or 24h")
+		}
+		d = time.Duration(days) * 24 * time.Hour
+	} else {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed <= 0 {
+			return nil, fmt.Errorf("--expires-in must be a positive duration like 90d or 24h")
+		}
+		d = parsed
+	}
+	t := time.Now().UTC().Add(d)
+	return &t, nil
 }
 
 func parseDollarsToCents(v string) (int64, error) {
@@ -1179,7 +1427,11 @@ func usage() {
 Usage:
   dari-docs --version
   dari-docs auth login
-  dari-docs auth logout [--all]
+  dari-docs auth status
+  dari-docs auth token create --name github-actions
+  dari-docs auth token list
+  dari-docs auth token revoke <token-id>
+  dari-docs auth logout [--all] [--interactive-only|--automation-only]
   dari-docs init [repo]
   dari-docs agents deploy --managed [--resume|--force-new]
   dari-docs billing balance

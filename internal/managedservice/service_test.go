@@ -654,6 +654,33 @@ func TestDariAuthExchangeRequiresBearer(t *testing.T) {
 	}
 }
 
+func TestNormalizeScopesTrimsAndDeduplicates(t *testing.T) {
+	got := normalizeScopes([]string{" managed:read ", "managed:check", "managed:read", ""})
+	want := []string{"managed:read", "managed:check"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("scopes = %#v, want %#v", got, want)
+	}
+}
+
+func TestInteractiveTokenHasAllScopes(t *testing.T) {
+	u := user{TokenKind: tokenKindInteractive}
+	for _, scope := range allManagedScopes {
+		if !u.hasScope(scope) {
+			t.Fatalf("interactive token missing scope %s", scope)
+		}
+	}
+}
+
+func TestAutomationTokenRequiresExplicitScope(t *testing.T) {
+	u := user{TokenKind: tokenKindAutomation, TokenScopes: []string{scopeManagedRead}}
+	if !u.hasScope(scopeManagedRead) {
+		t.Fatal("automation token should have explicit read scope")
+	}
+	if u.hasScope(scopeManagedBilling) {
+		t.Fatal("automation token should not inherit billing scope")
+	}
+}
+
 func TestLogoutAllRevokesOnlyCurrentUserTokens(t *testing.T) {
 	dsn := os.Getenv("MANAGEDSERVICE_TEST_DATABASE_URL")
 	if dsn == "" {

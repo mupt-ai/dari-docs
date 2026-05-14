@@ -111,13 +111,78 @@ Log out:
 dari-docs auth logout
 ```
 
-To revoke managed tokens from all devices, run `dari-docs auth logout --all`.
+To revoke managed tokens from all devices, run `dari-docs auth logout --all`. You can narrow that to browser-login tokens with `--interactive-only` or automation tokens with `--automation-only`.
 
 Before a managed run starts, the CLI prints a bundle summary and credit estimate. Credits are reserved before the run, then reconciled to the actual session cost after completion.
 
 - Managed runs currently support up to three tasks per run.
 - Managed runs currently support up to three active runs per account at a time.
 - Managed runs execute tasks sequentially; use self-managed mode if you need parallel tester sessions.
+
+## GitHub Actions
+
+Managed checks can run in CI with a named automation token.
+
+Create the token locally after logging in:
+
+```bash
+dari-docs auth login
+dari-docs auth token create --name github-actions
+```
+
+The token value is shown once. Add it to your repository or environment secrets as `DARI_DOCS_TOKEN`.
+
+By default, automation tokens can read managed account/run state and create managed checks. Add scopes explicitly for broader workflows, for example `--scope managed:read --scope managed:optimize` if CI should generate proposed revisions.
+
+Deploy agents locally and commit `.dari-docs/config.json` if you want CI and local runs to use the same managed agent set:
+
+```bash
+dari-docs init
+dari-docs agents deploy --managed
+git add .dari-docs/config.json
+```
+
+Example workflow:
+
+```yaml
+name: Dari Docs Check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  docs-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dari-docs
+        run: go install github.com/mupt-ai/dari-docs/cmd/dari-docs@latest
+
+      - name: Run managed docs check
+        run: dari-docs check . --managed --task "Install the SDK and make a first API call"
+        env:
+          DARI_DOCS_TOKEN: ${{ secrets.DARI_DOCS_TOKEN }}
+```
+
+The CLI waits until the managed run finishes, so the Actions job status reflects the docs check result. Use `--timeout-minutes` if a workflow needs a stricter upper bound.
+
+For CI, `check --managed` is the safest default. `optimize --managed` can generate proposed revisions that you upload as workflow artifacts. Use `optimize --managed --apply` in CI only when the workflow is intentionally configured to commit changes or open a pull request.
+
+Do not commit `DARI_DOCS_TOKEN`, `~/.dari-docs/credentials.json`, or any generated credential files. GitHub does not provide normal repository secrets to workflows from untrusted forks or Dependabot by default, so managed checks that require `DARI_DOCS_TOKEN` may be skipped for those events unless you deliberately configure a separate safe workflow.
+
+Manage automation tokens:
+
+```bash
+dari-docs auth token list
+dari-docs auth token revoke tok_...
+```
 
 ## Tasks
 
