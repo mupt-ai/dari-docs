@@ -30,6 +30,7 @@ import (
 	"github.com/mupt-ai/dari-docs/internal/platformauth"
 	"github.com/mupt-ai/dari-docs/internal/runner"
 	"github.com/mupt-ai/dari-docs/internal/workspace"
+	"gopkg.in/yaml.v3"
 )
 
 type repeated []string
@@ -1046,72 +1047,86 @@ func setLLMAPIKeySecret(path, secret string) error {
 	if err != nil {
 		return err
 	}
-	text := string(b)
-	lines := strings.SplitAfter(text, "\n")
-	llmStart := -1
-	for i := range lines {
-		if strings.TrimSpace(lines[i]) == "llm:" {
-			llmStart = i
-			break
-		}
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return fmt.Errorf("parse %s: %w", path, err)
 	}
-	if llmStart == -1 {
+	root := yamlDocumentRoot(&doc)
+	llm := yamlMappingValue(root, "llm")
+	if llm == nil {
 		return fmt.Errorf("could not find llm block in %s", path)
 	}
-	insertions := map[int]string{}
-	for i := llmStart + 1; i < len(lines); i++ {
-		line := lines[i]
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
+
+	updated := 0
+	if options := yamlMappingValue(llm, "options"); options != nil {
+		if options.Kind != yaml.MappingNode {
+			return fmt.Errorf("llm.options in %s must be a mapping", path)
 		}
-		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
-			break
-		}
-		if !strings.HasPrefix(trimmed, "model:") {
-			continue
-		}
-		indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-		alreadyHasSecret := false
-		for j := i + 1; j < len(lines); j++ {
-			next := lines[j]
-			nextTrimmed := strings.TrimSpace(next)
-			if nextTrimmed == "" {
+		for i := 1; i < len(options.Content); i += 2 {
+			option := options.Content[i]
+			if yamlMappingValue(option, "model") == nil {
 				continue
 			}
-			if !strings.HasPrefix(next, " ") && !strings.HasPrefix(next, "\t") {
-				break
-			}
-			nextIndent := next[:len(next)-len(strings.TrimLeft(next, " \t"))]
-			if len(nextIndent) < len(indent) {
-				break
-			}
-			if len(nextIndent) == len(indent) && strings.HasSuffix(nextTrimmed, ":") {
-				break
-			}
-			if len(nextIndent) == len(indent) && strings.HasPrefix(nextTrimmed, "api_key_secret:") {
-				alreadyHasSecret = true
-				break
-			}
+			yamlSetMappingScalar(option, "api_key_secret", secret)
+			updated++
 		}
-		if !alreadyHasSecret {
-			insertions[i+1] = indent + "api_key_secret: " + secret + "\n"
-		}
+	} else if yamlMappingValue(llm, "model") != nil {
+		yamlSetMappingScalar(llm, "api_key_secret", secret)
+		updated++
 	}
-	if len(insertions) == 0 {
-		if strings.Contains(text, "api_key_secret:") {
-			return nil
-		}
+	if updated == 0 {
 		return fmt.Errorf("could not find llm.model in %s", path)
 	}
-	var out strings.Builder
-	for i, line := range lines {
-		out.WriteString(line)
-		if insert, ok := insertions[i+1]; ok {
-			out.WriteString(insert)
+
+	var out bytes.Buffer
+	enc := yaml.NewEncoder(&out)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		_ = enc.Close()
+		return fmt.Errorf("encode %s: %w", path, err)
+	}
+	if err := enc.Close(); err != nil {
+		return fmt.Errorf("encode %s: %w", path, err)
+	}
+	return os.WriteFile(path, out.Bytes(), 0o644)
+}
+
+func yamlDocumentRoot(doc *yaml.Node) *yaml.Node {
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 {
+		return doc.Content[0]
+	}
+	return doc
+}
+
+func yamlMappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
 		}
 	}
-	return os.WriteFile(path, []byte(out.String()), 0o644)
+	return nil
+}
+
+func yamlSetMappingScalar(node *yaml.Node, key, value string) {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			node.Content[i+1].Kind = yaml.ScalarNode
+			node.Content[i+1].Tag = "!!str"
+			node.Content[i+1].Value = value
+			return
+		}
+	}
+	node.Content = append(node.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value},
+	)
 }
 
 func expandCSVList(values []string) []string {

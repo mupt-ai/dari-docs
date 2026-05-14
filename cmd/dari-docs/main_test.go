@@ -186,6 +186,36 @@ llm:
 	}
 }
 
+func TestSetLLMAPIKeySecretReplacesExistingSecret(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dari.yml")
+	original := `name: test
+llm:
+  default: medium-claude
+  options:
+    medium-claude:
+      provider: openrouter
+      model: anthropic/claude-sonnet-4.6
+      api_key_secret: OLD_KEY
+`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := setLLMAPIKeySecret(path, "MY_KEY"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	if strings.Contains(got, "OLD_KEY") {
+		t.Fatalf("old api_key_secret was preserved:\n%s", got)
+	}
+	if strings.Count(got, "api_key_secret: MY_KEY") != 1 {
+		t.Fatalf("api_key_secret was not replaced:\n%s", got)
+	}
+}
+
 func TestSetLLMAPIKeySecretPreservesModel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dari.yml")
 	original := "name: test\nllm:\n  model: anthropic/claude-sonnet-4.6\n"
