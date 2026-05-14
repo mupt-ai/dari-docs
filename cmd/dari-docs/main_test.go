@@ -58,6 +58,50 @@ func TestManagedSessionSummary(t *testing.T) {
 	}
 }
 
+func TestManagedCheckRequiresLoginBeforeAgentSet(t *testing.T) {
+	repo := t.TempDir()
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
+
+	err := runCheckOrOptimize("check", []string{repo, "--managed", "--task", "Run echo ok"})
+	if err == nil {
+		t.Fatal("expected missing login error")
+	}
+	if !strings.Contains(err.Error(), "not logged in to managed service") {
+		t.Fatalf("error = %q, want login error", err.Error())
+	}
+	if strings.Contains(err.Error(), "missing managed agent set") {
+		t.Fatalf("error = %q, should not mention missing agent set before login", err.Error())
+	}
+}
+
+func TestManagedAgentDeployRequiresLoginBeforeInit(t *testing.T) {
+	repo := t.TempDir()
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
+
+	err := runAgents([]string{"deploy", "--managed", repo})
+	if err == nil {
+		t.Fatal("expected missing login error")
+	}
+	if !strings.Contains(err.Error(), "not logged in to managed service") {
+		t.Fatalf("error = %q, want login error", err.Error())
+	}
+	if strings.Contains(err.Error(), "missing local agents") {
+		t.Fatalf("error = %q, should not mention missing local agents before login", err.Error())
+	}
+}
+
+func TestAuthLogoutWithoutTokenSucceeds(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	t.Setenv("HOME", home)
+
+	if err := runAuthLogout(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".dari-docs", "credentials.json")); !os.IsNotExist(err) {
+		t.Fatalf("credentials file should not be created on no-op logout, stat err=%v", err)
+	}
+}
+
 func TestVersionLine(t *testing.T) {
 	original := version
 	t.Cleanup(func() { version = original })
