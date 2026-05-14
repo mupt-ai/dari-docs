@@ -224,7 +224,7 @@ dari-docs optimize . \
   --task "Install the SDK and make a first API call"
 ```
 
-By default, the bundled agents expose named LLM options such as `dumb-claude`, `medium-claude`, `smart-claude`, `dumb-gpt`, `medium-gpt`, and `smart-gpt`. In self-managed mode, tester sessions run every task across all six options by default; the editor uses the manifest default (`medium-claude`).
+By default, the bundled agents expose named LLM options such as `dumb-claude`, `medium-claude`, `smart-claude`, `dumb-gpt`, `medium-gpt`, and `smart-gpt`. The Claude options use the `anthropic` provider and the GPT options use the `openai` provider. In self-managed mode, tester sessions run every task across all six options by default; the editor uses the manifest default (`medium-claude`).
 
 To explicitly choose tester model tiers:
 
@@ -236,9 +236,4 @@ dari-docs check . \
 
 Use `--llm ID` to collapse the run to one option for all sessions, or `--editor-llm ID` to select the editor model independently.
 
-To use your own stored provider key at agent deploy time:
-
-```bash
-dari credentials add MY_OPENROUTER_KEY
-dari-docs init --deploy --llm-api-key-secret MY_OPENROUTER_KEY
-```
+If you need BYOK at agent deploy time, add provider-specific Dari credentials and pass `--anthropic-api-key-secret` and/or `--openai-api-key-secret` to `dari-docs init --deploy`.

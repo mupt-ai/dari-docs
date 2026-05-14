@@ -870,11 +870,13 @@ func formatCents(cents int64) string {
 func runInit(args []string) error {
 	fs := flag.NewFlagSet("dari-docs init", flag.ExitOnError)
 	var deploy bool
-	var apiKeyEnv, apiKey, llmAPIKeySecret, agentsDir string
+	var apiKeyEnv, apiKey, llmAPIKeySecret, anthropicAPIKeySecret, openAIAPIKeySecret, agentsDir string
 	fs.BoolVar(&deploy, "deploy", false, "deploy bundled agents into the current Dari org")
 	fs.StringVar(&apiKeyEnv, "api-key-env", "DARI_API_KEY", "env var containing Dari API key for deploy")
 	fs.StringVar(&apiKey, "api-key", "", "Dari API key for deploy (prefer --api-key-env)")
-	fs.StringVar(&llmAPIKeySecret, "llm-api-key-secret", "", "optional stored Dari credential name for BYOK LLM at agent publish time; omit to use platform-managed LLM")
+	fs.StringVar(&llmAPIKeySecret, "llm-api-key-secret", "", "optional stored Dari credential name for BYOK LLM at agent publish time; only valid when all LLM options use one provider")
+	fs.StringVar(&anthropicAPIKeySecret, "anthropic-api-key-secret", "", "optional stored Dari credential name for Anthropic BYOK LLM at agent publish time")
+	fs.StringVar(&openAIAPIKeySecret, "openai-api-key-secret", "", "optional stored Dari credential name for OpenAI BYOK LLM at agent publish time")
 	fs.StringVar(&agentsDir, "agents-dir", "", "where to extract agent templates (default: <repo>/.dari-docs/agents)")
 	repoArg := "."
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -899,6 +901,17 @@ func runInit(args []string) error {
 	}
 	fmt.Printf("Extracted bundled agents to %s\n", agentsDir)
 
+	providerSecrets := map[string]string{}
+	if anthropicAPIKeySecret != "" {
+		providerSecrets["anthropic"] = anthropicAPIKeySecret
+	}
+	if openAIAPIKeySecret != "" {
+		providerSecrets["openai"] = openAIAPIKeySecret
+	}
+	if llmAPIKeySecret != "" && len(providerSecrets) > 0 {
+		return fmt.Errorf("--llm-api-key-secret cannot be combined with provider-specific LLM key secret flags")
+	}
+
 	cfg := appconfig.Config{AgentsDir: agentsDir, LLMMode: "platform-managed", LLMAPIKeySecret: llmAPIKeySecret}
 	if llmAPIKeySecret != "" {
 		cfg.LLMMode = "byok-publish-time"
@@ -906,6 +919,16 @@ func runInit(args []string) error {
 			return err
 		}
 		if err := setLLMAPIKeySecret(filepath.Join(agentsDir, "docs-editor-agent", "dari.yml"), llmAPIKeySecret); err != nil {
+			return err
+		}
+	}
+	if len(providerSecrets) > 0 {
+		cfg.LLMMode = "byok-publish-time"
+		cfg.LLMAPIKeySecrets = providerSecrets
+		if err := setLLMAPIKeySecretsByProvider(filepath.Join(agentsDir, "docs-user-tester-agent", "dari.yml"), providerSecrets); err != nil {
+			return err
+		}
+		if err := setLLMAPIKeySecretsByProvider(filepath.Join(agentsDir, "docs-editor-agent", "dari.yml"), providerSecrets); err != nil {
 			return err
 		}
 	}
@@ -971,13 +994,104 @@ func deployAgent(env []string, dir string) (string, error) {
 	return resp.AgentID, nil
 }
 
+type llmModelEntry struct {
+	lineIndex int
+	indent    string
+	provider  string
+}
+
 func setLLMAPIKeySecret(path, secret string) error {
+	return patchLLMAPIKeySecrets(path, func(entries []llmModelEntry) (map[int]string, error) {
+		providers := map[string]bool{}
+		for _, entry := range entries {
+			providers[entry.provider] = true
+		}
+		if len(providers) > 1 {
+			var names []string
+			for provider := range providers {
+				if provider == "" {
+					provider = "unspecified"
+				}
+				names = append(names, provider)
+			}
+			return nil, fmt.Errorf("--llm-api-key-secret cannot be applied to multiple LLM providers (%s); use --anthropic-api-key-secret and/or --openai-api-key-secret", strings.Join(names, ", "))
+		}
+		secrets := map[int]string{}
+		for _, entry := range entries {
+			secrets[entry.lineIndex] = secret
+		}
+		return secrets, nil
+	})
+}
+
+func setLLMAPIKeySecretsByProvider(path string, providerSecrets map[string]string) error {
+	normalized := map[string]string{}
+	for provider, secret := range providerSecrets {
+		provider = strings.ToLower(strings.TrimSpace(provider))
+		if provider != "" && strings.TrimSpace(secret) != "" {
+			normalized[provider] = strings.TrimSpace(secret)
+		}
+	}
+	return patchLLMAPIKeySecrets(path, func(entries []llmModelEntry) (map[int]string, error) {
+		matched := map[string]bool{}
+		secrets := map[int]string{}
+		for _, entry := range entries {
+			secret, ok := normalized[entry.provider]
+			if !ok {
+				continue
+			}
+			matched[entry.provider] = true
+			secrets[entry.lineIndex] = secret
+		}
+		for provider := range normalized {
+			if !matched[provider] {
+				return nil, fmt.Errorf("could not find %s llm option in %s", provider, path)
+			}
+		}
+		return secrets, nil
+	})
+}
+
+func patchLLMAPIKeySecrets(path string, secretsForEntries func([]llmModelEntry) (map[int]string, error)) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 	text := string(b)
 	lines := strings.SplitAfter(text, "\n")
+	entries, err := collectLLMModelEntries(path, lines)
+	if err != nil {
+		return err
+	}
+	secretsByLine, err := secretsForEntries(entries)
+	if err != nil {
+		return err
+	}
+	if len(secretsByLine) == 0 {
+		return nil
+	}
+	insertions := map[int]string{}
+	for _, entry := range entries {
+		secret, ok := secretsByLine[entry.lineIndex]
+		if !ok || hasSiblingLLMAPIKeySecret(lines, entry.lineIndex, entry.indent) {
+			continue
+		}
+		insertions[entry.lineIndex+1] = entry.indent + "api_key_secret: " + secret + "\n"
+	}
+	if len(insertions) == 0 {
+		return nil
+	}
+	var out strings.Builder
+	for i, line := range lines {
+		out.WriteString(line)
+		if insert, ok := insertions[i+1]; ok {
+			out.WriteString(insert)
+		}
+	}
+	return os.WriteFile(path, []byte(out.String()), 0o644)
+}
+
+func collectLLMModelEntries(path string, lines []string) ([]llmModelEntry, error) {
 	llmStart := -1
 	for i := range lines {
 		if strings.TrimSpace(lines[i]) == "llm:" {
@@ -986,9 +1100,9 @@ func setLLMAPIKeySecret(path, secret string) error {
 		}
 	}
 	if llmStart == -1 {
-		return fmt.Errorf("could not find llm block in %s", path)
+		return nil, fmt.Errorf("could not find llm block in %s", path)
 	}
-	insertions := map[int]string{}
+	var entries []llmModelEntry
 	for i := llmStart + 1; i < len(lines); i++ {
 		line := lines[i]
 		trimmed := strings.TrimSpace(line)
@@ -1002,46 +1116,100 @@ func setLLMAPIKeySecret(path, secret string) error {
 			continue
 		}
 		indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-		alreadyHasSecret := false
-		for j := i + 1; j < len(lines); j++ {
-			next := lines[j]
-			nextTrimmed := strings.TrimSpace(next)
-			if nextTrimmed == "" {
-				continue
-			}
-			if !strings.HasPrefix(next, " ") && !strings.HasPrefix(next, "\t") {
-				break
-			}
-			nextIndent := next[:len(next)-len(strings.TrimLeft(next, " \t"))]
-			if len(nextIndent) < len(indent) {
-				break
-			}
-			if len(nextIndent) == len(indent) && strings.HasSuffix(nextTrimmed, ":") {
-				break
-			}
-			if len(nextIndent) == len(indent) && strings.HasPrefix(nextTrimmed, "api_key_secret:") {
-				alreadyHasSecret = true
-				break
-			}
+		entries = append(entries, llmModelEntry{
+			lineIndex: i,
+			indent:    indent,
+			provider:  llmProviderForModelLine(lines, llmStart, i, indent),
+		})
+	}
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("could not find llm.model in %s", path)
+	}
+	return entries, nil
+}
+
+func llmProviderForModelLine(lines []string, llmStart, modelLine int, indent string) string {
+	for j := modelLine - 1; j > llmStart; j-- {
+		line := lines[j]
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
 		}
-		if !alreadyHasSecret {
-			insertions[i+1] = indent + "api_key_secret: " + secret + "\n"
+		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+			break
+		}
+		lineIndent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+		if len(lineIndent) < len(indent) {
+			break
+		}
+		if len(lineIndent) == len(indent) && strings.HasPrefix(trimmed, "provider:") {
+			return normalizeProvider(yamlScalarValue(trimmed))
 		}
 	}
-	if len(insertions) == 0 {
-		if strings.Contains(text, "api_key_secret:") {
-			return nil
+	for j := modelLine + 1; j < len(lines); j++ {
+		line := lines[j]
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
 		}
-		return fmt.Errorf("could not find llm.model in %s", path)
-	}
-	var out strings.Builder
-	for i, line := range lines {
-		out.WriteString(line)
-		if insert, ok := insertions[i+1]; ok {
-			out.WriteString(insert)
+		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+			break
+		}
+		lineIndent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+		if len(lineIndent) < len(indent) || (len(lineIndent) == len(indent) && strings.HasSuffix(trimmed, ":")) {
+			break
+		}
+		if len(lineIndent) == len(indent) && strings.HasPrefix(trimmed, "provider:") {
+			return normalizeProvider(yamlScalarValue(trimmed))
 		}
 	}
-	return os.WriteFile(path, []byte(out.String()), 0o644)
+	return inferProviderFromModel(yamlScalarValue(strings.TrimSpace(lines[modelLine])))
+}
+
+func hasSiblingLLMAPIKeySecret(lines []string, modelLine int, indent string) bool {
+	for j := modelLine + 1; j < len(lines); j++ {
+		line := lines[j]
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+			break
+		}
+		lineIndent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+		if len(lineIndent) < len(indent) || (len(lineIndent) == len(indent) && strings.HasSuffix(trimmed, ":")) {
+			break
+		}
+		if len(lineIndent) == len(indent) && strings.HasPrefix(trimmed, "api_key_secret:") {
+			return true
+		}
+	}
+	return false
+}
+
+func yamlScalarValue(trimmedLine string) string {
+	_, value, ok := strings.Cut(trimmedLine, ":")
+	if !ok {
+		return ""
+	}
+	value = strings.TrimSpace(value)
+	value = strings.Trim(value, `"'`)
+	return value
+}
+
+func normalizeProvider(provider string) string {
+	return strings.ToLower(strings.TrimSpace(provider))
+}
+
+func inferProviderFromModel(model string) string {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if strings.HasPrefix(model, "openai/") {
+		return "openai"
+	}
+	if strings.HasPrefix(model, "anthropic/") {
+		return "anthropic"
+	}
+	return ""
 }
 
 func expandCSVList(values []string) []string {
@@ -1124,6 +1292,8 @@ Important flags:
   --llm ID                    select a manifest LLM option for all self-managed sessions
   --feedback-llm ID           select tester LLM option(s); default is all bundled tester LLMs
   --editor-llm ID             select a manifest LLM option for the editor session
+  --anthropic-api-key-secret  stored Dari credential name for Anthropic BYOK deploys
+  --openai-api-key-secret     stored Dari credential name for OpenAI BYOK deploys
 
 Outputs:
   .dari-docs/config.json
