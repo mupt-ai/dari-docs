@@ -30,12 +30,17 @@ import (
 	"github.com/mupt-ai/dari-docs/internal/platformauth"
 	"github.com/mupt-ai/dari-docs/internal/runner"
 	"github.com/mupt-ai/dari-docs/internal/workspace"
+	"gopkg.in/yaml.v3"
 )
 
 type repeated []string
 
 func (r *repeated) String() string     { return strings.Join(*r, ",") }
 func (r *repeated) Set(v string) error { *r = append(*r, v); return nil }
+
+func defaultFeedbackLLMIDs() []string {
+	return runner.DefaultFeedbackLLMIDs()
+}
 
 var version = "dev"
 
@@ -88,8 +93,12 @@ func runCheckOrOptimize(cmd string, args []string) error {
 	var bundleExcludes repeated
 	var apiKeyEnv string
 	var apiKey string
+	var apiBaseURL string
 	var feedbackAgent string
 	var editorAgent string
+	var llmID string
+	var feedbackLLMIDs repeated
+	var editorLLMID string
 	var outDir string
 	var parallel int
 	var apply bool
@@ -103,8 +112,12 @@ func runCheckOrOptimize(cmd string, args []string) error {
 	fs.Var(&bundleExcludes, "bundle-exclude", "repo-relative glob to exclude from the docs bundle; repeatable")
 	fs.StringVar(&apiKeyEnv, "api-key-env", "DARI_API_KEY", "env var containing Dari API key")
 	fs.StringVar(&apiKey, "api-key", "", "Dari API key (prefer --api-key-env)")
+	fs.StringVar(&apiBaseURL, "api-base-url", os.Getenv("DARI_API_BASE_URL"), "Dari API base URL (defaults to production)")
 	fs.StringVar(&feedbackAgent, "feedback-agent", "", "Dari docs user-test agent ID (defaults to .dari-docs/config.json)")
 	fs.StringVar(&editorAgent, "editor-agent", "", "Dari docs editor agent ID (defaults to .dari-docs/config.json)")
+	fs.StringVar(&llmID, "llm", "", "manifest LLM option ID to use for all sessions")
+	fs.Var(&feedbackLLMIDs, "feedback-llm", "manifest LLM option ID for feedback/tester sessions; repeat or comma-separate (default: all bundled tester LLMs; overrides --llm)")
+	fs.StringVar(&editorLLMID, "editor-llm", "", "manifest LLM option ID for the editor session (overrides --llm)")
 	fs.StringVar(&outDir, "out", "", "output directory (default: <repo>/.dari-docs)")
 	fs.IntVar(&parallel, "parallel", 4, "number of feedback sessions to run concurrently")
 	fs.BoolVar(&apply, "apply", false, "copy updated docs back into the repo after downloading")
@@ -158,9 +171,14 @@ func runCheckOrOptimize(cmd string, args []string) error {
 	if len(secretEnvs) > 0 && !liveVerify {
 		return fmt.Errorf("--secret-env requires --live-verify")
 	}
+	feedbackLLMList := expandCSVList(feedbackLLMIDs)
+	feedbackLLMExplicit := len(feedbackLLMList) > 0
+	if editorLLMID == "" {
+		editorLLMID = llmID
+	}
 	if managedMode {
-		if apiKey != "" || feedbackAgent != "" || editorAgent != "" {
-			return fmt.Errorf("--managed cannot be combined with --api-key, --feedback-agent, or --editor-agent")
+		if apiKey != "" || apiBaseURL != "" || feedbackAgent != "" || editorAgent != "" || llmID != "" || feedbackLLMExplicit || editorLLMID != "" {
+			return fmt.Errorf("--managed cannot be combined with --api-key, --api-base-url, --feedback-agent, --editor-agent, or LLM selection flags")
 		}
 		if _, err := loadManagedToken(); err != nil {
 			return err
@@ -177,6 +195,13 @@ func runCheckOrOptimize(cmd string, args []string) error {
 			AgentSetID: c.ManagedAgentSetID, Tasks: allTasks, Apply: apply, LiveVerify: liveVerify, RuntimeSecrets: secrets, Timeout: time.Duration(timeoutMinutes) * time.Minute,
 			BundleOptions: bundle.CreateOptions{Include: bundleIncludes, Exclude: bundleExcludes},
 		})
+	}
+	if len(feedbackLLMList) == 0 {
+		if llmID != "" {
+			feedbackLLMList = []string{llmID}
+		} else {
+			feedbackLLMList = defaultFeedbackLLMIDs()
+		}
 	}
 	if c, ok, err := appconfig.Load(absRepo); err != nil {
 		return err
@@ -201,8 +226,8 @@ func runCheckOrOptimize(cmd string, args []string) error {
 		return fmt.Errorf("missing Dari API key; set %s or pass --api-key", apiKeyEnv)
 	}
 	cfg := runner.Config{
-		RepoRoot: absRepo, OutDir: outDir, APIKey: apiKey,
-		FeedbackAgent: feedbackAgent, EditorAgent: editorAgent, Tasks: allTasks, LiveVerify: liveVerify,
+		RepoRoot: absRepo, OutDir: outDir, APIKey: apiKey, APIBaseURL: apiBaseURL,
+		FeedbackAgent: feedbackAgent, EditorAgent: editorAgent, FeedbackLLMIDs: feedbackLLMList, EditorLLMID: editorLLMID, Tasks: allTasks, LiveVerify: liveVerify,
 		RuntimeSecrets: secrets, Parallel: parallel, Apply: apply, SkipEditor: cmd == "check", Timeout: time.Duration(timeoutMinutes) * time.Minute,
 		BundleOptions: bundle.CreateOptions{Include: bundleIncludes, Exclude: bundleExcludes},
 	}
@@ -1022,35 +1047,102 @@ func setLLMAPIKeySecret(path, secret string) error {
 	if err != nil {
 		return err
 	}
-	text := string(b)
-	if strings.Contains(text, "api_key_secret:") {
-		return nil
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return fmt.Errorf("parse %s: %w", path, err)
 	}
-	lines := strings.SplitAfter(text, "\n")
-	for i := 0; i < len(lines); i++ {
-		if strings.TrimSpace(lines[i]) != "llm:" {
-			continue
-		}
-		for j := i + 1; j < len(lines); j++ {
-			trimmed := strings.TrimSpace(lines[j])
-			if trimmed == "" {
-				continue
-			}
-			if !strings.HasPrefix(lines[j], " ") && !strings.HasPrefix(lines[j], "\t") {
-				break
-			}
-			if strings.HasPrefix(trimmed, "model:") {
-				insert := "  api_key_secret: " + secret + "\n"
-				lines = append(lines[:j+1], append([]string{insert}, lines[j+1:]...)...)
-				return os.WriteFile(path, []byte(strings.Join(lines, "")), 0o644)
-			}
-		}
-		break
-	}
-	if !strings.Contains(text, "llm:") {
+	root := yamlDocumentRoot(&doc)
+	llm := yamlMappingValue(root, "llm")
+	if llm == nil {
 		return fmt.Errorf("could not find llm block in %s", path)
 	}
-	return fmt.Errorf("could not find llm.model in %s", path)
+
+	updated := 0
+	if options := yamlMappingValue(llm, "options"); options != nil {
+		if options.Kind != yaml.MappingNode {
+			return fmt.Errorf("llm.options in %s must be a mapping", path)
+		}
+		for i := 1; i < len(options.Content); i += 2 {
+			option := options.Content[i]
+			if yamlMappingValue(option, "model") == nil {
+				continue
+			}
+			yamlSetMappingScalar(option, "api_key_secret", secret)
+			updated++
+		}
+	} else if yamlMappingValue(llm, "model") != nil {
+		yamlSetMappingScalar(llm, "api_key_secret", secret)
+		updated++
+	}
+	if updated == 0 {
+		return fmt.Errorf("could not find llm.model in %s", path)
+	}
+
+	var out bytes.Buffer
+	enc := yaml.NewEncoder(&out)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		_ = enc.Close()
+		return fmt.Errorf("encode %s: %w", path, err)
+	}
+	if err := enc.Close(); err != nil {
+		return fmt.Errorf("encode %s: %w", path, err)
+	}
+	return os.WriteFile(path, out.Bytes(), 0o644)
+}
+
+func yamlDocumentRoot(doc *yaml.Node) *yaml.Node {
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 {
+		return doc.Content[0]
+	}
+	return doc
+}
+
+func yamlMappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
+}
+
+func yamlSetMappingScalar(node *yaml.Node, key, value string) {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			node.Content[i+1].Kind = yaml.ScalarNode
+			node.Content[i+1].Tag = "!!str"
+			node.Content[i+1].Value = value
+			return
+		}
+	}
+	node.Content = append(node.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value},
+	)
+}
+
+func expandCSVList(values []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, raw := range values {
+		for _, part := range strings.Split(raw, ",") {
+			v := strings.TrimSpace(part)
+			if v == "" || seen[v] {
+				continue
+			}
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func readTasksFile(path string) ([]string, error) {
@@ -1114,7 +1206,11 @@ Important flags:
   --bundle-include GLOB       include extra repo-relative docs bundle paths; repeatable
   --bundle-exclude GLOB       exclude repo-relative docs bundle paths; repeatable
   --apply                     copy downloaded updated docs back into repo
+  --api-base-url URL          Dari API base URL; self-managed only
   --parallel N                tester sessions in parallel; self-managed only
+  --llm ID                    select a manifest LLM option for all self-managed sessions
+  --feedback-llm ID           select tester LLM option(s); default is all bundled tester LLMs
+  --editor-llm ID             select a manifest LLM option for the editor session
 
 Outputs:
   .dari-docs/config.json

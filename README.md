@@ -233,7 +233,19 @@ dari-docs optimize . \
   --task "Install the SDK and make a first API call"
 ```
 
-By default, self-managed agents use Dari's default LLM configuration. To use your own stored provider key at agent deploy time:
+By default, the bundled agents expose named LLM options such as `dumb-claude`, `medium-claude`, `smart-claude`, `dumb-gpt`, `medium-gpt`, and `smart-gpt`. In self-managed mode, tester sessions run every task across all six options by default; the editor uses the manifest default (`medium-claude`).
+
+To explicitly choose tester model tiers:
+
+```bash
+dari-docs check . \
+  --task "Install the SDK and make a first API call" \
+  --feedback-llm dumb-claude,medium-claude,smart-claude
+```
+
+Use `--llm ID` to collapse the run to one option for all sessions, or `--editor-llm ID` to select the editor model independently.
+
+To use your own stored provider key at agent deploy time:
 
 ```bash
 dari credentials add MY_OPENROUTER_KEY

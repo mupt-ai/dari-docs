@@ -58,6 +58,22 @@ func TestManagedSessionSummary(t *testing.T) {
 	}
 }
 
+func TestDefaultFeedbackLLMIDsIncludesBundledMatrix(t *testing.T) {
+	got := defaultFeedbackLLMIDs()
+	want := []string{"dumb-claude", "medium-claude", "smart-claude", "dumb-gpt", "medium-gpt", "smart-gpt"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("defaultFeedbackLLMIDs = %#v, want %#v", got, want)
+	}
+}
+
+func TestExpandCSVListTrimsDeduplicatesAndSplits(t *testing.T) {
+	got := expandCSVList([]string{"dumb-claude, medium-claude", "smart-gpt", "medium-claude"})
+	want := []string{"dumb-claude", "medium-claude", "smart-gpt"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("expandCSVList = %#v, want %#v", got, want)
+	}
+}
+
 func TestManagedCheckRequiresLoginBeforeAgentSet(t *testing.T) {
 	repo := t.TempDir()
 	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
@@ -138,6 +154,65 @@ func TestReadTasksFileParsesParagraphsAndBullets(t *testing.T) {
 	}
 	if strings.Join(got, "\n---\n") != strings.Join(want, "\n---\n") {
 		t.Fatalf("tasks = %#v, want %#v", got, want)
+	}
+}
+
+func TestSetLLMAPIKeySecretUpdatesLLMOptions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dari.yml")
+	original := `name: test
+llm:
+  default: medium-claude
+  options:
+    medium-claude:
+      provider: openrouter
+      model: anthropic/claude-sonnet-4.6
+    smart-gpt:
+      provider: openrouter
+      model: openai/gpt-5.5
+`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := setLLMAPIKeySecret(path, "MY_KEY"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	if strings.Count(got, "api_key_secret: MY_KEY") != 2 {
+		t.Fatalf("api_key_secret was not inserted for each option:\n%s", got)
+	}
+}
+
+func TestSetLLMAPIKeySecretReplacesExistingSecret(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dari.yml")
+	original := `name: test
+llm:
+  default: medium-claude
+  options:
+    medium-claude:
+      provider: openrouter
+      model: anthropic/claude-sonnet-4.6
+      api_key_secret: OLD_KEY
+`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := setLLMAPIKeySecret(path, "MY_KEY"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	if strings.Contains(got, "OLD_KEY") {
+		t.Fatalf("old api_key_secret was preserved:\n%s", got)
+	}
+	if strings.Count(got, "api_key_secret: MY_KEY") != 1 {
+		t.Fatalf("api_key_secret was not replaced:\n%s", got)
 	}
 }
 
