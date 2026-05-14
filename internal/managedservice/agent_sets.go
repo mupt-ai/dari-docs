@@ -321,31 +321,34 @@ UPDATE agent_set_deploys SET heartbeat_at=now(), updated_at=now() WHERE id=$1 AN
 
 func (s *Server) publishAgentSetDeploy(ctx context.Context, d agentSetDeploy) error {
 	if err := s.updateAgentSetDeployStep(ctx, d.ID, "publishing_tester"); err != nil {
-		return err
+		return withPersistedErrorCode(persistedErrAgentDeployUpdateFailed, err)
 	}
 	tester, err := s.dari.PublishAgentFromSnapshot(ctx, d.TesterSourceSnapshotID, d.TargetTesterAgentID)
 	if err != nil {
-		return fmt.Errorf("publish tester agent: %w", err)
+		return withPersistedErrorCode(persistedErrAgentDeployPublishTesterFailed, fmt.Errorf("publish tester agent: %w", err))
 	}
 	if _, err := s.db.Exec(ctx, `
 UPDATE agent_set_deploys
 SET tester_agent_id=$2, tester_version_id=$3, step='publishing_editor', heartbeat_at=now(), updated_at=now()
 WHERE id=$1 AND status=$4
 `, d.ID, tester.AgentID, tester.VersionID, statusRunning); err != nil {
-		return err
+		return withPersistedErrorCode(persistedErrAgentDeployUpdateFailed, err)
 	}
 	editor, err := s.dari.PublishAgentFromSnapshot(ctx, d.EditorSourceSnapshotID, d.TargetEditorAgentID)
 	if err != nil {
-		return fmt.Errorf("publish editor agent: %w", err)
+		return withPersistedErrorCode(persistedErrAgentDeployPublishEditorFailed, fmt.Errorf("publish editor agent: %w", err))
 	}
 	if _, err := s.db.Exec(ctx, `
 UPDATE agent_set_deploys
 SET editor_agent_id=$2, editor_version_id=$3, step='applying', heartbeat_at=now(), updated_at=now()
 WHERE id=$1 AND status=$4
 `, d.ID, editor.AgentID, editor.VersionID, statusRunning); err != nil {
-		return err
+		return withPersistedErrorCode(persistedErrAgentDeployUpdateFailed, err)
 	}
-	return s.applyAgentSetDeploy(ctx, d, tester, editor)
+	if err := s.applyAgentSetDeploy(ctx, d, tester, editor); err != nil {
+		return withPersistedErrorCode(persistedErrAgentDeployApplyFailed, err)
+	}
+	return nil
 }
 
 func (s *Server) updateAgentSetDeployStep(ctx context.Context, deployID, step string) error {
@@ -400,7 +403,7 @@ func (s *Server) failAgentSetDeploy(ctx context.Context, d agentSetDeploy, cause
 UPDATE agent_set_deploys
 SET status=$2, error=$3, updated_at=now(), completed_at=now()
 WHERE id=$1 AND status IN ($4,$5)
-`, d.ID, statusFailed, persistedError(cause), statusQueued, statusRunning)
+`, d.ID, statusFailed, persistedErrorString(persistedErrorCodeFromError(cause, persistedErrAgentDeployFailed)), statusQueued, statusRunning)
 	_ = s.dari.DeleteSourceSnapshot(ctx, d.TesterSourceSnapshotID)
 	_ = s.dari.DeleteSourceSnapshot(ctx, d.EditorSourceSnapshotID)
 	return err
@@ -415,7 +418,7 @@ UPDATE agent_set_deploys
 SET status=$1, error=$2, updated_at=now(), completed_at=now()
 WHERE status=$3 AND heartbeat_at < now() - ($4::double precision * interval '1 second')
 RETURNING id, tester_source_snapshot_id, editor_source_snapshot_id
-`, statusFailed, "managed agent deploy was interrupted; please retry", statusRunning, s.cfg.AgentDeployStaleAfter.Seconds())
+`, statusFailed, persistedErrorString(persistedErrAgentDeployStale), statusRunning, s.cfg.AgentDeployStaleAfter.Seconds())
 	if err != nil {
 		return err
 	}

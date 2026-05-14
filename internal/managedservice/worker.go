@@ -42,6 +42,7 @@ type runSessionRecord struct {
 	Status          string
 	CreatedAt       time.Time
 	LastPollErrorAt *time.Time
+	LastPollError   string
 }
 
 type nextSession struct {
@@ -157,7 +158,7 @@ func (s *Server) startNextSession(ctx context.Context, run queuedRun) error {
 	}
 	next, ok, err := s.nextSession(ctx, run, sessions)
 	if err != nil {
-		return s.failStartedRun(ctx, run, err)
+		return s.failStartedRun(ctx, run, persistedErrSessionFailed, err)
 	}
 	if !ok {
 		return s.reconcileRunProgress(ctx, run.ID)
@@ -166,7 +167,7 @@ func (s *Server) startNextSession(ctx context.Context, run queuedRun) error {
 	if shouldAttachRuntimeSecrets(run, next) {
 		secretJSON, err := s.runtimeSecretsJSON(ctx, run.ID)
 		if err != nil {
-			return s.failStartedRun(ctx, run, fmt.Errorf("load runtime secrets: %w", err))
+			return s.failStartedRun(ctx, run, persistedErrRuntimeSecretsLoadFailed, fmt.Errorf("load runtime secrets: %w", err))
 		}
 		if secretJSON != "" {
 			sessionReq.Secrets = map[string]string{agentbundle.RuntimeSecretsName: secretJSON}
@@ -174,7 +175,7 @@ func (s *Server) startNextSession(ctx context.Context, run queuedRun) error {
 	}
 	session, err := s.dari.CreateSession(ctx, next.AgentID, sessionReq)
 	if err != nil {
-		return s.failStartedRun(ctx, run, fmt.Errorf("create %s session: %w", next.Kind, err))
+		return s.failStartedRun(ctx, run, persistedErrSessionCreateFailed, fmt.Errorf("create %s session: %w", next.Kind, err))
 	}
 	_, err = s.db.Exec(ctx, `
 INSERT INTO run_sessions (session_id, run_id, kind, task_index, status, version_id)
@@ -188,8 +189,8 @@ VALUES ($1, $2, $3, $4, $5, $6)
 UPDATE run_sessions
 SET status=$2, completed_at=now(), last_poll_error=$3
 WHERE session_id=$1
-`, session.ID, statusFailed, persistedError(err))
-		return s.failStartedRun(ctx, run, fmt.Errorf("send %s session %s message: %w", next.Kind, session.ID, err))
+`, session.ID, statusFailed, persistedErrorString(persistedErrSessionMessageFailed))
+		return s.failStartedRun(ctx, run, persistedErrSessionMessageFailed, fmt.Errorf("send %s session %s message: %w", next.Kind, session.ID, err))
 	}
 	if isFinalSecretBearingSession(run, next) {
 		s.clearRuntimeSecrets(ctx, run.ID)
@@ -250,8 +251,11 @@ func (s *Server) nextSession(ctx context.Context, run queuedRun, sessions []runS
 	}, true, nil
 }
 
-func (s *Server) failStartedRun(ctx context.Context, run queuedRun, err error) error {
-	return s.finishRun(ctx, run, "", err)
+func (s *Server) failStartedRun(ctx context.Context, run queuedRun, code persistedErrorCode, cause error) error {
+	if err := s.finishRun(ctx, run, "", code); err != nil {
+		return err
+	}
+	return cause
 }
 
 func (s *Server) recoverStaleStartingRuns(ctx context.Context) error {
@@ -265,11 +269,11 @@ WHERE status=$2 AND updated_at < now() - interval '2 minutes'
 
 func (s *Server) recoverStaleUploadingRuns(ctx context.Context) error {
 	rows, err := s.db.Query(ctx, `
-	UPDATE runs
-	SET status=$1, error='bundle upload did not complete', updated_at=now(), completed_at=now()
-	WHERE status=$2 AND updated_at < now() - interval '10 minutes'
-	RETURNING id, reserved_cents
-	`, statusFailed, statusUploading)
+UPDATE runs
+SET status=$1, error=$3, updated_at=now(), completed_at=now()
+WHERE status=$2 AND updated_at < now() - interval '10 minutes'
+RETURNING id, reserved_cents
+`, statusFailed, statusUploading, persistedErrorString(persistedErrBundleUploadIncomplete))
 	if err != nil {
 		return err
 	}
@@ -329,7 +333,7 @@ func (s *Server) reconcileSession(ctx context.Context, session runSessionRecord)
 UPDATE run_sessions
 SET status=$2, completed_at=now(), last_poll_error=$3
 WHERE session_id=$1 AND status=$4
-`, session.ID, statusFailed, persistedError(fmt.Errorf("polling stale after %s: %w", s.cfg.PollErrorStaleAfter, err)), statusRunning)
+`, session.ID, statusFailed, persistedErrorString(persistedErrSessionPollStale), statusRunning)
 			if err != nil {
 				return err
 			}
@@ -355,9 +359,9 @@ WHERE session_id=$1 AND status=$3
 	case "failed":
 		_, err = s.db.Exec(ctx, `
 UPDATE run_sessions
-SET status=$2, completed_at=now(), last_polled_at=now(), last_poll_error_at=NULL, last_poll_error=NULL
+SET status=$2, completed_at=now(), last_polled_at=now(), last_poll_error_at=NULL, last_poll_error=$4
 WHERE session_id=$1 AND status=$3
-`, session.ID, statusFailed, statusRunning)
+`, session.ID, statusFailed, statusRunning, persistedErrorString(persistedErrSessionFailed))
 		if err != nil {
 			return err
 		}
@@ -368,7 +372,7 @@ WHERE session_id=$1 AND status=$3
 UPDATE run_sessions
 SET status=$2, completed_at=now(), last_polled_at=now(), last_poll_error=$3
 WHERE session_id=$1 AND status=$4
-`, session.ID, statusFailed, persistedError(fmt.Errorf("session stale after %s with last_message_status=%q", s.cfg.SessionStaleAfter, lastStatus)), statusRunning)
+`, session.ID, statusFailed, persistedErrorString(persistedErrSessionStale), statusRunning)
 			if err != nil {
 				return err
 			}
@@ -383,7 +387,7 @@ WHERE session_id=$1 AND status=$2
 	}
 }
 
-func (s *Server) recordSessionPollError(ctx context.Context, session runSessionRecord, pollErr error) (bool, error) {
+func (s *Server) recordSessionPollError(ctx context.Context, session runSessionRecord, _ error) (bool, error) {
 	firstErrorAt := session.LastPollErrorAt
 	if firstErrorAt == nil {
 		now := time.Now()
@@ -392,7 +396,7 @@ func (s *Server) recordSessionPollError(ctx context.Context, session runSessionR
 UPDATE run_sessions
 SET last_polled_at=now(), last_poll_error_at=coalesce(last_poll_error_at, now()), last_poll_error=$2
 WHERE session_id=$1 AND status=$3
-`, session.ID, persistedError(pollErr), statusRunning)
+`, session.ID, persistedErrorString(persistedErrSessionPollFailed), statusRunning)
 		if err != nil {
 			return false, err
 		}
@@ -401,12 +405,16 @@ WHERE session_id=$1 AND status=$3
 UPDATE run_sessions
 SET last_polled_at=now(), last_poll_error=$2
 WHERE session_id=$1 AND status=$3
-`, session.ID, persistedError(pollErr), statusRunning)
+`, session.ID, persistedErrorString(persistedErrSessionPollFailed), statusRunning)
 		if err != nil {
 			return false, err
 		}
 	}
 	return s.cfg.PollErrorStaleAfter > 0 && time.Since(*firstErrorAt) > s.cfg.PollErrorStaleAfter, nil
+}
+
+func runErrorCodeFromSession(session runSessionRecord) persistedErrorCode {
+	return persistedErrorCodeFromString(session.LastPollError, persistedErrSessionFailed)
 }
 
 func (s *Server) reconcileRunProgress(ctx context.Context, runID string) error {
@@ -429,7 +437,7 @@ func (s *Server) reconcileRunProgress(ctx context.Context, runID string) error {
 	}
 	for _, session := range sessions {
 		if session.Status == statusFailed {
-			return s.finishRun(ctx, run, "", fmt.Errorf("%s session %s failed", session.Kind, session.ID))
+			return s.finishRun(ctx, run, "", runErrorCodeFromSession(session))
 		}
 	}
 	_, reportsReady, err := s.collectTesterReports(ctx, run, sessions)
@@ -441,7 +449,7 @@ func (s *Server) reconcileRunProgress(ctx context.Context, runID string) error {
 		return err
 	}
 	if run.Mode == "check" {
-		return s.finishRun(ctx, run, "", nil)
+		return s.finishRun(ctx, run, "", "")
 	}
 	var editor *runSessionRecord
 	for i := range sessions {
@@ -455,12 +463,12 @@ func (s *Server) reconcileRunProgress(ctx context.Context, runID string) error {
 		return err
 	}
 	if editor.Status == statusFailed {
-		return s.finishRun(ctx, run, "", fmt.Errorf("editor session %s failed", editor.ID))
+		return s.finishRun(ctx, run, "", runErrorCodeFromSession(*editor))
 	}
 	if editor.Status != statusCompleted {
 		return nil
 	}
-	return s.finishRun(ctx, run, editor.ID, nil)
+	return s.finishRun(ctx, run, editor.ID, "")
 }
 
 func (s *Server) loadRun(ctx context.Context, runID string) (queuedRun, error) {
@@ -494,16 +502,16 @@ WHERE r.id=$1 AND r.status IN ($2,$3,$4)
 	return run, nil
 }
 
-func (s *Server) finishRun(ctx context.Context, run queuedRun, editorSessionID string, runErr error) error {
+func (s *Server) finishRun(ctx context.Context, run queuedRun, editorSessionID string, failureCode persistedErrorCode) error {
 	var (
 		tag pgconn.CommandTag
 		err error
 	)
-	if runErr != nil {
+	if failureCode != "" {
 		tag, err = s.db.Exec(ctx, `
 UPDATE runs SET status=$2, error=$3, updated_at=now(), completed_at=now()
 WHERE id=$1 AND status IN ($4,$5,$6)
-`, run.ID, statusFailed, persistedError(runErr), statusQueued, statusStarting, statusRunning)
+`, run.ID, statusFailed, persistedErrorString(failureCode), statusQueued, statusStarting, statusRunning)
 	} else {
 		tag, err = s.db.Exec(ctx, `
 UPDATE runs SET status=$2, error=NULL, editor_session_id=$3, updated_at=now(), completed_at=now()
@@ -557,7 +565,7 @@ func (s *Server) settleUnsettledRuns(ctx context.Context) error {
 
 func (s *Server) loadRunSessions(ctx context.Context, runID string) ([]runSessionRecord, error) {
 	rows, err := s.db.Query(ctx, `
-SELECT session_id, run_id, kind, task_index, status, created_at, last_poll_error_at
+SELECT session_id, run_id, kind, task_index, status, created_at, last_poll_error_at, coalesce(last_poll_error,'')
 FROM run_sessions
 WHERE run_id=$1
 ORDER BY created_at
@@ -569,7 +577,7 @@ ORDER BY created_at
 	var sessions []runSessionRecord
 	for rows.Next() {
 		var session runSessionRecord
-		if err := rows.Scan(&session.ID, &session.RunID, &session.Kind, &session.TaskIndex, &session.Status, &session.CreatedAt, &session.LastPollErrorAt); err != nil {
+		if err := rows.Scan(&session.ID, &session.RunID, &session.Kind, &session.TaskIndex, &session.Status, &session.CreatedAt, &session.LastPollErrorAt, &session.LastPollError); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, session)
