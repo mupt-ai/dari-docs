@@ -2,127 +2,231 @@
 
 Run simulated users against your docs, then pull back edited docs.
 
-`dari-docs` is a standalone CLI. It includes the Dari agents it needs, deploys them into your Dari org, runs them on your docs, and writes the updated docs back locally.
+`dari-docs` is a standalone CLI that includes the Dari agents it needs.
+
+It bundles your docs, deploys Dari agents, then has them test your docs and writes the updated docs back locally.
+
+You can run it two ways:
+
+- **Managed**: use the hosted Dari Docs service. No local Dari API key is required.
+- **Self-managed**: use your own Dari org and API key.
+
+## How It Works
+
+```text
+local docs
+  -> bundled by the CLI
+  -> tested by remote simulated users on specific tasks
+  -> summarized into feedback
+  -> optionally edited by a remote docs editor
+  -> downloaded into .dari-docs/updated/
+```
+
+The tester agent acts like a developer trying to complete each task and reports where the docs blocked progress. The editor agent turns that feedback into proposed docs edits.
 
 ## Install
 
+Install with Go:
+
 ```bash
 go install github.com/mupt-ai/dari-docs/cmd/dari-docs@latest
+dari-docs --help
 ```
 
-Or from this repo:
+Or build from this repo:
 
 ```bash
 go build ./cmd/dari-docs
+./dari-docs --help
 ```
 
-## Agent templates
+## Managed Quickstart
 
-The Dari agent definitions are checked in at the repo root:
+Managed mode uses the hosted Dari Docs service and a separate Dari Docs credit balance. New accounts start with five dollars worth of free credits.
 
-```text
-agents/docs-user-tester-agent/dari.yml
-agents/docs-editor-agent/dari.yml
-```
-
-`dari-docs init --deploy` deploys those agents into your Dari org.
-
-## Setup
+From your docs repo:
 
 ```bash
-dari auth login
-export DARI_API_KEY=...
+dari-docs auth login
+dari-docs init
+dari-docs agents deploy --managed
 ```
 
-From your docs directory:
+Agent deployment can continue after the CLI exits.
 
-```bash
-dari-docs init --deploy
-```
+- If the command is interrupted while waiting, rerun `dari-docs agents deploy --managed` from the same repo to resume watching the pending deployment.
+- If you changed the local agent files and want to start a new deployment in the middle of waiting on an existing deployment, use `--force-new`.
 
-This creates:
-
-```text
-.dari-docs/
-  agents/        # bundled tester/editor agents
-  config.json    # deployed agent IDs
-```
-
-By default, the agents use Dari's platform-managed LLM. To use your own stored LLM key at agent deploy time:
-
-```bash
-dari credentials add MY_OPENROUTER_KEY
-dari-docs init --deploy --llm-api-key-secret MY_OPENROUTER_KEY
-```
-
-## Get feedback only
+Ask tester Dari agents to attempt specific tasks based on the docs:
 
 ```bash
 dari-docs check . \
-  --task "Install the SDK and make a first API call" \
-  --task "Set up authentication"
+  --managed \
+  --task "Install the SDK and make a first API call"
 ```
 
-Results:
-
-```text
-.dari-docs/aggregate-feedback.md
-.dari-docs/runs/feedback-001.md
-```
-
-## Generate edited docs
+Generate doc revisions based on tester feedback:
 
 ```bash
 dari-docs optimize . \
-  --task "Install the SDK and make a first API call" \
-  --task "Set up authentication"
+  --managed \
+  --task "Install the SDK and make a first API call"
 ```
 
-Updated files are downloaded to:
+This downloads proposed revisions into `.dari-docs/updated/` without changing your repo.
 
-```text
-.dari-docs/updated/updated-docs/files/
-```
-
-Preview the diff:
-
-```bash
-diff -ru --exclude='.dari-docs' . .dari-docs/updated/updated-docs/files
-```
-
-Apply changes:
-
-```bash
-dari-docs optimize . --task "Set up authentication" --apply
-```
-
-Or manually:
-
-```bash
-rsync -av .dari-docs/updated/updated-docs/files/ ./
-```
-
-## Live verification secrets
-
-Static/local testing is the default. To let tester agents use product API keys for safe checks:
+Apply the edited docs:
 
 ```bash
 dari-docs optimize . \
+  --managed \
+  --task "Install the SDK and make a first API call" \
+  --apply
+```
+
+## Managed Account and Billing
+
+After logging in, check your balance:
+
+```bash
+dari-docs billing balance
+```
+
+Purchase more credits:
+
+```bash
+dari-docs billing checkout --amount 5
+```
+
+Log out:
+
+```bash
+dari-docs auth logout
+```
+
+Before a managed run starts, the CLI prints a bundle summary and credit estimate. Credits are reserved before the run, then reconciled to the actual session cost after completion.
+
+- Managed runs currently support up to three tasks per run.
+- Managed runs currently support up to three active runs per account at a time.
+- Managed runs execute tasks sequentially; use self-managed mode if you need parallel tester sessions.
+
+## Tasks
+
+Pass one or more `--task` values:
+
+```bash
+dari-docs check . \
+  --managed \
+  --task "Install the SDK" \
+  --task "Set up authentication"
+```
+
+Or keep tasks in a file, one task per paragraph or bullet:
+
+```bash
+dari-docs check . \
+  --managed \
+  --tasks-file docs-test-tasks.txt
+```
+
+By default, local run artifacts are written under `.dari-docs/`, and later runs overwrite the previous local outputs. Use `--out` to keep separate run directories:
+
+```bash
+dari-docs optimize . \
+  --managed \
+  --out .dari-docs/runs/install-sdk \
+  --task "Install the SDK and make a first API call"
+```
+
+When `--out` is used with `--apply`, the CLI still applies the downloaded revisions back into the target repo.
+
+## Bundle Selection
+
+Before a run starts, `dari-docs` creates `.dari-docs/input-docs-bundle.tar.gz`. By default it includes likely docs and docs-adjacent source files, while skipping common generated, dependency, build, and local output directories.
+
+Use repo-relative globs when your docs need extra inputs or when generated paths should be excluded:
+
+```bash
+dari-docs check . \
+  --managed \
+  --bundle-include "schemas/*.proto" \
+  --bundle-exclude "docs/generated/**" \
+  --task "Create an API key"
+```
+
+- `--bundle-include` adds files in addition to the defaults.
+- `--bundle-exclude` wins over both defaults and include patterns.
+
+The CLI prints a bundle summary before starting the run.
+
+## Live Verification Secrets
+
+Static testing is the default. To let agents use test-mode product/API keys for safe checks, pass `--live-verify` and repeat `--secret-env NAME` for local environment variables to send.
+
+Managed example:
+
+```bash
+export STRIPE_TEST_SECRET_KEY=sk_test_...
+
+dari-docs optimize . \
+  --managed \
   --live-verify \
   --secret-env STRIPE_TEST_SECRET_KEY \
   --task "Create a checkout session"
 ```
 
-Secret values are sent only as session secrets and should not appear in reports.
+Secret values are passed to the remote sessions only for that run. In managed mode, runtime secrets are encrypted while the run is active and cleared after use.
 
-## How it works
+## Agent Customization
+
+`dari-docs init` creates local agent projects under:
 
 ```text
-local docs
-  -> bundled and uploaded
-  -> tester agent sessions try each task
-  -> editor agent updates docs in /workspace/updated-docs
-  -> CLI downloads updated files
+.dari-docs/agents/
 ```
 
-The tester agent is intentionally lightweight: it acts like a developer trying the task and reports what blocked it. The editor agent turns that feedback into updated docs files.
+These are regular Dari agent projects. You can edit the local prompts and skills before deploying them.
+
+The bundled tester agent enables sandbox internet access by default so it can install packages and try docs that call external services. You can turn this off in `.dari-docs/agents/docs-user-tester-agent/dari.yml` before deploying if you want tests to run without network access.
+
+For customized agents, network access is controlled in each agent's `dari.yml`:
+
+```yaml
+sandbox:
+  internet_access: true
+```
+
+In managed mode, deploy the edited agents with:
+
+```bash
+dari-docs agents deploy --managed
+```
+
+In self-managed mode, `dari-docs init --deploy` deploys the default local agents. For more control, deploy your own Dari agents and pass their IDs with `--feedback-agent` and `--editor-agent`.
+
+## Self-Managed Usage
+
+Use self-managed mode when you want runs to execute in your own Dari org.
+
+```bash
+dari auth login
+export DARI_API_KEY=...
+dari-docs init --deploy
+```
+
+Then run the same commands without `--managed`:
+
+```bash
+dari-docs check . \
+  --task "Install the SDK and make a first API call"
+
+dari-docs optimize . \
+  --task "Install the SDK and make a first API call"
+```
+
+By default, self-managed agents use Dari's default LLM configuration. To use your own stored provider key at agent deploy time:
+
+```bash
+dari credentials add MY_OPENROUTER_KEY
+dari-docs init --deploy --llm-api-key-secret MY_OPENROUTER_KEY
+```
