@@ -1,13 +1,16 @@
 package runner
 
 import (
+	"bytes"
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"text/template"
 	"time"
 
 	"github.com/mupt-ai/dari-docs/internal/bundle"
@@ -17,10 +20,17 @@ import (
 
 const RuntimeSecretsName = "DARI_DOCS_RUNTIME_SECRETS_JSON"
 
+//go:embed prompts/*.md
+var promptFS embed.FS
+
+var (
+	feedbackPromptTemplate = template.Must(template.ParseFS(promptFS, "prompts/feedback.md"))
+	editorPromptTemplate   = template.Must(template.ParseFS(promptFS, "prompts/editor.md"))
+)
+
 type Config struct {
 	RepoRoot       string
 	OutDir         string
-	APIBaseURL     string
 	APIKey         string
 	LLMAPIKey      string
 	FeedbackAgent  string
@@ -32,6 +42,7 @@ type Config struct {
 	Apply          bool
 	SkipEditor     bool
 	Timeout        time.Duration
+	BundleOptions  bundle.CreateOptions
 }
 
 type Result struct {
@@ -69,13 +80,13 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		return Result{}, err
 	}
 
-	client := dari.New(cfg.APIBaseURL, cfg.APIKey)
+	client := dari.New("", cfg.APIKey)
 	bundlePath := filepath.Join(cfg.OutDir, "input-docs-bundle.tar.gz")
-	b, err := bundle.Create(cfg.RepoRoot, bundlePath)
+	b, err := bundle.CreateWithOptions(cfg.RepoRoot, bundlePath, cfg.BundleOptions)
 	if err != nil {
 		return Result{}, err
 	}
-	fmt.Fprintf(os.Stderr, "Built docs bundle: %s (%d files, %d bytes)\n", bundlePath, len(b.Manifest.Files), b.Bytes)
+	bundle.WriteSummary(os.Stderr, b)
 
 	up, err := client.UploadFile(ctx, bundlePath)
 	if err != nil {
@@ -116,7 +127,10 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if err := dari.ExtractZip(zipPath, extractDir); err != nil {
 		return res, err
 	}
-	res.UpdatedDir = workspace.UpdatedRoot(extractDir)
+	res.UpdatedDir, err = workspace.UpdatedRoot(extractDir)
+	if err != nil {
+		return res, err
+	}
 	fmt.Fprintf(os.Stderr, "Downloaded updated docs to: %s\n", res.UpdatedDir)
 	if cfg.Apply {
 		if err := workspace.CopyTree(res.UpdatedDir, cfg.RepoRoot); err != nil {
@@ -178,7 +192,7 @@ func oneFeedback(ctx context.Context, client *dari.Client, cfg Config, sessionRe
 		return "", fmt.Errorf("create feedback session %d: %w", idx+1, err)
 	}
 	fmt.Fprintf(os.Stderr, "Feedback session %d/%d: %s\n", idx+1, len(cfg.Tasks), s.ID)
-	prompt := feedbackPrompt(task, b, cfg.LiveVerify, cfg.RuntimeSecrets)
+	prompt := FeedbackPrompt(task, b, cfg.LiveVerify, cfg.RuntimeSecrets)
 	resp, err := client.SendUserMessage(ctx, s.ID, []dari.ContentBlock{dari.TextBlock(prompt), dari.FileBlock(fileID)})
 	if err != nil {
 		return "", fmt.Errorf("send feedback message %d: %w", idx+1, err)
@@ -206,7 +220,7 @@ func oneFeedback(ctx context.Context, client *dari.Client, cfg Config, sessionRe
 	return report, nil
 }
 
-func feedbackPrompt(task string, b bundle.Result, live bool, secrets map[string]string) string {
+func FeedbackPrompt(task string, b bundle.Result, live bool, secrets map[string]string) string {
 	var names []string
 	for k := range secrets {
 		names = append(names, k)
@@ -215,26 +229,25 @@ func feedbackPrompt(task string, b bundle.Result, live bool, secrets map[string]
 	if live {
 		liveText = "Live verification is enabled. Runtime secrets, if present, are provided inside DARI_DOCS_RUNTIME_SECRETS_JSON as JSON. Available secret names: " + strings.Join(names, ", ") + ". Never print values. Only run safe/test-mode/read-only checks unless explicitly instructed otherwise."
 	}
-	return fmt.Sprintf(`You are a developer trying to complete this task using the attached docs:
-
-%s
-
-The attached file is input-docs-bundle.tar.gz. It contains manifest.json and docs files under files/ with repo-relative paths. Extract it, search/read the relevant docs, and actually try the task in /workspace/attempt.
-
-Bundle summary: %d files, sha256 %s.
-
-%s
-
-Keep feedback brief. Report what you tried, whether it worked, where you got stuck, and the smallest docs changes that would have helped. Do not score the docs.`, task, len(b.Manifest.Files), b.SHA256, liveText)
+	return executePrompt(feedbackPromptTemplate, "feedback.md", map[string]any{
+		"Task":      task,
+		"FileCount": len(b.Manifest.Files),
+		"SHA256":    b.SHA256,
+		"LiveText":  liveText,
+	})
 }
 
-func writeAggregate(outDir string, reports []string) error {
+func AggregateFeedback(reports []string) string {
 	var sb strings.Builder
 	sb.WriteString("# Dari docs aggregate feedback\n\n")
 	for i, r := range reports {
 		sb.WriteString(fmt.Sprintf("\n\n---\n\n## Run %03d\n\n%s\n", i+1, r))
 	}
-	return os.WriteFile(filepath.Join(outDir, "aggregate-feedback.md"), []byte(sb.String()), 0o644)
+	return sb.String()
+}
+
+func writeAggregate(outDir string, reports []string) error {
+	return os.WriteFile(filepath.Join(outDir, "aggregate-feedback.md"), []byte(AggregateFeedback(reports)), 0o644)
 }
 
 func runEditor(ctx context.Context, client *dari.Client, cfg Config, sessionReq dari.CreateSessionRequest, fileID string, reports []string) (string, error) {
@@ -243,7 +256,7 @@ func runEditor(ctx context.Context, client *dari.Client, cfg Config, sessionReq 
 		return "", fmt.Errorf("create editor session: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "Editor session: %s\n", s.ID)
-	prompt := editorPrompt(reports)
+	prompt := EditorPrompt(reports)
 	if _, err := client.SendUserMessage(ctx, s.ID, []dari.ContentBlock{dari.TextBlock(prompt), dari.FileBlock(fileID)}); err != nil {
 		return "", fmt.Errorf("send editor message: %w", err)
 	}
@@ -261,28 +274,20 @@ func runEditor(ctx context.Context, client *dari.Client, cfg Config, sessionReq 
 	return s.ID, nil
 }
 
-func editorPrompt(reports []string) string {
-	var sb strings.Builder
-	sb.WriteString(`You are running as the remote docs editor for dari-docs.
-
-Attached is the original docs bundle, input-docs-bundle.tar.gz. It contains manifest.json and repo-relative files under files/.
-
-The feedback below comes from lightweight user-test agents that attempted tasks from the docs. Treat it as user research: fix the concrete blockers and confusing spots, not every possible documentation issue.
-
-Required output contract:
-1. Locate the attached tar.gz in the session workspace. Use shell tools to inspect the workspace if needed.
-2. Extract it into /workspace/input-docs.
-3. Copy /workspace/input-docs/files to /workspace/updated-docs/files, preserving repo-relative paths.
-4. Apply documentation improvements from the aggregate feedback below by editing files inside /workspace/updated-docs/files only.
-5. Write /workspace/updated-docs/CHANGELOG.md summarizing changed files and unresolved items.
-6. Ensure /workspace/updated-docs exists before finishing. The local CLI will download that directory with GET /v1/sessions/{session_id}/workspace.zip?path=updated-docs.
-
-Do not invent product facts. If source truth is missing, leave a clear TODO(owner) note or list it in CHANGELOG.md rather than fabricating schemas or behavior.
-
-Aggregate feedback:
-`)
+func EditorPrompt(reports []string) string {
+	var feedback strings.Builder
 	for i, r := range reports {
-		sb.WriteString(fmt.Sprintf("\n\n---\n\n## Feedback run %03d\n\n%s\n", i+1, r))
+		feedback.WriteString(fmt.Sprintf("\n\n---\n\n## Feedback run %03d\n\n%s\n", i+1, r))
 	}
-	return sb.String()
+	return executePrompt(editorPromptTemplate, "editor.md", map[string]any{
+		"Feedback": feedback.String(),
+	})
+}
+
+func executePrompt(t *template.Template, name string, data any) string {
+	var buf bytes.Buffer
+	if err := t.ExecuteTemplate(&buf, name, data); err != nil {
+		panic(fmt.Sprintf("render prompt template %s: %v", name, err))
+	}
+	return strings.TrimSuffix(buf.String(), "\n")
 }

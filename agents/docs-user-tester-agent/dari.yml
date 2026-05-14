@@ -6,6 +6,7 @@ instructions:
 
 sandbox:
   provider: e2b
+  internet_access: true
   secrets:
     - DARI_DOCS_RUNTIME_SECRETS_JSON
   runtimes:
@@ -23,13 +24,9 @@ sandbox:
       - ripgrep
       - unzip
       - tar
-  setup:
-    script: scripts/setup_tester.sh
-  env:
-    PATH: /home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin
 
 llm:
-  model: openai/gpt-5.5
+  model: anthropic/claude-sonnet-4.6
 
 built_in_tools:
   - read

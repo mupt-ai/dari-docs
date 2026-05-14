@@ -1,0 +1,249 @@
+package managedservice
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/mupt-ai/dari-docs/internal/dari"
+)
+
+const (
+	statusQueued    = "queued"
+	statusUploading = "uploading"
+	statusStarting  = "starting"
+	statusRunning   = "running"
+	statusCompleted = "completed"
+	statusFailed    = "failed"
+
+	maxPersistedErrorBytes = 512
+)
+
+type Server struct {
+	cfg        Config
+	db         *pgxpool.Pool
+	dari       *dari.Client
+	httpClient *http.Client
+}
+
+var persistedSecretPattern = regexp.MustCompile(`\b(?:sk_(?:live|test)_[A-Za-z0-9_-]+|rk_(?:live|test)_[A-Za-z0-9_-]+|whsec_[A-Za-z0-9_-]+|dari_[A-Za-z0-9_-]{12,})\b`)
+
+func Run(ctx context.Context, cfg Config) error {
+	if err := runMigrations(ctx, cfg.DatabaseURL); err != nil {
+		return err
+	}
+	db, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	s := &Server{cfg: cfg, db: db, dari: dari.New(cfg.DariAPIBaseURL, cfg.DariAPIKey), httpClient: &http.Client{Timeout: cfg.OutboundHTTPTimeout}}
+	srv := &http.Server{
+		Addr:              cfg.Addr,
+		Handler:           s.routes(),
+		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
+		ReadTimeout:       cfg.HTTPReadTimeout,
+		WriteTimeout:      cfg.HTTPWriteTimeout,
+		IdleTimeout:       cfg.HTTPIdleTimeout,
+	}
+	go s.sessionStarterLoop(ctx)
+	go s.sessionReconcilerLoop(ctx)
+	go s.settlementLoop(ctx)
+	go s.agentSetDeployLoop(ctx)
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
+	log.Printf("dari-docs service listening on %s", cfg.Addr)
+	err = srv.ListenAndServe()
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
+}
+
+func (s *Server) routes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", s.handleHealth)
+	mux.HandleFunc("/readyz", s.handleReady)
+	mux.HandleFunc("/v1/auth/dari/exchange", s.handleDariAuthExchange)
+	mux.HandleFunc("/v1/auth/logout", s.withAuth(s.handleLogout))
+	mux.HandleFunc("/v1/me", s.withAuth(s.handleMe))
+	mux.HandleFunc("/v1/billing/balance", s.withAuth(s.handleBalance))
+	mux.HandleFunc("/v1/billing/checkout", s.withAuth(s.handleCheckout))
+	mux.HandleFunc("/v1/runs/config", s.withAuth(s.handleRunConfig))
+	mux.HandleFunc("/v1/agent-sets", s.withAuth(s.handleAgentSets))
+	mux.HandleFunc("/v1/agent-set-deploys/", s.withAuth(s.handleAgentSetDeployByID))
+	mux.HandleFunc("/v1/stripe/webhook", s.handleStripeWebhook)
+	mux.HandleFunc("/billing/success", s.handleBillingSuccess)
+	mux.HandleFunc("/billing/cancel", s.handleBillingCancel)
+	mux.HandleFunc("/v1/runs", s.withAuth(s.handleRuns))
+	mux.HandleFunc("/v1/runs/", s.withAuth(s.handleRunByID))
+	return mux
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.db == nil {
+		writeError(w, http.StatusServiceUnavailable, "database is not configured")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := s.db.Ping(ctx); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database is not ready")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+}
+
+var defaultOutboundHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+func (s *Server) outboundHTTPClient() *http.Client {
+	if s.httpClient != nil {
+		return s.httpClient
+	}
+	return defaultOutboundHTTPClient
+}
+
+func readJSON(r *http.Request, out any) error {
+	defer r.Body.Close()
+	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	return dec.Decode(out)
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeHTML(w http.ResponseWriter, status int, title, body string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = fmt.Fprintf(w, `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>%s</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 48px 24px; color: #171717; background: #fafafa; }
+    main { max-width: 640px; margin: 0 auto; }
+    h1 { font-size: 28px; line-height: 1.2; margin: 0 0 12px; }
+    p { font-size: 16px; line-height: 1.5; margin: 0; color: #404040; }
+  </style>
+</head>
+<body><main><h1>%s</h1><p>%s</p></main></body>
+</html>`, htmlEscape(title), htmlEscape(title), htmlEscape(body))
+}
+
+func htmlEscape(v string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&#39;").Replace(v)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+func writeLoggedError(w http.ResponseWriter, status int, msg string, err error) {
+	if err != nil {
+		log.Printf("%s: %v", msg, err)
+	}
+	writeError(w, status, msg)
+}
+
+func persistedError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.TrimSpace(err.Error())
+	if msg == "" {
+		return ""
+	}
+	msg = strings.ReplaceAll(msg, "\n", " ")
+	msg = strings.ReplaceAll(msg, "\r", " ")
+	msg = stripHTTPResponseBody(msg)
+	msg = persistedSecretPattern.ReplaceAllString(msg, "[redacted]")
+	msg = strings.TrimSpace(msg)
+	if len(msg) > maxPersistedErrorBytes {
+		msg = msg[:maxPersistedErrorBytes] + "..."
+	}
+	return msg
+}
+
+func stripHTTPResponseBody(msg string) string {
+	const marker = ": http "
+	idx := strings.LastIndex(msg, marker)
+	if idx < 0 {
+		if bodyIdx := strings.LastIndex(msg, "; body="); bodyIdx >= 0 {
+			return msg[:bodyIdx]
+		}
+		return msg
+	}
+	statusStart := idx + len(marker)
+	statusEnd := statusStart
+	for statusEnd < len(msg) && msg[statusEnd] >= '0' && msg[statusEnd] <= '9' {
+		statusEnd++
+	}
+	if statusEnd == statusStart {
+		return msg
+	}
+	return msg[:statusEnd]
+}
+
+func isRequestBodyTooLarge(err error) bool {
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		return true
+	}
+	return strings.Contains(err.Error(), "http: request body too large")
+}
+
+func randomToken(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func sha256Hex(v string) string {
+	sum := sha256.Sum256([]byte(v))
+	return hex.EncodeToString(sum[:])
+}
+
+func formatCents(cents int64) string {
+	sign := ""
+	if cents < 0 {
+		sign = "-"
+		cents = -cents
+	}
+	return fmt.Sprintf("%s$%d.%02d", sign, cents/100, cents%100)
+}

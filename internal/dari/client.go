@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,6 +24,8 @@ type Client struct {
 	HTTP    *http.Client
 }
 
+const DefaultWorkspaceZipMaxUncompressedBytes int64 = 100 * 1024 * 1024
+
 func New(baseURL, apiKey string) *Client {
 	if baseURL == "" {
 		baseURL = "https://api.dari.dev"
@@ -34,6 +38,21 @@ type UploadedFile struct {
 	ID        string `json:"id"`
 	Filename  string `json:"filename"`
 	SizeBytes int64  `json:"size_bytes"`
+}
+
+type SourceBundle struct {
+	Content []byte
+	SHA256  string
+}
+
+type StagedSourceBundle struct {
+	ID     string
+	SHA256 string
+}
+
+type PublishedAgent struct {
+	AgentID   string
+	VersionID string
 }
 
 type Session struct {
@@ -55,19 +74,30 @@ type SendEventResponse struct {
 	Session Session        `json:"session"`
 }
 
+type CostSummary struct {
+	ScopeKind    string `json:"scope_kind"`
+	ScopeID      string `json:"scope_id"`
+	EventCount   int    `json:"event_count"`
+	TotalCostUSD string `json:"total_cost_usd"`
+}
+
 func (c *Client) UploadFile(ctx context.Context, path string) (UploadedFile, error) {
-	var body bytes.Buffer
-	mw := multipart.NewWriter(&body)
 	f, err := os.Open(path)
 	if err != nil {
 		return UploadedFile{}, err
 	}
 	defer f.Close()
-	part, err := mw.CreateFormFile("file", filepath.Base(path))
+	return c.UploadReader(ctx, filepath.Base(path), f)
+}
+
+func (c *Client) UploadReader(ctx context.Context, filename string, r io.Reader) (UploadedFile, error) {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	part, err := mw.CreateFormFile("file", filepath.Base(filename))
 	if err != nil {
 		return UploadedFile{}, err
 	}
-	if _, err := io.Copy(part, f); err != nil {
+	if _, err := io.Copy(part, r); err != nil {
 		return UploadedFile{}, err
 	}
 	if err := mw.Close(); err != nil {
@@ -78,9 +108,148 @@ func (c *Client) UploadFile(ctx context.Context, path string) (UploadedFile, err
 	return out, err
 }
 
+func NewSourceBundle(content []byte) SourceBundle {
+	sum := sha256.Sum256(content)
+	return SourceBundle{Content: content, SHA256: hex.EncodeToString(sum[:])}
+}
+
+func (c *Client) StageSourceBundle(ctx context.Context, bundle SourceBundle) (StagedSourceBundle, error) {
+	if bundle.SHA256 == "" {
+		bundle = NewSourceBundle(bundle.Content)
+	}
+	type reserveResponse struct {
+		SourceSnapshotID string            `json:"source_snapshot_id"`
+		UploadURL        string            `json:"upload_url"`
+		UploadHeaders    map[string]string `json:"upload_headers"`
+	}
+	type finalizeResponse struct {
+		Status        string `json:"status"`
+		FailureReason string `json:"failure_reason"`
+	}
+	var reserve reserveResponse
+	err := c.doJSON(ctx, http.MethodPost, "/v1/source-snapshots", "application/json", bytes.NewReader(mustJSON(map[string]any{
+		"format":     "tar.gz",
+		"sha256":     bundle.SHA256,
+		"size_bytes": len(bundle.Content),
+	})), &reserve)
+	if err != nil {
+		return StagedSourceBundle{}, fmt.Errorf("reserve source snapshot: %w", err)
+	}
+	if reserve.SourceSnapshotID == "" || reserve.UploadURL == "" {
+		return StagedSourceBundle{}, fmt.Errorf("reserve source snapshot response missing upload fields")
+	}
+	if err := uploadSigned(ctx, c.HTTP, reserve.UploadURL, bundle.Content, reserve.UploadHeaders); err != nil {
+		_ = c.deleteSourceSnapshot(context.Background(), reserve.SourceSnapshotID)
+		return StagedSourceBundle{}, fmt.Errorf("upload source snapshot: %w", err)
+	}
+	var finalize finalizeResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/source-snapshots/"+url.PathEscape(reserve.SourceSnapshotID)+"/finalize", "", nil, &finalize); err != nil {
+		_ = c.deleteSourceSnapshot(context.Background(), reserve.SourceSnapshotID)
+		return StagedSourceBundle{}, fmt.Errorf("finalize source snapshot: %w", err)
+	}
+	if finalize.Status != "ready" {
+		_ = c.deleteSourceSnapshot(context.Background(), reserve.SourceSnapshotID)
+		if strings.TrimSpace(finalize.FailureReason) == "" {
+			finalize.FailureReason = "source snapshot failed verification"
+		}
+		return StagedSourceBundle{}, fmt.Errorf("finalize source snapshot: %s", finalize.FailureReason)
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/source-snapshots/"+url.PathEscape(reserve.SourceSnapshotID)+"/manifest", "", nil, nil); err != nil {
+		_ = c.deleteSourceSnapshot(context.Background(), reserve.SourceSnapshotID)
+		return StagedSourceBundle{}, fmt.Errorf("validate manifest: %w", err)
+	}
+	return StagedSourceBundle{ID: reserve.SourceSnapshotID, SHA256: bundle.SHA256}, nil
+}
+
+func (c *Client) PublishAgentFromSnapshot(ctx context.Context, sourceSnapshotID, agentID string) (PublishedAgent, error) {
+	endpoint := "/v1/agents"
+	if agentID != "" {
+		endpoint = "/v1/agents/" + url.PathEscape(agentID) + "/versions"
+	}
+	var out map[string]any
+	if err := c.doJSON(ctx, http.MethodPost, endpoint, "application/json", bytes.NewReader(mustJSON(map[string]any{"source_snapshot_id": sourceSnapshotID})), &out); err != nil {
+		return PublishedAgent{}, fmt.Errorf("publish agent: %w", err)
+	}
+	published := PublishedAgent{}
+	if id, _ := out["agent_id"].(string); id != "" {
+		published.AgentID = id
+	}
+	if published.AgentID == "" {
+		if id, _ := out["id"].(string); id != "" && agentID == "" {
+			published.AgentID = id
+		}
+	}
+	if published.AgentID == "" {
+		published.AgentID = agentID
+	}
+	if versionID, _ := out["version_id"].(string); versionID != "" {
+		published.VersionID = versionID
+	}
+	if published.VersionID == "" {
+		if versionID, _ := out["id"].(string); versionID != "" && agentID != "" {
+			published.VersionID = versionID
+		}
+	}
+	if published.AgentID == "" {
+		return PublishedAgent{}, fmt.Errorf("publish agent response missing agent_id")
+	}
+	if published.VersionID == "" {
+		return PublishedAgent{}, fmt.Errorf("publish agent response missing version_id")
+	}
+	return published, nil
+}
+
+func (c *Client) DeploySourceBundle(ctx context.Context, bundle SourceBundle, agentID string) (string, error) {
+	staged, err := c.StageSourceBundle(ctx, bundle)
+	if err != nil {
+		return "", err
+	}
+	published, err := c.PublishAgentFromSnapshot(ctx, staged.ID, agentID)
+	if err != nil {
+		_ = c.DeleteSourceSnapshot(context.Background(), staged.ID)
+		return "", err
+	}
+	return published.AgentID, nil
+}
+
+func (c *Client) DeleteSourceSnapshot(ctx context.Context, id string) error {
+	return c.doJSON(ctx, http.MethodDelete, "/v1/source-snapshots/"+url.PathEscape(id), "", nil, nil)
+}
+
+func (c *Client) deleteSourceSnapshot(ctx context.Context, id string) error {
+	return c.DeleteSourceSnapshot(ctx, id)
+}
+
+func uploadSigned(ctx context.Context, client *http.Client, uploadURL string, content []byte, headers map[string]string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, uploadURL, bytes.NewReader(content))
+	if err != nil {
+		return err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("http %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return nil
+}
+
+func mustJSON(v any) []byte {
+	b, _ := json.Marshal(v)
+	return b
+}
+
 type CreateSessionRequest struct {
 	Secrets   map[string]string `json:"secrets,omitempty"`
 	LLMAPIKey string            `json:"llm_api_key,omitempty"`
+	VersionID string            `json:"version_id,omitempty"`
 }
 
 func (c *Client) CreateSession(ctx context.Context, agentID string, req CreateSessionRequest) (Session, error) {
@@ -129,6 +298,12 @@ func (c *Client) GetTranscript(ctx context.Context, sessionID string) (Transcrip
 	return out, err
 }
 
+func (c *Client) GetSessionCost(ctx context.Context, sessionID string) (CostSummary, error) {
+	var out CostSummary
+	err := c.doJSON(ctx, http.MethodGet, "/v1/costs/sessions/"+url.PathEscape(sessionID), "", nil, &out)
+	return out, err
+}
+
 func FinalAssistantText(t Transcript) string {
 	var parts []string
 	for _, item := range t.Timeline.Items {
@@ -173,6 +348,10 @@ func (c *Client) WaitForCompletion(ctx context.Context, sessionID string, interv
 }
 
 func (c *Client) DownloadWorkspaceZip(ctx context.Context, sessionID string, paths []string, outPath string) error {
+	return c.DownloadWorkspaceZipWithLimit(ctx, sessionID, paths, outPath, 0)
+}
+
+func (c *Client) DownloadWorkspaceZipWithLimit(ctx context.Context, sessionID string, paths []string, outPath string, maxBytes int64) error {
 	u := "/v1/sessions/" + url.PathEscape(sessionID) + "/workspace.zip"
 	if len(paths) > 0 {
 		q := url.Values{}
@@ -203,11 +382,58 @@ func (c *Client) DownloadWorkspaceZip(ctx context.Context, sessionID string, pat
 		return err
 	}
 	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
+	reader := io.Reader(resp.Body)
+	if maxBytes > 0 {
+		reader = io.LimitReader(resp.Body, maxBytes+1)
+	}
+	n, err := io.Copy(f, reader)
+	if err == nil && maxBytes > 0 && n > maxBytes {
+		_ = f.Close()
+		_ = os.Remove(outPath)
+		return fmt.Errorf("download workspace exceeds size limit of %d bytes", maxBytes)
+	}
+	return err
+}
+
+func (c *Client) WriteWorkspaceZipWithLimit(ctx context.Context, sessionID string, paths []string, w io.Writer, maxBytes int64) error {
+	u := "/v1/sessions/" + url.PathEscape(sessionID) + "/workspace.zip"
+	if len(paths) > 0 {
+		q := url.Values{}
+		for _, p := range paths {
+			q.Add("path", p)
+		}
+		u += "?" + q.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+u, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("download workspace: http %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	reader := io.Reader(resp.Body)
+	if maxBytes > 0 {
+		reader = io.LimitReader(resp.Body, maxBytes+1)
+	}
+	n, err := io.Copy(w, reader)
+	if err == nil && maxBytes > 0 && n > maxBytes {
+		return fmt.Errorf("download workspace exceeds size limit of %d bytes", maxBytes)
+	}
 	return err
 }
 
 func ExtractZip(zipPath, dest string) error {
+	return ExtractZipWithLimit(zipPath, dest, DefaultWorkspaceZipMaxUncompressedBytes)
+}
+
+func ExtractZipWithLimit(zipPath, dest string, maxUncompressedBytes int64) error {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return err
@@ -217,6 +443,7 @@ func ExtractZip(zipPath, dest string) error {
 	if err != nil {
 		return err
 	}
+	var total int64
 	for _, f := range r.File {
 		clean := filepath.Clean(f.Name)
 		if clean == "." || strings.HasPrefix(clean, "../") || filepath.IsAbs(clean) {
@@ -244,11 +471,24 @@ func ExtractZip(zipPath, dest string) error {
 			rc.Close()
 			return err
 		}
-		_, copyErr := io.Copy(w, rc)
+		reader := io.Reader(rc)
+		if maxUncompressedBytes > 0 {
+			remaining := maxUncompressedBytes - total
+			if remaining < 0 {
+				remaining = 0
+			}
+			reader = io.LimitReader(rc, remaining+1)
+		}
+		n, copyErr := io.Copy(w, reader)
+		total += n
 		closeErr := w.Close()
 		rc.Close()
 		if copyErr != nil {
 			return copyErr
+		}
+		if maxUncompressedBytes > 0 && total > maxUncompressedBytes {
+			_ = os.Remove(outPath)
+			return fmt.Errorf("zip exceeds uncompressed size limit of %d bytes", maxUncompressedBytes)
 		}
 		if closeErr != nil {
 			return closeErr

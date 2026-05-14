@@ -33,6 +33,9 @@ func CopyTree(src, dst string) error {
 		}
 		out := filepath.Join(absDst, rel)
 		if d.IsDir() {
+			if err := ensureNoDestinationSymlink(absDst, out); err != nil {
+				return err
+			}
 			return os.MkdirAll(out, 0o755)
 		}
 		info, err := d.Info()
@@ -42,11 +45,49 @@ func CopyTree(src, dst string) error {
 		if !info.Mode().IsRegular() {
 			return nil
 		}
+		if err := ensureNoDestinationSymlink(absDst, filepath.Dir(out)); err != nil {
+			return err
+		}
 		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+			return err
+		}
+		if err := ensureNoDestinationSymlink(absDst, out); err != nil {
 			return err
 		}
 		return copyFile(path, out, info.Mode())
 	})
+}
+
+func ensureNoDestinationSymlink(root, target string) error {
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return err
+	}
+	if rel == "." {
+		return nil
+	}
+	if strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
+		return fmt.Errorf("unsafe destination path %q", rel)
+	}
+
+	current := root
+	for _, part := range strings.Split(rel, string(os.PathSeparator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to apply through destination symlink %q", current)
+		}
+	}
+	return nil
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {
@@ -67,18 +108,15 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	return closeErr
 }
 
-func UpdatedRoot(extractDir string) string {
+func UpdatedRoot(extractDir string) (string, error) {
 	candidates := []string{
 		filepath.Join(extractDir, "updated-docs", "files"),
 		filepath.Join(extractDir, "workspace", "updated-docs", "files"),
-		filepath.Join(extractDir, "updated-docs"),
-		filepath.Join(extractDir, "workspace", "updated-docs"),
-		extractDir,
 	}
 	for _, c := range candidates {
 		if st, err := os.Stat(c); err == nil && st.IsDir() {
-			return c
+			return c, nil
 		}
 	}
-	return extractDir
+	return "", fmt.Errorf("updated docs archive missing expected updated-docs/files directory")
 }
