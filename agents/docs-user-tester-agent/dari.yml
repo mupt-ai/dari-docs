@@ -29,23 +29,23 @@ llm:
   default: medium-claude
   options:
     dumb-claude:
-      provider: openrouter
-      model: anthropic/claude-haiku-4.5
+      provider: anthropic
+      model: claude-haiku-4-5
     medium-claude:
-      provider: openrouter
-      model: anthropic/claude-sonnet-4.6
+      provider: anthropic
+      model: claude-sonnet-4-6
     smart-claude:
-      provider: openrouter
-      model: anthropic/claude-opus-4.5
+      provider: anthropic
+      model: claude-opus-4-7
     dumb-gpt:
-      provider: openrouter
-      model: openai/gpt-5-mini
+      provider: openai
+      model: gpt-5-mini
     medium-gpt:
-      provider: openrouter
-      model: openai/gpt-5.1
+      provider: openai
+      model: gpt-5.1
     smart-gpt:
-      provider: openrouter
-      model: openai/gpt-5.5
+      provider: openai
+      model: gpt-5.5
 
 built_in_tools:
   - read

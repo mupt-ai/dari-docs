@@ -236,9 +236,11 @@ dari-docs check . \
 
 Use `--llm ID` to collapse the run to one option for all sessions, or `--editor-llm ID` to select the editor model independently.
 
-To use your own stored provider key at agent deploy time:
+To use your own stored provider key at agent deploy time for a single-provider agent configuration:
 
 ```bash
-dari credentials add MY_OPENROUTER_KEY
-dari-docs init --deploy --llm-api-key-secret MY_OPENROUTER_KEY
+dari credentials add MY_ANTHROPIC_KEY
+dari-docs init --deploy --llm-api-key-secret MY_ANTHROPIC_KEY
 ```
+
+For the bundled mixed Anthropic/OpenAI options, omit this flag to use platform-managed credentials, or deploy custom agents with provider-specific `api_key_secret` values.
