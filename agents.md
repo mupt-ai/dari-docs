@@ -36,11 +36,26 @@ The CLI then patches the extracted agents before deploy:
 
 ```yaml
 llm:
-  model: openai/gpt-5.5
-  api_key_secret: MY_OPENROUTER_KEY
+  default: medium-claude
+  options:
+    medium-claude:
+      provider: openrouter
+      model: anthropic/claude-sonnet-4.6
+      api_key_secret: MY_OPENROUTER_KEY
 ```
 
 No per-session LLM key is required by `dari-docs`.
+
+The bundled agents define these LLM option IDs for runtime selection:
+
+- `dumb-claude`
+- `medium-claude`
+- `smart-claude`
+- `dumb-gpt`
+- `medium-gpt`
+- `smart-gpt`
+
+Self-managed runs use all of these tester LLM options per task by default. Pass one option to all sessions with `--llm`, or override the tester matrix with repeated/comma-separated `--feedback-llm`.
 
 ## Runtime product/API secrets
 

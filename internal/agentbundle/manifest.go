@@ -19,15 +19,27 @@ const (
 )
 
 type managedManifest struct {
-	LLM *struct {
-		Model        string `yaml:"model"`
-		BaseURL      string `yaml:"base_url"`
-		APIKeySecret string `yaml:"api_key_secret"`
-	} `yaml:"llm"`
+	LLM     *managedManifestLLM `yaml:"llm"`
 	Sandbox *struct {
 		ProviderAPIKeySecret string   `yaml:"provider_api_key_secret"`
 		Secrets              []string `yaml:"secrets"`
 	} `yaml:"sandbox"`
+}
+
+type managedManifestLLM struct {
+	Default      string                              `yaml:"default"`
+	Options      map[string]managedManifestLLMOption `yaml:"options"`
+	Model        string                              `yaml:"model"`
+	Provider     string                              `yaml:"provider"`
+	BaseURL      string                              `yaml:"base_url"`
+	APIKeySecret string                              `yaml:"api_key_secret"`
+}
+
+type managedManifestLLMOption struct {
+	Model        string `yaml:"model"`
+	Provider     string `yaml:"provider"`
+	BaseURL      string `yaml:"base_url"`
+	APIKeySecret string `yaml:"api_key_secret"`
 }
 
 func ValidateManagedManifestYAML(data []byte) error {
@@ -38,14 +50,8 @@ func ValidateManagedManifestYAML(data []byte) error {
 	if manifest.LLM == nil {
 		return fmt.Errorf("llm is required")
 	}
-	if !strings.HasPrefix(strings.TrimSpace(manifest.LLM.Model), "anthropic/") {
-		return fmt.Errorf("llm.model must start with anthropic/")
-	}
-	if strings.TrimSpace(manifest.LLM.APIKeySecret) != "" {
-		return fmt.Errorf("llm.api_key_secret must be omitted for managed Dari Docs agents")
-	}
-	if strings.TrimSpace(manifest.LLM.BaseURL) != "" {
-		return fmt.Errorf("llm.base_url must be omitted for managed Dari Docs agents")
+	if err := validateManagedManifestLLM(manifest.LLM); err != nil {
+		return err
 	}
 	if manifest.Sandbox == nil {
 		return nil
@@ -58,6 +64,47 @@ func ValidateManagedManifestYAML(data []byte) error {
 	}
 	if len(manifest.Sandbox.Secrets) != 1 || manifest.Sandbox.Secrets[0] != RuntimeSecretsName {
 		return fmt.Errorf("sandbox.secrets must be omitted or exactly [%s] for managed Dari Docs agents", RuntimeSecretsName)
+	}
+	return nil
+}
+
+func validateManagedManifestLLM(llm *managedManifestLLM) error {
+	if len(llm.Options) == 0 {
+		return validateManagedManifestLLMOption("llm", managedManifestLLMOption{Model: llm.Model, Provider: llm.Provider, BaseURL: llm.BaseURL, APIKeySecret: llm.APIKeySecret})
+	}
+	if strings.TrimSpace(llm.Model) != "" || strings.TrimSpace(llm.Provider) != "" || strings.TrimSpace(llm.BaseURL) != "" || strings.TrimSpace(llm.APIKeySecret) != "" {
+		return fmt.Errorf("llm must not mix top-level model/provider fields with llm.options")
+	}
+	if strings.TrimSpace(llm.Default) == "" {
+		return fmt.Errorf("llm.default is required when llm.options is used")
+	}
+	if _, ok := llm.Options[strings.TrimSpace(llm.Default)]; !ok {
+		return fmt.Errorf("llm.default must reference a key in llm.options")
+	}
+	for id, opt := range llm.Options {
+		if strings.TrimSpace(id) == "" {
+			return fmt.Errorf("llm.options contains an empty option id")
+		}
+		if err := validateManagedManifestLLMOption("llm.options."+id, opt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateManagedManifestLLMOption(label string, opt managedManifestLLMOption) error {
+	if strings.TrimSpace(opt.Model) == "" {
+		return fmt.Errorf("%s.model is required", label)
+	}
+	if strings.TrimSpace(opt.APIKeySecret) != "" {
+		return fmt.Errorf("%s.api_key_secret must be omitted for managed Dari Docs agents", label)
+	}
+	if strings.TrimSpace(opt.BaseURL) != "" {
+		return fmt.Errorf("%s.base_url must be omitted for managed Dari Docs agents", label)
+	}
+	provider := strings.TrimSpace(opt.Provider)
+	if provider != "" && provider != "openrouter" && provider != "openai" && provider != "anthropic" {
+		return fmt.Errorf("%s.provider must be omitted or one of openrouter, openai, or anthropic", label)
 	}
 	return nil
 }

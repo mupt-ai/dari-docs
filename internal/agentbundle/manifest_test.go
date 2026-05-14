@@ -8,10 +8,17 @@ import (
 	"testing"
 )
 
-func TestValidateManagedManifestAllowsAnthropicRuntimeEnvelope(t *testing.T) {
+func TestValidateManagedManifestAllowsRuntimeEnvelope(t *testing.T) {
 	data := []byte(`
 llm:
-  model: anthropic/claude-sonnet-4.6
+  default: medium-claude
+  options:
+    medium-claude:
+      provider: openrouter
+      model: anthropic/claude-sonnet-4.6
+    smart-gpt:
+      provider: openrouter
+      model: openai/gpt-5.5
 sandbox:
   secrets:
     - DARI_DOCS_RUNTIME_SECRETS_JSON
@@ -23,10 +30,6 @@ sandbox:
 
 func TestValidateManagedManifestRejectsCredentialSensitiveFields(t *testing.T) {
 	tests := map[string]string{
-		"non anthropic": `
-llm:
-  model: openai/gpt-5.5
-`,
 		"llm secret": `
 llm:
   model: anthropic/claude-sonnet-4.6
@@ -36,6 +39,15 @@ llm:
 llm:
   model: anthropic/claude-sonnet-4.6
   base_url: https://proxy.example.test/v1
+`,
+		"option secret": `
+llm:
+  default: medium-claude
+  options:
+    medium-claude:
+      provider: openrouter
+      model: anthropic/claude-sonnet-4.6
+      api_key_secret: OPENROUTER_API_KEY
 `,
 		"sandbox provider secret": `
 llm:
@@ -105,7 +117,7 @@ func TestValidateManagedBundleRejectsDuplicateArchiveEntries(t *testing.T) {
 	}
 }
 
-const validManagedDariYAMLForTest = "llm:\n  model: anthropic/claude-sonnet-4.6\n"
+const validManagedDariYAMLForTest = "llm:\n  default: medium-claude\n  options:\n    medium-claude:\n      provider: openrouter\n      model: anthropic/claude-sonnet-4.6\n"
 
 type bundleFileForTest struct {
 	Name    string

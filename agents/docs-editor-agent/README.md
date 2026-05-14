@@ -2,6 +2,8 @@
 
 A Dari/Pi agent that applies documentation feedback to user-supplied docs.
 
+The manifest exposes the same named LLM options as the tester agent; `medium-claude` remains the default, and self-managed runs can select a different editor model with `--editor-llm`.
+
 Pair it with `docs-checker-agent`:
 
 1. Run `docs-checker-agent` with an implementation task and a Mintlify `llms.txt`, `llms-full.txt`, URL list, or uploaded docs.

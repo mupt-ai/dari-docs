@@ -37,6 +37,10 @@ type repeated []string
 func (r *repeated) String() string     { return strings.Join(*r, ",") }
 func (r *repeated) Set(v string) error { *r = append(*r, v); return nil }
 
+func defaultFeedbackLLMIDs() []string {
+	return runner.DefaultFeedbackLLMIDs()
+}
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "dari-docs: %v\n", err)
@@ -82,8 +86,12 @@ func runCheckOrOptimize(cmd string, args []string) error {
 	var bundleExcludes repeated
 	var apiKeyEnv string
 	var apiKey string
+	var apiBaseURL string
 	var feedbackAgent string
 	var editorAgent string
+	var llmID string
+	var feedbackLLMIDs repeated
+	var editorLLMID string
 	var outDir string
 	var parallel int
 	var apply bool
@@ -97,8 +105,12 @@ func runCheckOrOptimize(cmd string, args []string) error {
 	fs.Var(&bundleExcludes, "bundle-exclude", "repo-relative glob to exclude from the docs bundle; repeatable")
 	fs.StringVar(&apiKeyEnv, "api-key-env", "DARI_API_KEY", "env var containing Dari API key")
 	fs.StringVar(&apiKey, "api-key", "", "Dari API key (prefer --api-key-env)")
+	fs.StringVar(&apiBaseURL, "api-base-url", os.Getenv("DARI_API_BASE_URL"), "Dari API base URL (defaults to production)")
 	fs.StringVar(&feedbackAgent, "feedback-agent", "", "Dari docs user-test agent ID (defaults to .dari-docs/config.json)")
 	fs.StringVar(&editorAgent, "editor-agent", "", "Dari docs editor agent ID (defaults to .dari-docs/config.json)")
+	fs.StringVar(&llmID, "llm", "", "manifest LLM option ID to use for all sessions")
+	fs.Var(&feedbackLLMIDs, "feedback-llm", "manifest LLM option ID for feedback/tester sessions; repeat or comma-separate (default: all bundled tester LLMs; overrides --llm)")
+	fs.StringVar(&editorLLMID, "editor-llm", "", "manifest LLM option ID for the editor session (overrides --llm)")
 	fs.StringVar(&outDir, "out", "", "output directory (default: <repo>/.dari-docs)")
 	fs.IntVar(&parallel, "parallel", 4, "number of feedback sessions to run concurrently")
 	fs.BoolVar(&apply, "apply", false, "copy updated docs back into the repo after downloading")
@@ -152,9 +164,14 @@ func runCheckOrOptimize(cmd string, args []string) error {
 	if len(secretEnvs) > 0 && !liveVerify {
 		return fmt.Errorf("--secret-env requires --live-verify")
 	}
+	feedbackLLMList := expandCSVList(feedbackLLMIDs)
+	feedbackLLMExplicit := len(feedbackLLMList) > 0
+	if editorLLMID == "" {
+		editorLLMID = llmID
+	}
 	if managedMode {
-		if apiKey != "" || feedbackAgent != "" || editorAgent != "" {
-			return fmt.Errorf("--managed cannot be combined with --api-key, --feedback-agent, or --editor-agent")
+		if apiKey != "" || apiBaseURL != "" || feedbackAgent != "" || editorAgent != "" || llmID != "" || feedbackLLMExplicit || editorLLMID != "" {
+			return fmt.Errorf("--managed cannot be combined with --api-key, --api-base-url, --feedback-agent, --editor-agent, or LLM selection flags")
 		}
 		c, ok, err := appconfig.Load(absRepo)
 		if err != nil {
@@ -168,6 +185,13 @@ func runCheckOrOptimize(cmd string, args []string) error {
 			AgentSetID: c.ManagedAgentSetID, Tasks: allTasks, Apply: apply, LiveVerify: liveVerify, RuntimeSecrets: secrets, Timeout: time.Duration(timeoutMinutes) * time.Minute,
 			BundleOptions: bundle.CreateOptions{Include: bundleIncludes, Exclude: bundleExcludes},
 		})
+	}
+	if len(feedbackLLMList) == 0 {
+		if llmID != "" {
+			feedbackLLMList = []string{llmID}
+		} else {
+			feedbackLLMList = defaultFeedbackLLMIDs()
+		}
 	}
 	if c, ok, err := appconfig.Load(absRepo); err != nil {
 		return err
@@ -192,8 +216,8 @@ func runCheckOrOptimize(cmd string, args []string) error {
 		return fmt.Errorf("missing Dari API key; set %s or pass --api-key", apiKeyEnv)
 	}
 	cfg := runner.Config{
-		RepoRoot: absRepo, OutDir: outDir, APIKey: apiKey,
-		FeedbackAgent: feedbackAgent, EditorAgent: editorAgent, Tasks: allTasks, LiveVerify: liveVerify,
+		RepoRoot: absRepo, OutDir: outDir, APIKey: apiKey, APIBaseURL: apiBaseURL,
+		FeedbackAgent: feedbackAgent, EditorAgent: editorAgent, FeedbackLLMIDs: feedbackLLMList, EditorLLMID: editorLLMID, Tasks: allTasks, LiveVerify: liveVerify,
 		RuntimeSecrets: secrets, Parallel: parallel, Apply: apply, SkipEditor: cmd == "check", Timeout: time.Duration(timeoutMinutes) * time.Minute,
 		BundleOptions: bundle.CreateOptions{Include: bundleIncludes, Exclude: bundleExcludes},
 	}
@@ -953,34 +977,87 @@ func setLLMAPIKeySecret(path, secret string) error {
 		return err
 	}
 	text := string(b)
-	if strings.Contains(text, "api_key_secret:") {
-		return nil
-	}
 	lines := strings.SplitAfter(text, "\n")
-	for i := 0; i < len(lines); i++ {
-		if strings.TrimSpace(lines[i]) != "llm:" {
-			continue
+	llmStart := -1
+	for i := range lines {
+		if strings.TrimSpace(lines[i]) == "llm:" {
+			llmStart = i
+			break
 		}
-		for j := i + 1; j < len(lines); j++ {
-			trimmed := strings.TrimSpace(lines[j])
-			if trimmed == "" {
-				continue
-			}
-			if !strings.HasPrefix(lines[j], " ") && !strings.HasPrefix(lines[j], "\t") {
-				break
-			}
-			if strings.HasPrefix(trimmed, "model:") {
-				insert := "  api_key_secret: " + secret + "\n"
-				lines = append(lines[:j+1], append([]string{insert}, lines[j+1:]...)...)
-				return os.WriteFile(path, []byte(strings.Join(lines, "")), 0o644)
-			}
-		}
-		break
 	}
-	if !strings.Contains(text, "llm:") {
+	if llmStart == -1 {
 		return fmt.Errorf("could not find llm block in %s", path)
 	}
-	return fmt.Errorf("could not find llm.model in %s", path)
+	insertions := map[int]string{}
+	for i := llmStart + 1; i < len(lines); i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+			break
+		}
+		if !strings.HasPrefix(trimmed, "model:") {
+			continue
+		}
+		indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+		alreadyHasSecret := false
+		for j := i + 1; j < len(lines); j++ {
+			next := lines[j]
+			nextTrimmed := strings.TrimSpace(next)
+			if nextTrimmed == "" {
+				continue
+			}
+			if !strings.HasPrefix(next, " ") && !strings.HasPrefix(next, "\t") {
+				break
+			}
+			nextIndent := next[:len(next)-len(strings.TrimLeft(next, " \t"))]
+			if len(nextIndent) < len(indent) {
+				break
+			}
+			if len(nextIndent) == len(indent) && strings.HasSuffix(nextTrimmed, ":") {
+				break
+			}
+			if len(nextIndent) == len(indent) && strings.HasPrefix(nextTrimmed, "api_key_secret:") {
+				alreadyHasSecret = true
+				break
+			}
+		}
+		if !alreadyHasSecret {
+			insertions[i+1] = indent + "api_key_secret: " + secret + "\n"
+		}
+	}
+	if len(insertions) == 0 {
+		if strings.Contains(text, "api_key_secret:") {
+			return nil
+		}
+		return fmt.Errorf("could not find llm.model in %s", path)
+	}
+	var out strings.Builder
+	for i, line := range lines {
+		out.WriteString(line)
+		if insert, ok := insertions[i+1]; ok {
+			out.WriteString(insert)
+		}
+	}
+	return os.WriteFile(path, []byte(out.String()), 0o644)
+}
+
+func expandCSVList(values []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, raw := range values {
+		for _, part := range strings.Split(raw, ",") {
+			v := strings.TrimSpace(part)
+			if v == "" || seen[v] {
+				continue
+			}
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func readTasksFile(path string) ([]string, error) {
@@ -1042,7 +1119,11 @@ Important flags:
   --bundle-include GLOB       include extra repo-relative docs bundle paths; repeatable
   --bundle-exclude GLOB       exclude repo-relative docs bundle paths; repeatable
   --apply                     copy downloaded updated docs back into repo
+  --api-base-url URL          Dari API base URL; self-managed only
   --parallel N                tester sessions in parallel; self-managed only
+  --llm ID                    select a manifest LLM option for all self-managed sessions
+  --feedback-llm ID           select tester LLM option(s); default is all bundled tester LLMs
+  --editor-llm ID             select a manifest LLM option for the editor session
 
 Outputs:
   .dari-docs/config.json

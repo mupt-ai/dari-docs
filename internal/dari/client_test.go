@@ -3,6 +3,7 @@ package dari
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,29 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestCreateSessionSendsLLMID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/agents/agt_test/sessions" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		var got map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got["llm_id"] != "smart-claude" {
+			t.Fatalf("llm_id = %#v, want smart-claude; body=%#v", got["llm_id"], got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"sess_test","agent_id":"agt_test","version_id":"ver_test","status":"active"}`))
+	}))
+	defer server.Close()
+
+	_, err := New(server.URL, "dari_test").CreateSession(context.Background(), "agt_test", CreateSessionRequest{LLMID: "smart-claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestDownloadWorkspaceZipWithLimitRejectsOversizedResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

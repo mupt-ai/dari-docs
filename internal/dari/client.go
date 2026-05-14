@@ -59,6 +59,7 @@ type Session struct {
 	ID                string  `json:"id"`
 	AgentID           string  `json:"agent_id"`
 	VersionID         string  `json:"version_id"`
+	LLMID             *string `json:"llm_id"`
 	Status            string  `json:"status"`
 	LastMessageID     *string `json:"last_message_id"`
 	LastMessageStatus *string `json:"last_message_status"`
@@ -248,6 +249,7 @@ func mustJSON(v any) []byte {
 
 type CreateSessionRequest struct {
 	Secrets   map[string]string `json:"secrets,omitempty"`
+	LLMID     string            `json:"llm_id,omitempty"`
 	LLMAPIKey string            `json:"llm_api_key,omitempty"`
 	VersionID string            `json:"version_id,omitempty"`
 }
