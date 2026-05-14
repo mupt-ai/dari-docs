@@ -130,54 +130,13 @@ dari-docs auth login
 dari-docs auth token create --name github-actions
 ```
 
-The token value is shown once. Add it to your repository or environment secrets as `DARI_DOCS_TOKEN`.
+Add it to your repository or environment secrets as `DARI_DOCS_TOKEN`.
 
 By default, automation tokens can read managed account/run state and create managed checks. Add scopes explicitly for broader workflows, for example `--scope managed:read --scope managed:optimize` if CI should generate proposed revisions.
 
 Automation tokens do not expire by default. To set an expiration, pass `--expires-in 90d` or `--expires-in 24h`, for example.
 
-Deploy agents locally and commit `.dari-docs/config.json` if you want CI and local runs to use the same managed agent set:
-
-```bash
-dari-docs init
-dari-docs agents deploy --managed
-git add .dari-docs/config.json
-```
-
-Example workflow:
-
-```yaml
-name: Dari Docs Check
-
-on:
-  pull_request:
-  push:
-    branches: [main]
-
-permissions:
-  contents: read
-
-jobs:
-  docs-check:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dari-docs
-        run: go install github.com/mupt-ai/dari-docs/cmd/dari-docs@latest
-
-      - name: Run managed docs check
-        run: dari-docs check . --managed --task "Install the SDK and make a first API call"
-        env:
-          DARI_DOCS_TOKEN: ${{ secrets.DARI_DOCS_TOKEN }}
-```
-
-The CLI waits until the managed run finishes, so the Actions job status reflects the docs check result. Use `--timeout-minutes` if a workflow needs a stricter upper bound.
-
-For CI, `check --managed` is the safest default. `optimize --managed` can generate proposed revisions that you upload as workflow artifacts. Use `optimize --managed --apply` in CI only when the workflow is intentionally configured to commit changes or open a pull request.
-
-Do not commit `DARI_DOCS_TOKEN`, `~/.dari-docs/credentials.json`, or any generated credential files. GitHub does not provide normal repository secrets to workflows from untrusted forks or Dependabot by default, so managed checks that require `DARI_DOCS_TOKEN` may be skipped for those events unless you deliberately configure a separate safe workflow.
+The CLI waits until the managed run finishes, so the Actions job status reflects the docs check result.
 
 Manage automation tokens:
 

@@ -610,7 +610,6 @@ func runAuthStatus(args []string) error {
 	if len(me.Token.Scopes) > 0 {
 		fmt.Printf("Scopes: %s\n", strings.Join(me.Token.Scopes, ", "))
 	}
-	fmt.Printf("Balance: %s\n", formatCents(me.BalanceCents))
 	return nil
 }
 

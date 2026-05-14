@@ -134,7 +134,7 @@ func validScope(scope string) bool {
 }
 
 func (u user) hasScope(scope string) bool {
-	if u.TokenKind == "" || u.TokenKind == tokenKindInteractive {
+	if effectiveTokenKind(u.TokenKind) == tokenKindInteractive {
 		return true
 	}
 	for _, s := range u.TokenScopes {
@@ -547,14 +547,14 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u user) {
 		"token": map[string]any{
 			"id":           u.TokenID,
 			"name":         u.TokenName,
-			"kind":         normalizedTokenKind(u.TokenKind),
+			"kind":         effectiveTokenKind(u.TokenKind),
 			"token_prefix": u.TokenPrefix,
 			"scopes":       effectiveScopes(u),
 		},
 	})
 }
 
-func normalizedTokenKind(kind string) string {
+func effectiveTokenKind(kind string) string {
 	if kind == tokenKindAutomation {
 		return tokenKindAutomation
 	}
@@ -562,7 +562,7 @@ func normalizedTokenKind(kind string) string {
 }
 
 func effectiveScopes(u user) []string {
-	if normalizedTokenKind(u.TokenKind) == tokenKindInteractive {
+	if effectiveTokenKind(u.TokenKind) == tokenKindInteractive {
 		return append([]string{}, allManagedScopes...)
 	}
 	return append([]string{}, u.TokenScopes...)
