@@ -103,11 +103,8 @@ func validateManagedManifestLLMOption(label string, opt managedManifestLLMOption
 		return fmt.Errorf("%s.base_url must be omitted for managed Dari Docs agents", label)
 	}
 	provider := strings.TrimSpace(opt.Provider)
-	if provider != "" && provider != "openai" && provider != "anthropic" {
-		return fmt.Errorf("%s.provider must be omitted or one of openai or anthropic", label)
-	}
-	if provider == "" && !strings.HasPrefix(strings.TrimSpace(opt.Model), "openai/") && !strings.HasPrefix(strings.TrimSpace(opt.Model), "anthropic/") {
-		return fmt.Errorf("%s.provider must be set to openai or anthropic when model is not prefixed with openai/ or anthropic/", label)
+	if provider != "" && provider != "openrouter" && provider != "openai" && provider != "anthropic" {
+		return fmt.Errorf("%s.provider must be omitted or one of openrouter, openai, or anthropic", label)
 	}
 	return nil
 }

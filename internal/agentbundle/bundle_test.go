@@ -9,7 +9,7 @@ import (
 func TestBuildSkipsSymlinks(t *testing.T) {
 	root := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.txt")
-	if err := os.WriteFile(filepath.Join(root, "dari.yml"), []byte("name: test\nllm:\n  provider: anthropic\n  model: claude-sonnet-4-6\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "dari.yml"), []byte("name: test\nllm:\n  model: anthropic/claude-sonnet-4.6\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {

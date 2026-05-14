@@ -14,11 +14,11 @@ llm:
   default: medium-claude
   options:
     medium-claude:
-      provider: anthropic
-      model: claude-sonnet-4-6
+      provider: openrouter
+      model: anthropic/claude-sonnet-4.6
     smart-gpt:
-      provider: openai
-      model: gpt-5.5
+      provider: openrouter
+      model: openai/gpt-5.5
 sandbox:
   secrets:
     - DARI_DOCS_RUNTIME_SECRETS_JSON
@@ -32,14 +32,12 @@ func TestValidateManagedManifestRejectsCredentialSensitiveFields(t *testing.T) {
 	tests := map[string]string{
 		"llm secret": `
 llm:
-  provider: anthropic
-  model: claude-sonnet-4-6
+  model: anthropic/claude-sonnet-4.6
   api_key_secret: ANTHROPIC_API_KEY
 `,
 		"base url": `
 llm:
-  provider: anthropic
-  model: claude-sonnet-4-6
+  model: anthropic/claude-sonnet-4.6
   base_url: https://proxy.example.test/v1
 `,
 		"option secret": `
@@ -47,33 +45,19 @@ llm:
   default: medium-claude
   options:
     medium-claude:
-      provider: anthropic
-      model: claude-sonnet-4-6
-      api_key_secret: ANTHROPIC_API_KEY
-`,
-		"openrouter provider": `
-llm:
-  default: medium-claude
-  options:
-    medium-claude:
       provider: openrouter
-      model: claude-sonnet-4-6
-`,
-		"implicit openrouter model": `
-llm:
-  model: custom-model
+      model: anthropic/claude-sonnet-4.6
+      api_key_secret: OPENROUTER_API_KEY
 `,
 		"sandbox provider secret": `
 llm:
-  provider: anthropic
-  model: claude-sonnet-4-6
+  model: anthropic/claude-sonnet-4.6
 sandbox:
   provider_api_key_secret: E2B_API_KEY
 `,
 		"arbitrary sandbox secret": `
 llm:
-  provider: anthropic
-  model: claude-sonnet-4-6
+  model: anthropic/claude-sonnet-4.6
 sandbox:
   secrets:
     - GITHUB_TOKEN
@@ -133,7 +117,7 @@ func TestValidateManagedBundleRejectsDuplicateArchiveEntries(t *testing.T) {
 	}
 }
 
-const validManagedDariYAMLForTest = "llm:\n  default: medium-claude\n  options:\n    medium-claude:\n      provider: anthropic\n      model: claude-sonnet-4-6\n"
+const validManagedDariYAMLForTest = "llm:\n  default: medium-claude\n  options:\n    medium-claude:\n      provider: openrouter\n      model: anthropic/claude-sonnet-4.6\n"
 
 type bundleFileForTest struct {
 	Name    string

@@ -25,14 +25,12 @@ They are normal Dari agent projects with `dari.yml`, prompts, skills, and setup 
 
 By default the templates omit `llm.api_key_secret`, so Dari uses the platform-managed LLM credential for the user's org.
 
-For BYOK at publish time with a single-provider agent configuration, create a Dari credential and pass it during init:
+For BYOK at publish time, create a Dari credential and pass it during init:
 
 ```bash
-dari credentials add MY_ANTHROPIC_KEY
-DARI_API_KEY=... dari-docs init --deploy --llm-api-key-secret MY_ANTHROPIC_KEY
+dari credentials add MY_OPENROUTER_KEY
+DARI_API_KEY=... dari-docs init --deploy --llm-api-key-secret MY_OPENROUTER_KEY
 ```
-
-For the bundled mixed Anthropic/OpenAI options, omit this flag to use platform-managed credentials, or deploy custom agents with provider-specific `api_key_secret` values.
 
 The CLI then patches the extracted agents before deploy:
 
@@ -41,9 +39,9 @@ llm:
   default: medium-claude
   options:
     medium-claude:
-      provider: anthropic
-      model: claude-sonnet-4-6
-      api_key_secret: MY_ANTHROPIC_KEY
+      provider: openrouter
+      model: anthropic/claude-sonnet-4.6
+      api_key_secret: MY_OPENROUTER_KEY
 ```
 
 No per-session LLM key is required by `dari-docs`.
