@@ -186,31 +186,49 @@ func TestBaselineMigrationMatchesManagedSQLShape(t *testing.T) {
 	}
 }
 
-func TestPersistedErrorStripsHTTPBodiesAndTruncates(t *testing.T) {
-	err := fmt.Errorf("create tester session: POST /v1/agents/agt_123/sessions: http 400: {\"error\":\"body with secret sk_test_should_not_persist\"}")
-	got := persistedError(err)
-	if got != "create tester session: POST /v1/agents/agt_123/sessions: http 400" {
-		t.Fatalf("persistedError = %q", got)
+func TestPersistedErrorCodesDoNotIncludeCauseText(t *testing.T) {
+	secret := "blue-cactus-123"
+	err := withPersistedErrorCode(persistedErrSessionCreateFailed, fmt.Errorf("upstream echoed %s", secret))
+	code := persistedErrorCodeFromError(err, persistedErrRunFailed)
+	got := persistedErrorString(code)
+	if got != "session_create_failed" {
+		t.Fatalf("persisted error code = %q", got)
 	}
-
-	got = persistedError(fmt.Errorf("decode GET /v1/runs: invalid character; body={%s}", strings.Repeat("x", maxPersistedErrorBytes)))
-	if strings.Contains(got, "body=") {
-		t.Fatalf("persistedError kept body: %q", got)
+	if strings.Contains(got, secret) {
+		t.Fatalf("persisted error code leaked secret: %q", got)
 	}
+}
 
-	got = persistedError(fmt.Errorf("%s", strings.Repeat("x", maxPersistedErrorBytes+20)))
-	if len(got) != maxPersistedErrorBytes+3 {
-		t.Fatalf("persistedError length = %d, want %d", len(got), maxPersistedErrorBytes+3)
+func TestPersistedErrorCodeFromStringRejectsLegacyRawValues(t *testing.T) {
+	secret := "blue-cactus-123"
+	got := persistedErrorString(persistedErrorCodeFromString("raw upstream error "+secret, persistedErrSessionFailed))
+	if got != "session_failed" {
+		t.Fatalf("persisted fallback code = %q", got)
 	}
-
-	got = persistedError(fmt.Errorf("credential dari_abcdefghijklmnopqrstuvwxyz0123456789 failed"))
-	if strings.Contains(got, "dari_abcdefghijklmnopqrstuvwxyz0123456789") || !strings.Contains(got, "[redacted]") {
-		t.Fatalf("persistedError did not redact credential: %q", got)
+	if strings.Contains(got, secret) {
+		t.Fatalf("persisted fallback leaked secret: %q", got)
 	}
+}
 
-	got = persistedError(fmt.Errorf("managed token mdt_v1_tok_abc123_secretvalue failed"))
-	if strings.Contains(got, "mdt_v1_tok_abc123_secretvalue") || !strings.Contains(got, "[redacted]") {
-		t.Fatalf("persistedError did not redact managed token: %q", got)
+func TestRunErrorCodeFromSessionUsesOnlyKnownCodes(t *testing.T) {
+	if got := runErrorCodeFromSession(runSessionRecord{LastPollError: string(persistedErrSessionPollStale)}); got != persistedErrSessionPollStale {
+		t.Fatalf("runErrorCodeFromSession known code = %q", got)
+	}
+	if got := runErrorCodeFromSession(runSessionRecord{LastPollError: "raw session error blue-cactus-123"}); got != persistedErrSessionFailed {
+		t.Fatalf("runErrorCodeFromSession raw value = %q, want %q", got, persistedErrSessionFailed)
+	}
+}
+
+func TestSanitizePersistedErrorsMigrationMentionsKnownCodes(t *testing.T) {
+	data, err := migrationFS.ReadFile("migrations/0003_sanitize_persisted_errors.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	for code := range validPersistedErrorCodes {
+		if !strings.Contains(sql, string(code)) {
+			t.Fatalf("sanitize migration is missing persisted error code %q", code)
+		}
 	}
 }
 

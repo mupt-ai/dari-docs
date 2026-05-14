@@ -258,22 +258,22 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	f, err := os.Open(tmpPath)
 	if err != nil {
-		s.failBeforeQueue(r.Context(), runID, reserve, err)
+		s.failBeforeQueue(r.Context(), runID, reserve, persistedErrBundleStageFailed)
 		writeLoggedError(w, http.StatusInternalServerError, "could not read staged bundle", err)
 		return
 	}
 	up, err := s.dari.UploadReader(r.Context(), bundleName, f)
 	_ = f.Close()
 	if err != nil {
-		s.failBeforeQueue(r.Context(), runID, reserve, err)
+		s.failBeforeQueue(r.Context(), runID, reserve, persistedErrBundleUploadFailed)
 		writeLoggedError(w, http.StatusBadGateway, "could not upload bundle to Dari", err)
 		return
 	}
 	_, err = s.db.Exec(r.Context(), `
-	UPDATE runs SET status=$2, bundle_file_id=$3, updated_at=now() WHERE id=$1
-	`, runID, statusQueued, up.ID)
+UPDATE runs SET status=$2, bundle_file_id=$3, updated_at=now() WHERE id=$1
+`, runID, statusQueued, up.ID)
 	if err != nil {
-		s.failBeforeQueue(r.Context(), runID, reserve, err)
+		s.failBeforeQueue(r.Context(), runID, reserve, persistedErrRunQueueFailed)
 		writeLoggedError(w, http.StatusInternalServerError, "could not queue managed run", err)
 		return
 	}
@@ -437,12 +437,12 @@ VALUES ($1, $2, $3, 'run_reservation', $4, $5)
 	return tx.Commit(ctx)
 }
 
-func (s *Server) failBeforeQueue(_ context.Context, runID string, reserve int64, cause error) {
+func (s *Server) failBeforeQueue(_ context.Context, runID string, reserve int64, code persistedErrorCode) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	_, _ = s.db.Exec(ctx, `
-	UPDATE runs SET status=$2, error=$3, updated_at=now(), completed_at=now() WHERE id=$1
-	`, runID, statusFailed, persistedError(cause))
+UPDATE runs SET status=$2, error=$3, updated_at=now(), completed_at=now() WHERE id=$1
+`, runID, statusFailed, persistedErrorString(code))
 	s.clearRuntimeSecrets(ctx, runID)
 	s.releaseReservation(ctx, runID, reserve)
 }

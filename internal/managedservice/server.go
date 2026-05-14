@@ -12,7 +12,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
@@ -27,8 +26,6 @@ const (
 	statusRunning   = "running"
 	statusCompleted = "completed"
 	statusFailed    = "failed"
-
-	maxPersistedErrorBytes = 512
 )
 
 type Server struct {
@@ -37,8 +34,6 @@ type Server struct {
 	dari       *dari.Client
 	httpClient *http.Client
 }
-
-var persistedSecretPattern = regexp.MustCompile(`\b(?:sk_(?:live|test)_[A-Za-z0-9_-]+|rk_(?:live|test)_[A-Za-z0-9_-]+|whsec_[A-Za-z0-9_-]+|dari_[A-Za-z0-9_-]{12,}|mdt_v1_tok_[A-Za-z0-9_-]+_[A-Za-z0-9_-]+)\b`)
 
 func Run(ctx context.Context, cfg Config) error {
 	if err := runMigrations(ctx, cfg.DatabaseURL); err != nil {
@@ -180,45 +175,6 @@ func writeLoggedError(w http.ResponseWriter, status int, msg string, err error) 
 		log.Printf("%s: %v", msg, err)
 	}
 	writeError(w, status, msg)
-}
-
-func persistedError(err error) string {
-	if err == nil {
-		return ""
-	}
-	msg := strings.TrimSpace(err.Error())
-	if msg == "" {
-		return ""
-	}
-	msg = strings.ReplaceAll(msg, "\n", " ")
-	msg = strings.ReplaceAll(msg, "\r", " ")
-	msg = stripHTTPResponseBody(msg)
-	msg = persistedSecretPattern.ReplaceAllString(msg, "[redacted]")
-	msg = strings.TrimSpace(msg)
-	if len(msg) > maxPersistedErrorBytes {
-		msg = msg[:maxPersistedErrorBytes] + "..."
-	}
-	return msg
-}
-
-func stripHTTPResponseBody(msg string) string {
-	const marker = ": http "
-	idx := strings.LastIndex(msg, marker)
-	if idx < 0 {
-		if bodyIdx := strings.LastIndex(msg, "; body="); bodyIdx >= 0 {
-			return msg[:bodyIdx]
-		}
-		return msg
-	}
-	statusStart := idx + len(marker)
-	statusEnd := statusStart
-	for statusEnd < len(msg) && msg[statusEnd] >= '0' && msg[statusEnd] <= '9' {
-		statusEnd++
-	}
-	if statusEnd == statusStart {
-		return msg
-	}
-	return msg[:statusEnd]
 }
 
 func isRequestBodyTooLarge(err error) bool {
