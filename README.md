@@ -111,6 +111,8 @@ Log out:
 dari-docs auth logout
 ```
 
+To revoke managed tokens from all devices, run `dari-docs auth logout --all`.
+
 Before a managed run starts, the CLI prints a bundle summary and credit estimate. Credits are reserved before the run, then reconciled to the actual session cost after completion.
 
 - Managed runs currently support up to three tasks per run.

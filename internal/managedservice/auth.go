@@ -125,6 +125,22 @@ WHERE token_hash=$1 AND user_id=$2
 	writeJSON(w, http.StatusOK, map[string]bool{"revoked": true})
 }
 
+func (s *Server) handleLogoutAll(w http.ResponseWriter, r *http.Request, u user) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	tag, err := s.db.Exec(r.Context(), `
+UPDATE api_tokens SET revoked_at=coalesce(revoked_at, now())
+WHERE user_id=$1 AND revoked_at IS NULL
+`, u.ID)
+	if err != nil {
+		writeLoggedError(w, http.StatusInternalServerError, "could not log out", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"revoked": true, "tokens_revoked": tag.RowsAffected()})
+}
+
 type dariUserInfo struct {
 	AuthSubject string `json:"auth_subject"`
 	Email       string `json:"email"`
