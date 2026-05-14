@@ -162,6 +162,9 @@ func runCheckOrOptimize(cmd string, args []string) error {
 		if apiKey != "" || feedbackAgent != "" || editorAgent != "" {
 			return fmt.Errorf("--managed cannot be combined with --api-key, --feedback-agent, or --editor-agent")
 		}
+		if _, err := loadManagedToken(); err != nil {
+			return err
+		}
 		c, ok, err := appconfig.Load(absRepo)
 		if err != nil {
 			return err
@@ -237,12 +240,9 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 	if err := os.MkdirAll(cfg.OutDir, 0o755); err != nil {
 		return err
 	}
-	token, err := managed.LoadToken(managed.DefaultBaseURL)
+	token, err := loadManagedToken()
 	if err != nil {
 		return err
-	}
-	if token == "" {
-		return fmt.Errorf("not logged in to managed service; run `dari-docs auth login`")
 	}
 	client := managed.New(managed.DefaultBaseURL, token)
 	runCfg, err := client.RunConfig(ctx)
@@ -434,12 +434,20 @@ func runAuthLogout(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	client, err := managedClientWithToken()
+	token, err := managed.LoadToken(managed.DefaultBaseURL)
 	if err != nil {
 		return err
 	}
+	if token == "" {
+		fmt.Printf("Already logged out of %s\n", managed.DefaultBaseURL)
+		return nil
+	}
+	client := managed.New(managed.DefaultBaseURL, token)
 	if err := client.Logout(context.Background()); err != nil {
-		return err
+		var httpErr *managed.HTTPError
+		if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusUnauthorized {
+			return err
+		}
 	}
 	if err := managed.DeleteToken(managed.DefaultBaseURL); err != nil {
 		return err
@@ -525,6 +533,10 @@ func runAgents(args []string) error {
 	if err != nil {
 		return err
 	}
+	token, err := loadManagedToken()
+	if err != nil {
+		return err
+	}
 	cfg, ok, err := appconfig.Load(absRepo)
 	if err != nil {
 		return err
@@ -553,13 +565,6 @@ func runAgents(args []string) error {
 	}
 	if err := agentbundle.ValidateManagedBundle(editorBundle.Content, "editor agent"); err != nil {
 		return err
-	}
-	token, err := managed.LoadToken(managed.DefaultBaseURL)
-	if err != nil {
-		return err
-	}
-	if token == "" {
-		return fmt.Errorf("not logged in to managed service; run `dari-docs auth login`")
 	}
 	tokenHash := managedTokenHash(token)
 	state, _ := loadLocalState(absRepo)
@@ -800,14 +805,22 @@ func openBrowserURL(url string) error {
 }
 
 func managedClientWithToken() (*managed.Client, error) {
-	token, err := managed.LoadToken(managed.DefaultBaseURL)
+	token, err := loadManagedToken()
 	if err != nil {
 		return nil, err
 	}
-	if token == "" {
-		return nil, fmt.Errorf("not logged in to managed service; run `dari-docs auth login`")
-	}
 	return managed.New(managed.DefaultBaseURL, token), nil
+}
+
+func loadManagedToken() (string, error) {
+	token, err := managed.LoadToken(managed.DefaultBaseURL)
+	if err != nil {
+		return "", err
+	}
+	if token == "" {
+		return "", fmt.Errorf("not logged in to managed service; run `dari-docs auth login`")
+	}
+	return token, nil
 }
 
 func parseDollarsToCents(v string) (int64, error) {
