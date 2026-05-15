@@ -21,8 +21,7 @@ const (
 )
 
 const (
-	defaultHTTPTimeout  = 120 * time.Second
-	agentSetHTTPTimeout = 10 * time.Minute
+	defaultHTTPTimeout = 120 * time.Second
 
 	AuthSourceEnv   = "env"
 	AuthSourceLocal = "local"
@@ -135,29 +134,8 @@ type CreateRunResponse struct {
 }
 
 type CreateRunOptions struct {
-	AgentSetID         string
 	LiveVerify         bool
 	RuntimeSecretsJSON string
-}
-
-type AgentSetResponse struct {
-	ID              string `json:"id"`
-	DeployID        string `json:"deploy_id,omitempty"`
-	Status          string `json:"status,omitempty"`
-	Step            string `json:"step,omitempty"`
-	TesterAgentID   string `json:"tester_agent_id"`
-	TesterVersionID string `json:"tester_version_id,omitempty"`
-	EditorAgentID   string `json:"editor_agent_id"`
-	EditorVersionID string `json:"editor_version_id,omitempty"`
-	Applied         bool   `json:"applied,omitempty"`
-	Error           string `json:"error,omitempty"`
-}
-
-type CreateAgentSetOptions struct {
-	ExistingAgentSetID string
-	DeployRequestID    string
-	TesterBundlePath   string
-	EditorBundlePath   string
 }
 
 type RunStatus struct {
@@ -250,46 +228,9 @@ func (c *Client) RevokeAuthToken(ctx context.Context, id string) error {
 	return c.doJSON(ctx, http.MethodPost, "/v1/auth/tokens/"+url.PathEscape(strings.TrimSpace(id))+"/revoke", nil, nil)
 }
 
-func (c *Client) CreateAgentSetDeploy(ctx context.Context, opts CreateAgentSetOptions) (AgentSetResponse, error) {
-	var body bytes.Buffer
-	mw := multipart.NewWriter(&body)
-	if opts.ExistingAgentSetID != "" {
-		if err := mw.WriteField("agent_set_id", opts.ExistingAgentSetID); err != nil {
-			return AgentSetResponse{}, err
-		}
-	}
-	if opts.DeployRequestID == "" {
-		return AgentSetResponse{}, fmt.Errorf("deploy request id is required")
-	}
-	if err := mw.WriteField("deploy_request_id", opts.DeployRequestID); err != nil {
-		return AgentSetResponse{}, err
-	}
-	if err := addMultipartFile(mw, "tester_bundle", opts.TesterBundlePath); err != nil {
-		return AgentSetResponse{}, err
-	}
-	if err := addMultipartFile(mw, "editor_bundle", opts.EditorBundlePath); err != nil {
-		return AgentSetResponse{}, err
-	}
-	if err := mw.Close(); err != nil {
-		return AgentSetResponse{}, err
-	}
-	var out AgentSetResponse
-	err := c.doWithHTTP(ctx, c.httpWithMinimumTimeout(agentSetHTTPTimeout), http.MethodPost, "/v1/agent-sets", mw.FormDataContentType(), &body, &out)
-	return out, err
-}
-
-func (c *Client) GetAgentSetDeploy(ctx context.Context, deployID string) (AgentSetResponse, error) {
-	var out AgentSetResponse
-	err := c.doJSON(ctx, http.MethodGet, "/v1/agent-set-deploys/"+url.PathEscape(deployID), nil, &out)
-	return out, err
-}
-
 func (c *Client) CreateRun(ctx context.Context, mode string, tasks []string, bundlePath string, opts CreateRunOptions) (CreateRunResponse, error) {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
-	if err := mw.WriteField("agent_set_id", opts.AgentSetID); err != nil {
-		return CreateRunResponse{}, err
-	}
 	if err := mw.WriteField("mode", mode); err != nil {
 		return CreateRunResponse{}, err
 	}
@@ -431,17 +372,6 @@ func (c *Client) doWithBearerHTTP(ctx context.Context, client *http.Client, meth
 		return fmt.Errorf("decode %s %s: %w; body=%s", method, path, err, string(b))
 	}
 	return nil
-}
-
-func (c *Client) httpWithMinimumTimeout(timeout time.Duration) *http.Client {
-	if c.HTTP == nil {
-		return &http.Client{Timeout: timeout}
-	}
-	client := *c.HTTP
-	if client.Timeout > 0 && client.Timeout < timeout {
-		client.Timeout = timeout
-	}
-	return &client
 }
 
 func (c *Client) authorize(req *http.Request) {

@@ -15,6 +15,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+const managedRuntimeSecretsName = "DARI_DOCS_RUNTIME_SECRETS_JSON"
+
 func decodeRuntimeSecretsKey(raw string) ([]byte, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

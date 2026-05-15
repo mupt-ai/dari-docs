@@ -4,10 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -23,7 +19,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/mupt-ai/dari-docs/internal/agentbundle"
 	"github.com/mupt-ai/dari-docs/internal/agenttemplates"
 	"github.com/mupt-ai/dari-docs/internal/bundle"
 	appconfig "github.com/mupt-ai/dari-docs/internal/config"
@@ -185,16 +180,9 @@ func runCheckOrOptimize(cmd string, args []string) error {
 		if _, err := loadManagedToken(); err != nil {
 			return err
 		}
-		c, ok, err := appconfig.Load(absRepo)
-		if err != nil {
-			return err
-		}
-		if !ok || c.ManagedAgentSetID == "" {
-			return fmt.Errorf("missing managed agent set; run `dari-docs agents deploy --managed`")
-		}
 		return runManagedCheckOrOptimize(context.Background(), managedRunConfig{
 			Command: cmd, RepoRoot: absRepo, OutDir: outDir,
-			AgentSetID: c.ManagedAgentSetID, Tasks: allTasks, Apply: apply, LiveVerify: liveVerify, RuntimeSecrets: secrets, Timeout: time.Duration(timeoutMinutes) * time.Minute,
+			Tasks: allTasks, Apply: apply, LiveVerify: liveVerify, RuntimeSecrets: secrets, Timeout: time.Duration(timeoutMinutes) * time.Minute,
 			BundleOptions: bundle.CreateOptions{Include: bundleIncludes, Exclude: bundleExcludes},
 		})
 	}
@@ -254,7 +242,6 @@ type managedRunConfig struct {
 	Command        string
 	RepoRoot       string
 	OutDir         string
-	AgentSetID     string
 	Tasks          []string
 	LiveVerify     bool
 	RuntimeSecrets map[string]string
@@ -301,7 +288,6 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 		runtimeSecretJSON = string(b)
 	}
 	created, err := client.CreateRun(ctx, cfg.Command, cfg.Tasks, bundlePath, managed.CreateRunOptions{
-		AgentSetID:         cfg.AgentSetID,
 		LiveVerify:         cfg.LiveVerify,
 		RuntimeSecretsJSON: runtimeSecretJSON,
 	})
@@ -770,290 +756,19 @@ func runBilling(args []string) error {
 
 func runAgents(args []string) error {
 	if len(args) == 0 || args[0] != "deploy" {
-		return fmt.Errorf("usage: dari-docs agents deploy --managed")
+		return fmt.Errorf("managed mode uses hosted Dari Docs agents automatically. For self-managed agents, run `dari-docs init --deploy`")
 	}
 	fs := flag.NewFlagSet("dari-docs agents deploy", flag.ExitOnError)
 	var managedMode bool
-	var forceNew bool
-	var resumeOnly bool
-	fs.BoolVar(&managedMode, "managed", false, "deploy local dari-docs agents through the managed service")
-	fs.BoolVar(&forceNew, "force-new", false, "queue a new managed deploy even if a matching deploy is pending")
-	fs.BoolVar(&resumeOnly, "resume", false, "resume the pending managed deploy for this repo")
+	fs.BoolVar(&managedMode, "managed", false, "use hosted Dari Docs managed agents")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
 	if !managedMode {
-		return fmt.Errorf("usage: dari-docs agents deploy --managed")
+		return fmt.Errorf("for self-managed agents, run `dari-docs init --deploy`")
 	}
-	if forceNew && resumeOnly {
-		return fmt.Errorf("--force-new cannot be combined with --resume")
-	}
-	repo := "."
-	if fs.NArg() > 0 {
-		repo = fs.Arg(0)
-	}
-	absRepo, err := filepath.Abs(repo)
-	if err != nil {
-		return err
-	}
-	auth, err := loadManagedAuthToken()
-	if err != nil {
-		return err
-	}
-	cfg, ok, err := appconfig.Load(absRepo)
-	if err != nil {
-		return err
-	}
-	if !ok || cfg.AgentsDir == "" {
-		return fmt.Errorf("missing local agents; run `dari-docs init` first")
-	}
-	testerDir := filepath.Join(cfg.AgentsDir, "docs-user-tester-agent")
-	editorDir := filepath.Join(cfg.AgentsDir, "docs-editor-agent")
-	if _, err := os.Stat(filepath.Join(testerDir, "dari.yml")); err != nil {
-		return fmt.Errorf("missing tester agent project at %s", filepath.Join(testerDir, "dari.yml"))
-	}
-	if _, err := os.Stat(filepath.Join(editorDir, "dari.yml")); err != nil {
-		return fmt.Errorf("missing editor agent project at %s", filepath.Join(editorDir, "dari.yml"))
-	}
-	testerBundle, err := agentbundle.Build(testerDir)
-	if err != nil {
-		return fmt.Errorf("bundle tester agent: %w", err)
-	}
-	editorBundle, err := agentbundle.Build(editorDir)
-	if err != nil {
-		return fmt.Errorf("bundle editor agent: %w", err)
-	}
-	if err := agentbundle.ValidateManagedBundle(testerBundle.Content, "tester agent"); err != nil {
-		return err
-	}
-	if err := agentbundle.ValidateManagedBundle(editorBundle.Content, "editor agent"); err != nil {
-		return err
-	}
-	tokenHash := managedTokenHash(auth.Token)
-	state, _ := loadLocalState(absRepo)
-	var retryPending *pendingManagedDeploy
-	if pending := state.PendingManagedDeploy; pending != nil && !forceNew {
-		switch {
-		case pending.TokenHash != tokenHash:
-			fmt.Fprintf(os.Stderr, "Ignoring pending managed deploy for a different login.\n")
-			clearPendingManagedDeploy(absRepo, pending.DeployRequestID, pending.DeployID)
-		case pending.TesterSHA256 == testerBundle.SHA256 && pending.EditorSHA256 == editorBundle.SHA256:
-			if pending.DeployID == "" {
-				retryPending = pending
-				break
-			}
-			client := managed.NewWithAuthToken(managed.DefaultBaseURL, auth)
-			return waitForManagedAgentDeploy(context.Background(), absRepo, cfg, client, *pending)
-		case resumeOnly:
-			if pending.DeployID == "" {
-				return fmt.Errorf("pending managed deploy did not reach the service and agent files changed; rerun with --force-new")
-			}
-			client := managed.NewWithAuthToken(managed.DefaultBaseURL, auth)
-			return waitForManagedAgentDeploy(context.Background(), absRepo, cfg, client, *pending)
-		default:
-			return fmt.Errorf("a previous managed deploy is pending for this repo but the agent files changed; rerun with --resume to wait for it or --force-new to queue a new deploy")
-		}
-	}
-	if resumeOnly {
-		return fmt.Errorf("no pending managed deploy found for this repo")
-	}
-	tmpDir, err := os.MkdirTemp("", "dari-docs-agent-bundles-*")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(tmpDir)
-	testerPath := filepath.Join(tmpDir, "docs-user-tester-agent.tar.gz")
-	editorPath := filepath.Join(tmpDir, "docs-editor-agent.tar.gz")
-	if err := os.WriteFile(testerPath, testerBundle.Content, 0o600); err != nil {
-		return err
-	}
-	if err := os.WriteFile(editorPath, editorBundle.Content, 0o600); err != nil {
-		return err
-	}
-	client := managed.NewWithAuthToken(managed.DefaultBaseURL, auth)
-	pending := pendingManagedDeploy{}
-	if retryPending != nil {
-		pending = *retryPending
-	} else {
-		pending = pendingManagedDeploy{
-			DeployRequestID: newManagedDeployRequestID(),
-			AgentSetID:      cfg.ManagedAgentSetID,
-			TesterSHA256:    testerBundle.SHA256,
-			EditorSHA256:    editorBundle.SHA256,
-			TokenHash:       tokenHash,
-			CreatedAt:       time.Now().UTC(),
-		}
-	}
-	if err := savePendingManagedDeploy(absRepo, pending); err != nil {
-		return err
-	}
-	resp, err := client.CreateAgentSetDeploy(context.Background(), managed.CreateAgentSetOptions{
-		ExistingAgentSetID: cfg.ManagedAgentSetID,
-		DeployRequestID:    pending.DeployRequestID,
-		TesterBundlePath:   testerPath,
-		EditorBundlePath:   editorPath,
-	})
-	if err != nil {
-		return err
-	}
-	pending.DeployID = resp.DeployID
-	pending.AgentSetID = resp.ID
-	if err := savePendingManagedDeploy(absRepo, pending); err != nil {
-		return err
-	}
-	return waitForManagedAgentDeploy(context.Background(), absRepo, cfg, client, pending)
-}
-
-type localState struct {
-	PendingManagedDeploy *pendingManagedDeploy `json:"pending_managed_deploy,omitempty"`
-}
-
-type pendingManagedDeploy struct {
-	DeployID        string    `json:"deploy_id,omitempty"`
-	DeployRequestID string    `json:"deploy_request_id"`
-	AgentSetID      string    `json:"agent_set_id,omitempty"`
-	TesterSHA256    string    `json:"tester_sha256"`
-	EditorSHA256    string    `json:"editor_sha256"`
-	TokenHash       string    `json:"token_hash"`
-	CreatedAt       time.Time `json:"created_at"`
-}
-
-func waitForManagedAgentDeploy(ctx context.Context, repoRoot string, cfg appconfig.Config, client *managed.Client, pending pendingManagedDeploy) error {
-	if pending.DeployRequestID == "" {
-		return fmt.Errorf("pending managed deploy is missing deploy_request_id")
-	}
-	if pending.DeployID == "" {
-		return fmt.Errorf("pending managed deploy did not reach the service; rerun with --force-new")
-	}
-	fmt.Fprintf(os.Stderr, "Managed agent deploy: %s\n", pending.DeployID)
-	var resp managed.AgentSetResponse
-	for {
-		var err error
-		resp, err = client.GetAgentSetDeploy(ctx, pending.DeployID)
-		if err != nil {
-			var httpErr *managed.HTTPError
-			if errors.As(err, &httpErr) && (httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden || httpErr.StatusCode == http.StatusNotFound) {
-				clearPendingManagedDeploy(repoRoot, pending.DeployRequestID, pending.DeployID)
-			}
-			return err
-		}
-		if resp.Status == "completed" || resp.Status == "failed" {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(3 * time.Second):
-		}
-	}
-	if resp.Status == "failed" {
-		clearPendingManagedDeploy(repoRoot, pending.DeployRequestID, pending.DeployID)
-		return fmt.Errorf("managed agent deploy %s failed: %s", pending.DeployID, resp.Error)
-	}
-	if !resp.Applied {
-		clearPendingManagedDeploy(repoRoot, pending.DeployRequestID, pending.DeployID)
-		fmt.Printf("Managed agent deploy %s completed but was superseded by a newer deploy.\n", pending.DeployID)
-		return nil
-	}
-	if !pendingManagedDeployMatches(repoRoot, pending.DeployRequestID, pending.DeployID) {
-		fmt.Printf("Managed agent deploy %s completed, but a newer local deploy is pending; leaving config unchanged.\n", pending.DeployID)
-		return nil
-	}
-	cfg.ManagedAgentSetID = resp.ID
-	if err := appconfig.Save(repoRoot, cfg); err != nil {
-		return err
-	}
-	clearPendingManagedDeploy(repoRoot, pending.DeployRequestID, pending.DeployID)
-	fmt.Printf("Managed agent set: %s\n", resp.ID)
-	fmt.Printf("Tester agent: %s\n", resp.TesterAgentID)
-	fmt.Printf("Tester version: %s\n", resp.TesterVersionID)
-	fmt.Printf("Editor agent: %s\n", resp.EditorAgentID)
-	fmt.Printf("Editor version: %s\n", resp.EditorVersionID)
+	fmt.Println("Managed mode uses hosted Dari Docs agents automatically.")
 	return nil
-}
-
-func statePath(repoRoot string) string {
-	return filepath.Join(repoRoot, ".dari-docs", "state.json")
-}
-
-func loadLocalState(repoRoot string) (localState, error) {
-	var st localState
-	b, err := os.ReadFile(statePath(repoRoot))
-	if os.IsNotExist(err) {
-		return st, nil
-	}
-	if err != nil {
-		return st, err
-	}
-	if len(bytes.TrimSpace(b)) == 0 {
-		return st, nil
-	}
-	err = json.Unmarshal(b, &st)
-	return st, err
-}
-
-func saveLocalState(repoRoot string, st localState) error {
-	if err := os.MkdirAll(filepath.Join(repoRoot, ".dari-docs"), 0o755); err != nil {
-		return err
-	}
-	if st.PendingManagedDeploy == nil {
-		if err := os.Remove(statePath(repoRoot)); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		return nil
-	}
-	b, err := json.MarshalIndent(st, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(statePath(repoRoot), append(b, '\n'), 0o600)
-}
-
-func savePendingManagedDeploy(repoRoot string, pending pendingManagedDeploy) error {
-	st, _ := loadLocalState(repoRoot)
-	st.PendingManagedDeploy = &pending
-	return saveLocalState(repoRoot, st)
-}
-
-func clearPendingManagedDeploy(repoRoot, deployRequestID, deployID string) {
-	st, err := loadLocalState(repoRoot)
-	if err != nil || st.PendingManagedDeploy == nil {
-		return
-	}
-	pending := st.PendingManagedDeploy
-	if pending.DeployRequestID != deployRequestID {
-		return
-	}
-	if deployID != "" && pending.DeployID != "" && pending.DeployID != deployID {
-		return
-	}
-	st.PendingManagedDeploy = nil
-	_ = saveLocalState(repoRoot, st)
-}
-
-func pendingManagedDeployMatches(repoRoot, deployRequestID, deployID string) bool {
-	st, err := loadLocalState(repoRoot)
-	if err != nil || st.PendingManagedDeploy == nil {
-		return false
-	}
-	pending := st.PendingManagedDeploy
-	if pending.DeployRequestID != deployRequestID {
-		return false
-	}
-	return deployID == "" || pending.DeployID == deployID
-}
-
-func newManagedDeployRequestID() string {
-	b := make([]byte, 18)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	return "mdr_" + base64.RawURLEncoding.EncodeToString(b)
-}
-
-func managedTokenHash(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
 }
 
 func openBrowserURL(url string) error {
@@ -1568,15 +1283,12 @@ Usage:
   dari-docs auth token revoke <token-id>
   dari-docs auth logout [--all] [--interactive-only|--automation-only]
   dari-docs init [repo]
-  dari-docs agents deploy --managed [--resume|--force-new]
   dari-docs billing balance
   dari-docs optimize [repo] --task "Implement auth" [--task "Set up webhooks"] [flags]
   dari-docs check [repo] --task "Implement auth" [flags]
 
 Managed setup:
   dari-docs auth login
-  dari-docs init
-  dari-docs agents deploy --managed
 
 Self-managed setup:
   export DARI_API_KEY=...
@@ -1588,8 +1300,6 @@ Important flags:
   --live-verify               permit safe credential-dependent checks
   --secret-env NAME           pass runtime product/API key from env var; repeatable
   --managed                   use the managed dari-docs service instead of your Dari org
-  --resume                    resume a pending managed agent deploy
-  --force-new                 queue a new managed agent deploy
   --bundle-include GLOB       include extra repo-relative docs bundle paths; repeatable
   --bundle-exclude GLOB       exclude repo-relative docs bundle paths; repeatable
   --apply                     copy downloaded updated docs back into repo

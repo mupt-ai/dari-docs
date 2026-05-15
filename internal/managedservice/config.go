@@ -12,6 +12,10 @@ type Config struct {
 	PublicBaseURL              string
 	DariAPIBaseURL             string
 	DariAPIKey                 string
+	ManagedTesterAgentID       string
+	ManagedTesterVersionID     string
+	ManagedEditorAgentID       string
+	ManagedEditorVersionID     string
 	RuntimeSecretsKey          []byte
 	FreeGrantCents             int64
 	TesterReserveCents         int64
@@ -23,11 +27,9 @@ type Config struct {
 	MaxTasksPerRun             int
 	MaxTaskBytes               int64
 	MaxActiveRunsPerUser       int
-	AgentDeployClaimBatchSize  int
 	SessionStaleAfter          time.Duration
 	SessionStartStaleAfter     time.Duration
 	PollErrorStaleAfter        time.Duration
-	AgentDeployStaleAfter      time.Duration
 	CostFetchTimeout           time.Duration
 	StripeSecretKey            string
 	StripeWebhookSecret        string
@@ -54,11 +56,9 @@ func ConfigFromEnv() (Config, error) {
 		MaxTasksPerRun:             int(managedMaxTasksPerRun),
 		MaxTaskBytes:               managedMaxTaskBytes,
 		MaxActiveRunsPerUser:       int(managedMaxActiveRunsPerUser),
-		AgentDeployClaimBatchSize:  int(managedAgentDeployClaimBatchSize),
 		SessionStaleAfter:          time.Duration(managedSessionStaleAfterSeconds) * time.Second,
 		SessionStartStaleAfter:     time.Duration(managedSessionStartStaleAfterSeconds) * time.Second,
 		PollErrorStaleAfter:        time.Duration(managedPollErrorStaleAfterSeconds) * time.Second,
-		AgentDeployStaleAfter:      time.Duration(managedAgentDeployStaleAfterSeconds) * time.Second,
 		CostFetchTimeout:           time.Duration(managedCostFetchTimeoutSeconds) * time.Second,
 		StripeWebhookTolerance:     time.Duration(managedStripeWebhookToleranceSeconds) * time.Second,
 		HTTPReadHeaderTimeout:      time.Duration(managedHTTPReadHeaderTimeoutSeconds) * time.Second,
@@ -68,6 +68,10 @@ func ConfigFromEnv() (Config, error) {
 		OutboundHTTPTimeout:        time.Duration(managedOutboundHTTPTimeoutSeconds) * time.Second,
 		DatabaseURL:                os.Getenv("DATABASE_URL"),
 		DariAPIKey:                 os.Getenv("DARI_API_KEY"),
+		ManagedTesterAgentID:       os.Getenv("MANAGED_TESTER_AGENT_ID"),
+		ManagedTesterVersionID:     os.Getenv("MANAGED_TESTER_VERSION_ID"),
+		ManagedEditorAgentID:       os.Getenv("MANAGED_EDITOR_AGENT_ID"),
+		ManagedEditorVersionID:     os.Getenv("MANAGED_EDITOR_VERSION_ID"),
 		StripeSecretKey:            os.Getenv("STRIPE_SECRET_KEY"),
 		StripeWebhookSecret:        os.Getenv("STRIPE_WEBHOOK_SECRET"),
 	}
@@ -76,6 +80,18 @@ func ConfigFromEnv() (Config, error) {
 	}
 	if cfg.DariAPIKey == "" {
 		return Config{}, errors.New("DARI_API_KEY is required")
+	}
+	if cfg.ManagedTesterAgentID == "" {
+		return Config{}, errors.New("MANAGED_TESTER_AGENT_ID is required")
+	}
+	if cfg.ManagedTesterVersionID == "" {
+		return Config{}, errors.New("MANAGED_TESTER_VERSION_ID is required")
+	}
+	if cfg.ManagedEditorAgentID == "" {
+		return Config{}, errors.New("MANAGED_EDITOR_AGENT_ID is required")
+	}
+	if cfg.ManagedEditorVersionID == "" {
+		return Config{}, errors.New("MANAGED_EDITOR_VERSION_ID is required")
 	}
 	key, err := decodeRuntimeSecretsKey(os.Getenv("DARI_DOCS_SECRET_ENCRYPTION_KEY"))
 	if err != nil {

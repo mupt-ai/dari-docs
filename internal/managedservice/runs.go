@@ -24,8 +24,6 @@ import (
 var (
 	errBundleTooLarge      = errors.New("bundle too large")
 	errBundleStageInternal = errors.New("bundle staging failed")
-	errAgentSetNotFound    = errors.New("managed agent set not found or does not belong to this user")
-	errAgentSetNeedsDeploy = errors.New("managed agent set needs redeploy; run `dari-docs agents deploy --managed`")
 	errRunFeedbackLoad     = errors.New("run feedback unavailable")
 )
 
@@ -70,7 +68,6 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 	var (
 		mode               string
 		tasks              []string
-		agentSetID         string
 		liveVerify         bool
 		runtimeSecretJSON  string
 		runtimeSecretNames []string
@@ -120,13 +117,6 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
-		case "agent_set_id":
-			v, err := readTextPart(part, 128)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, "agent_set_id field is too large")
-				return
-			}
-			agentSetID = strings.TrimSpace(v)
 		case "live_verify":
 			v, err := readTextPart(part, 16)
 			if err != nil {
@@ -147,8 +137,8 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 				return
 			}
 		case "bundle":
-			if mode == "" || tasks == nil || agentSetID == "" {
-				writeError(w, http.StatusBadRequest, "agent_set_id, mode, and tasks_json must be sent before bundle")
+			if mode == "" || tasks == nil {
+				writeError(w, http.StatusBadRequest, "mode and tasks_json must be sent before bundle")
 				return
 			}
 			if runtimeSecretJSON != "" && !liveVerify {
@@ -163,17 +153,9 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 				}
 			}
 			reserve = reserveCentsForRun(mode, len(tasks), s.cfg)
-			if err := s.preflightRun(r.Context(), u.ID, agentSetID, reserve); err != nil {
+			if err := s.preflightRun(r.Context(), u.ID, reserve); err != nil {
 				var activeErr *activeRunLimitError
 				if errors.As(err, &activeErr) {
-					writeError(w, http.StatusConflict, err.Error())
-					return
-				}
-				if errors.Is(err, errAgentSetNotFound) {
-					writeError(w, http.StatusNotFound, err.Error())
-					return
-				}
-				if errors.Is(err, errAgentSetNeedsDeploy) {
 					writeError(w, http.StatusConflict, err.Error())
 					return
 				}
@@ -223,10 +205,6 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusBadRequest, "tasks_json must be a JSON string array")
 		return
 	}
-	if agentSetID == "" {
-		writeError(w, http.StatusBadRequest, "missing managed agent set; run `dari-docs agents deploy --managed`")
-		return
-	}
 	if tmpPath == "" {
 		writeError(w, http.StatusBadRequest, "bundle file is required")
 		return
@@ -234,17 +212,9 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 	runID := "run_" + randomToken(18)
 	taskJSON, _ := json.Marshal(tasks)
 	secretNamesJSON, _ := json.Marshal(runtimeSecretNames)
-	if err := s.reserveRun(r.Context(), u.ID, runID, mode, agentSetID, taskJSON, b, reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
+	if err := s.reserveRun(r.Context(), u.ID, runID, mode, taskJSON, b, reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
 		var activeErr *activeRunLimitError
 		if errors.As(err, &activeErr) {
-			writeError(w, http.StatusConflict, err.Error())
-			return
-		}
-		if errors.Is(err, errAgentSetNotFound) {
-			writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		if errors.Is(err, errAgentSetNeedsDeploy) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
@@ -315,7 +285,7 @@ func (s *Server) stageManagedBundle(part *multipart.Part) (string, bundle.Result
 	return tmpPath, b, nil
 }
 
-func (s *Server) preflightRun(ctx context.Context, userID, agentSetID string, reserve int64) error {
+func (s *Server) preflightRun(ctx context.Context, userID string, reserve int64) error {
 	var active int
 	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM runs WHERE user_id=$1 AND status IN ($2,$3,$4,$5)`, userID, statusUploading, statusQueued, statusStarting, statusRunning).Scan(&active); err != nil {
 		return err
@@ -330,16 +300,6 @@ func (s *Server) preflightRun(ctx context.Context, userID, agentSetID string, re
 	}
 	if balance < reserve {
 		return &insufficientCreditsError{Need: reserve, Balance: balance}
-	}
-	var testerVersionID, editorVersionID string
-	if err := s.db.QueryRow(ctx, `SELECT coalesce(tester_version_id,''), coalesce(editor_version_id,'') FROM agent_sets WHERE id=$1 AND user_id=$2`, agentSetID, userID).Scan(&testerVersionID, &editorVersionID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return errAgentSetNotFound
-		}
-		return err
-	}
-	if testerVersionID == "" || editorVersionID == "" {
-		return errAgentSetNeedsDeploy
 	}
 	return nil
 }
@@ -384,7 +344,7 @@ func (s *Server) maxActiveRunsPerUser() int {
 	return int(managedMaxActiveRunsPerUser)
 }
 
-func (s *Server) reserveRun(ctx context.Context, userID, runID, mode, agentSetID string, taskJSON []byte, b bundle.Result, reserve int64, liveVerify bool, secretNamesJSON, runtimeNonce, runtimeCiphertext []byte) error {
+func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, taskJSON []byte, b bundle.Result, reserve int64, liveVerify bool, secretNamesJSON, runtimeNonce, runtimeCiphertext []byte) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -408,24 +368,10 @@ func (s *Server) reserveRun(ctx context.Context, userID, runID, mode, agentSetID
 	if balance < reserve {
 		return &insufficientCreditsError{Need: reserve, Balance: balance}
 	}
-	var testerAgentID, editorAgentID, testerVersionID, editorVersionID string
-	if err := tx.QueryRow(ctx, `
-SELECT tester_agent_id, editor_agent_id, coalesce(tester_version_id,''), coalesce(editor_version_id,'')
-FROM agent_sets
-WHERE id=$1 AND user_id=$2
-`, agentSetID, userID).Scan(&testerAgentID, &editorAgentID, &testerVersionID, &editorVersionID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return errAgentSetNotFound
-		}
-		return err
-	}
-	if testerVersionID == "" || editorVersionID == "" {
-		return errAgentSetNeedsDeploy
-	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO runs (id, user_id, mode, status, tasks, agent_set_id, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files, reserved_cents, live_verify, runtime_secret_names, runtime_secrets_nonce, runtime_secrets_ciphertext)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-		`, runID, userID, mode, statusUploading, taskJSON, agentSetID, testerAgentID, testerVersionID, editorAgentID, editorVersionID, b.SHA256, len(b.Manifest.Files), reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
+		INSERT INTO runs (id, user_id, mode, status, tasks, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files, reserved_cents, live_verify, runtime_secret_names, runtime_secrets_nonce, runtime_secrets_ciphertext)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		`, runID, userID, mode, statusUploading, taskJSON, s.cfg.ManagedTesterAgentID, s.cfg.ManagedTesterVersionID, s.cfg.ManagedEditorAgentID, s.cfg.ManagedEditorVersionID, b.SHA256, len(b.Manifest.Files), reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `

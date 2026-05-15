@@ -14,7 +14,6 @@ const (
 	stripeCheckoutMaxCents int64 = 50000
 
 	managedMaxBundleBytes             int64 = 25 * 1024 * 1024
-	managedMaxAgentBundleBytes        int64 = 10 * 1024 * 1024
 	managedBundleMaxUncompressedBytes int64 = 100 * 1024 * 1024
 	managedBundleMaxFileBytes         int64 = 5 * 1024 * 1024
 	managedMaxUpdatedZipBytes         int64 = 25 * 1024 * 1024
@@ -22,14 +21,12 @@ const (
 	managedMaxTasksPerRun             int64 = 3
 	managedMaxTaskBytes               int64 = 10000
 	managedMaxActiveRunsPerUser       int64 = 3
-	managedAgentDeployClaimBatchSize  int64 = 25
 
 	managedSessionStaleAfterSeconds      int64 = 24 * 60 * 60
 	managedSessionStartStaleAfterSeconds int64 = 2 * 60
 	managedPollErrorStaleAfterSeconds    int64 = 60 * 60
 	managedCostFetchTimeoutSeconds       int64 = 5 * 60
 	managedStripeWebhookToleranceSeconds int64 = 5 * 60
-	managedAgentDeployStaleAfterSeconds  int64 = 2 * 60
 
 	managedHTTPReadHeaderTimeoutSeconds int64 = 10
 	managedHTTPReadTimeoutSeconds       int64 = 120

@@ -10,7 +10,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/mupt-ai/dari-docs/internal/agentbundle"
 	"github.com/mupt-ai/dari-docs/internal/bundle"
 	"github.com/mupt-ai/dari-docs/internal/dari"
 	"github.com/mupt-ai/dari-docs/internal/runner"
@@ -21,7 +20,6 @@ type queuedRun struct {
 	UserID          string
 	Mode            string
 	Tasks           []string
-	AgentSetID      string
 	TesterAgentID   string
 	TesterVersionID string
 	EditorAgentID   string
@@ -128,16 +126,16 @@ func (s *Server) claimStartableRun(ctx context.Context) (queuedRun, bool, error)
 	err := s.db.QueryRow(ctx, `
 UPDATE runs r SET status=$1, updated_at=now()
 WHERE r.id = (
-  SELECT id FROM runs WHERE status=$2 AND agent_set_id IS NOT NULL ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED
+  SELECT id FROM runs WHERE status=$2 ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED
 	)
-	RETURNING r.id, r.user_id, r.mode, r.tasks, r.agent_set_id,
-	  coalesce(r.tester_agent_id, (SELECT tester_agent_id FROM agent_sets WHERE id=r.agent_set_id)),
-	  coalesce(r.tester_version_id, (SELECT tester_version_id FROM agent_sets WHERE id=r.agent_set_id), ''),
-	  coalesce(r.editor_agent_id, (SELECT editor_agent_id FROM agent_sets WHERE id=r.agent_set_id)),
-	  coalesce(r.editor_version_id, (SELECT editor_version_id FROM agent_sets WHERE id=r.agent_set_id), ''),
+	RETURNING r.id, r.user_id, r.mode, r.tasks,
+	  r.tester_agent_id,
+	  r.tester_version_id,
+	  r.editor_agent_id,
+	  r.editor_version_id,
 	  coalesce(r.bundle_file_id,''), r.bundle_sha256, r.bundle_files, r.live_verify, r.runtime_secret_names, r.reserved_cents
 	`, statusStarting, statusQueued).Scan(
-		&run.ID, &run.UserID, &run.Mode, &tasksJSON, &run.AgentSetID,
+		&run.ID, &run.UserID, &run.Mode, &tasksJSON,
 		&run.TesterAgentID, &run.TesterVersionID, &run.EditorAgentID, &run.EditorVersionID,
 		&run.BundleFileID, &run.BundleSHA256, &run.BundleFiles, &run.LiveVerify, &secretNamesJSON, &run.ReservedCents,
 	)
@@ -173,7 +171,7 @@ func (s *Server) startNextSession(ctx context.Context, run queuedRun) error {
 			return s.failStartedRun(ctx, run, persistedErrRuntimeSecretsLoadFailed, fmt.Errorf("load runtime secrets: %w", err))
 		}
 		if secretJSON != "" {
-			sessionReq.Secrets = map[string]string{agentbundle.RuntimeSecretsName: secretJSON}
+			sessionReq.Secrets = map[string]string{managedRuntimeSecretsName: secretJSON}
 		}
 	}
 	session, err := s.dari.CreateSession(ctx, next.AgentID, sessionReq)
@@ -559,17 +557,16 @@ func (s *Server) loadRun(ctx context.Context, runID string) (queuedRun, error) {
 	var run queuedRun
 	var tasksJSON, secretNamesJSON []byte
 	err := s.db.QueryRow(ctx, `
-SELECT r.id, r.user_id, r.mode, r.tasks, r.agent_set_id,
-  coalesce(r.tester_agent_id, a.tester_agent_id),
-  coalesce(r.tester_version_id, a.tester_version_id, ''),
-  coalesce(r.editor_agent_id, a.editor_agent_id),
-  coalesce(r.editor_version_id, a.editor_version_id, ''),
+SELECT r.id, r.user_id, r.mode, r.tasks,
+  r.tester_agent_id,
+  r.tester_version_id,
+  r.editor_agent_id,
+  r.editor_version_id,
   coalesce(r.bundle_file_id,''), r.bundle_sha256, r.bundle_files, r.live_verify, r.runtime_secret_names, r.reserved_cents
 FROM runs r
-LEFT JOIN agent_sets a ON a.id=r.agent_set_id
 WHERE r.id=$1 AND r.status IN ($2,$3,$4)
 	`, runID, statusQueued, statusStarting, statusRunning).Scan(
-		&run.ID, &run.UserID, &run.Mode, &tasksJSON, &run.AgentSetID,
+		&run.ID, &run.UserID, &run.Mode, &tasksJSON,
 		&run.TesterAgentID, &run.TesterVersionID, &run.EditorAgentID, &run.EditorVersionID,
 		&run.BundleFileID, &run.BundleSHA256, &run.BundleFiles, &run.LiveVerify, &secretNamesJSON, &run.ReservedCents,
 	)

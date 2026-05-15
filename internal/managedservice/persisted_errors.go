@@ -21,13 +21,6 @@ const (
 	persistedErrSessionPollFailed        persistedErrorCode = "session_poll_failed"
 	persistedErrSessionPollStale         persistedErrorCode = "session_poll_stale"
 	persistedErrSessionStale             persistedErrorCode = "session_stale"
-
-	persistedErrAgentDeployFailed              persistedErrorCode = "agent_deploy_failed"
-	persistedErrAgentDeployStale               persistedErrorCode = "agent_deploy_stale"
-	persistedErrAgentDeployPublishTesterFailed persistedErrorCode = "agent_deploy_publish_tester_failed"
-	persistedErrAgentDeployPublishEditorFailed persistedErrorCode = "agent_deploy_publish_editor_failed"
-	persistedErrAgentDeployUpdateFailed        persistedErrorCode = "agent_deploy_update_failed"
-	persistedErrAgentDeployApplyFailed         persistedErrorCode = "agent_deploy_apply_failed"
 )
 
 var validPersistedErrorCodes = map[persistedErrorCode]bool{
@@ -46,14 +39,6 @@ var validPersistedErrorCodes = map[persistedErrorCode]bool{
 	persistedErrSessionPollFailed:        true,
 	persistedErrSessionPollStale:         true,
 	persistedErrSessionStale:             true,
-
-	// Managed agent deployment.
-	persistedErrAgentDeployFailed:              true,
-	persistedErrAgentDeployStale:               true,
-	persistedErrAgentDeployPublishTesterFailed: true,
-	persistedErrAgentDeployPublishEditorFailed: true,
-	persistedErrAgentDeployUpdateFailed:        true,
-	persistedErrAgentDeployApplyFailed:         true,
 }
 
 type persistedCodeError struct {

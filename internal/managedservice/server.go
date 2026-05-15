@@ -56,7 +56,6 @@ func Run(ctx context.Context, cfg Config) error {
 	go s.sessionStarterLoop(ctx)
 	go s.sessionReconcilerLoop(ctx)
 	go s.settlementLoop(ctx)
-	go s.agentSetDeployLoop(ctx)
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -84,8 +83,6 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/v1/billing/balance", s.withAuth(s.handleBalance))
 	mux.HandleFunc("/v1/billing/checkout", s.withAuth(s.handleCheckout))
 	mux.HandleFunc("/v1/runs/config", s.withAuth(s.handleRunConfig))
-	mux.HandleFunc("/v1/agent-sets", s.withAuth(s.handleAgentSets))
-	mux.HandleFunc("/v1/agent-set-deploys/", s.withAuth(s.handleAgentSetDeployByID))
 	mux.HandleFunc("/v1/stripe/webhook", s.handleStripeWebhook)
 	mux.HandleFunc("/billing/success", s.handleBillingSuccess)
 	mux.HandleFunc("/billing/cancel", s.handleBillingCancel)

@@ -53,8 +53,6 @@ From your docs repo:
 
 ```bash
 dari-docs auth login
-dari-docs init
-dari-docs agents deploy --managed
 ```
 
 Run a docs check:
@@ -78,13 +76,13 @@ The edited files are downloaded into `.dari-docs/updated/` without changing your
 ## How it works
 
 1. You point `dari-docs` at a docs directory and give it one or more tasks.
-2. The CLI bundles your docs and sends them to hosted developer-agent endpoints.
+2. The CLI bundles your docs and sends them to hosted Dari Docs tester/editor agents.
 3. Tester agents try to complete the task and report where the docs blocked progress.
 4. `dari-docs` summarizes the feedback into local run artifacts.
 5. If you run `optimize`, an editor agent proposes documentation changes.
 6. Proposed edits are written to `.dari-docs/updated/` for review.
 
-The simulated users are plain dari.dev agents. A dari.dev agent is not a special binary or hidden service; it is a portable folder containing prompts, skills, setup scripts, and `dari.yml`. Deploying that folder to dari.dev gives it a hosted endpoint, so `dari-docs` can fan out isolated tester and editor sessions without you running agent workers yourself.
+The simulated users are plain dari.dev agents. Managed mode uses the hosted Dari Docs tester and editor agents automatically. If you want to customize the agent prompts, skills, setup scripts, or `dari.yml`, use self-managed mode.
 
 ## Managed vs self-managed
 
@@ -97,7 +95,7 @@ Most users should start with managed mode.
 
 ## Documentation
 
-- [Managed mode, billing, and deployment](docs/managed.md)
+- [Managed mode and billing](docs/managed.md)
 - [GitHub Actions](docs/github-actions.md)
 - [Task files and repeated checks](docs/tasks.md)
 - [Bundle selection](docs/bundle-selection.md)

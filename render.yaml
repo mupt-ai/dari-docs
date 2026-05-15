@@ -19,6 +19,14 @@ services:
         value: https://api.dari.dev
       - key: DARI_API_KEY
         sync: false
+      - key: MANAGED_TESTER_AGENT_ID
+        sync: false
+      - key: MANAGED_TESTER_VERSION_ID
+        sync: false
+      - key: MANAGED_EDITOR_AGENT_ID
+        sync: false
+      - key: MANAGED_EDITOR_VERSION_ID
+        sync: false
       - key: DARI_DOCS_SECRET_ENCRYPTION_KEY
         sync: false
       - key: STRIPE_SECRET_KEY
