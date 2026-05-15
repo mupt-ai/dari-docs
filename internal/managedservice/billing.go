@@ -171,10 +171,16 @@ var createStripeCheckoutSession = func(ctx context.Context, secret string, httpC
 }
 
 func (s *Server) createStripeCheckout(ctx context.Context, u user, amountCents int64) (stripeCheckout, error) {
+	checkoutIntentID := "sci_" + randomToken(18)
+	if _, err := s.db.Exec(ctx, `
+INSERT INTO stripe_checkout_sessions (id, checkout_intent_id, user_id, amount_cents, currency, status)
+VALUES ($1, $1, $2, $3, 'usd', 'pending')
+`, checkoutIntentID, u.ID, amountCents); err != nil {
+		return stripeCheckout{}, err
+	}
 	metadata := map[string]string{
-		"billing_kind": "dari_docs_credit_purchase",
-		"user_id":      u.ID,
-		"amount_cents": strconv.FormatInt(amountCents, 10),
+		"billing_kind":       "dari_docs_credit_purchase",
+		"checkout_intent_id": checkoutIntentID,
 	}
 	params := &stripe.CheckoutSessionCreateParams{
 		Mode:               stripe.String("payment"),
@@ -196,19 +202,29 @@ func (s *Server) createStripeCheckout(ctx context.Context, u user, amountCents i
 	}
 	session, err := createStripeCheckoutSession(ctx, s.cfg.StripeSecretKey, s.outboundHTTPClient(), params)
 	if err != nil {
+		s.markStripeCheckoutIntentFailed(context.Background(), checkoutIntentID)
 		return stripeCheckout{}, err
 	}
 	if session.ID == "" || session.URL == "" {
+		s.markStripeCheckoutIntentFailed(context.Background(), checkoutIntentID)
 		return stripeCheckout{}, errors.New("stripe checkout response missing id or url")
 	}
 	_, err = s.db.Exec(ctx, `
-INSERT INTO stripe_checkout_sessions (id, user_id, amount_cents, currency, status)
-VALUES ($1, $2, $3, 'usd', 'created')
-`, session.ID, u.ID, amountCents)
+UPDATE stripe_checkout_sessions
+SET stripe_session_id=$2, status='created'
+WHERE checkout_intent_id=$1 AND status='pending'
+`, checkoutIntentID, session.ID)
 	if err != nil {
 		return stripeCheckout{}, err
 	}
 	return stripeCheckout{ID: session.ID, URL: session.URL}, nil
+}
+
+func (s *Server) markStripeCheckoutIntentFailed(ctx context.Context, checkoutIntentID string) {
+	if s.db == nil || checkoutIntentID == "" {
+		return
+	}
+	_, _ = s.db.Exec(ctx, `UPDATE stripe_checkout_sessions SET status='failed' WHERE checkout_intent_id=$1 AND status='pending'`, checkoutIntentID)
 }
 
 var (
@@ -217,6 +233,7 @@ var (
 )
 
 type persistedStripeCheckout struct {
+	ID          string
 	UserID      string
 	AmountCents int64
 	Currency    string
@@ -232,14 +249,7 @@ func (s *Server) creditPaidStripeCheckout(ctx context.Context, session stripe.Ch
 	if session.ID == "" {
 		return false, fmt.Errorf("%w: missing session id", errStripeCheckoutInvalid)
 	}
-	userID := strings.TrimSpace(session.Metadata["user_id"])
-	amountCents, err := strconv.ParseInt(strings.TrimSpace(session.Metadata["amount_cents"]), 10, 64)
-	if err != nil || userID == "" || amountCents <= 0 {
-		return false, fmt.Errorf("%w: missing user_id or amount_cents metadata", errStripeCheckoutInvalid)
-	}
-	if session.AmountTotal != amountCents {
-		return false, fmt.Errorf("%w: amount_total mismatch", errStripeCheckoutInvalid)
-	}
+	checkoutIntentID := strings.TrimSpace(session.Metadata["checkout_intent_id"])
 	currency := strings.ToLower(string(session.Currency))
 	if currency == "" {
 		currency = "usd"
@@ -255,18 +265,22 @@ func (s *Server) creditPaidStripeCheckout(ctx context.Context, session stripe.Ch
 	defer tx.Rollback(ctx)
 	var persisted persistedStripeCheckout
 	err = tx.QueryRow(ctx, `
-SELECT user_id, amount_cents, currency
+SELECT id, user_id, amount_cents, currency
 FROM stripe_checkout_sessions
-WHERE id=$1
+WHERE checkout_intent_id=$1
+   OR stripe_session_id=$2
+   OR id=$2
+ORDER BY CASE WHEN checkout_intent_id=$1 THEN 0 ELSE 1 END
+LIMIT 1
 FOR UPDATE
-`, session.ID).Scan(&persisted.UserID, &persisted.AmountCents, &persisted.Currency)
+`, checkoutIntentID, session.ID).Scan(&persisted.ID, &persisted.UserID, &persisted.AmountCents, &persisted.Currency)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, errStripeCheckoutIgnored
 	}
 	if err != nil {
 		return false, err
 	}
-	if persisted.UserID != userID || persisted.AmountCents != amountCents || strings.ToLower(persisted.Currency) != currency {
+	if persisted.AmountCents <= 0 || session.AmountTotal != persisted.AmountCents || strings.ToLower(persisted.Currency) != currency {
 		return false, fmt.Errorf("%w: persisted checkout mismatch", errStripeCheckoutInvalid)
 	}
 	tag, err := tx.Exec(ctx, `
@@ -280,10 +294,11 @@ ON CONFLICT (source_id) DO NOTHING
 	_, err = tx.Exec(ctx, `
 UPDATE stripe_checkout_sessions
 SET status='credited',
+    stripe_session_id=coalesce(stripe_session_id, $2),
     completed_at=coalesce(completed_at, now()),
     credited_at=coalesce(credited_at, now())
 WHERE id=$1
-`, session.ID)
+`, persisted.ID, session.ID)
 	if err != nil {
 		return false, err
 	}

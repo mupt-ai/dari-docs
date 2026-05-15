@@ -234,6 +234,24 @@ func TestSanitizePersistedErrorsMigrationMentionsKnownCodes(t *testing.T) {
 	}
 }
 
+func TestStripeCheckoutIntentMigrationAddsDurableLookupColumns(t *testing.T) {
+	data, err := migrationFS.ReadFile("migrations/0004_stripe_checkout_intents.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	for _, want := range []string{
+		"checkout_intent_id",
+		"stripe_session_id",
+		"idx_stripe_checkout_sessions_intent",
+		"idx_stripe_checkout_sessions_stripe_session",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("checkout intent migration is missing %q", want)
+		}
+	}
+}
+
 func TestRuntimeSecretNamesFromJSON(t *testing.T) {
 	names, err := runtimeSecretNamesFromJSON(`{"STRIPE_TEST_KEY":"sk_test","GITHUB_TOKEN":"ghp_test"}`)
 	if err != nil {
@@ -560,8 +578,7 @@ func TestStripeWebhookIgnoresUnpaidCheckoutSession(t *testing.T) {
 			"currency":"usd",
 			"metadata":{
 				"billing_kind":"dari_docs_credit_purchase",
-				"user_id":"usr_test",
-				"amount_cents":"500"
+				"checkout_intent_id":"sci_test"
 			}
 		}}
 	}`)
@@ -579,18 +596,37 @@ func TestStripeWebhookIgnoresUnpaidCheckoutSession(t *testing.T) {
 }
 
 func TestCreditPaidStripeCheckoutValidatesSignedPayloadAgainstPersistedFieldsBeforeCrediting(t *testing.T) {
+	db := openManagedServiceTestDB(t)
+	ctx := context.Background()
+
+	userID := "usr_test_" + randomToken(8)
+	intentID := "sci_test_" + randomToken(8)
+	sessionID := "cs_test_" + randomToken(8)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), `DELETE FROM credit_ledger WHERE source_id=$1`, sessionID)
+		_, _ = db.Exec(context.Background(), `DELETE FROM stripe_checkout_sessions WHERE id=$1`, intentID)
+		_, _ = db.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+	})
+	if _, err := db.Exec(ctx, `INSERT INTO users (id, auth_subject, email) VALUES ($1, $2, $3)`, userID, "auth_"+userID, userID+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+INSERT INTO stripe_checkout_sessions (id, checkout_intent_id, user_id, amount_cents, currency, status)
+VALUES ($1, $1, $2, 500, 'usd', 'pending')
+`, intentID, userID); err != nil {
+		t.Fatal(err)
+	}
 	session := stripe.CheckoutSession{
-		ID:            "cs_test",
+		ID:            sessionID,
 		PaymentStatus: stripe.CheckoutSessionPaymentStatusPaid,
 		AmountTotal:   501,
 		Currency:      stripe.CurrencyUSD,
 		Metadata: map[string]string{
-			"billing_kind": "dari_docs_credit_purchase",
-			"user_id":      "usr_test",
-			"amount_cents": "500",
+			"billing_kind":       "dari_docs_credit_purchase",
+			"checkout_intent_id": intentID,
 		},
 	}
-	_, err := (&Server{}).creditPaidStripeCheckout(context.Background(), session)
+	_, err := (&Server{db: db}).creditPaidStripeCheckout(ctx, session)
 	if !errors.Is(err, errStripeCheckoutInvalid) {
 		t.Fatalf("err = %v, want errStripeCheckoutInvalid", err)
 	}
@@ -646,8 +682,8 @@ func TestCreditPaidStripeCheckoutCreditsPersistedSessionOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(ctx, `
-INSERT INTO stripe_checkout_sessions (id, user_id, amount_cents, currency, status)
-VALUES ($1, $2, 1200, 'usd', 'created')
+INSERT INTO stripe_checkout_sessions (id, checkout_intent_id, stripe_session_id, user_id, amount_cents, currency, status)
+VALUES ($1, $1, $1, $2, 1200, 'usd', 'created')
 `, sessionID, userID); err != nil {
 		t.Fatal(err)
 	}
@@ -658,8 +694,6 @@ VALUES ($1, $2, 1200, 'usd', 'created')
 		Currency:      stripe.CurrencyUSD,
 		Metadata: map[string]string{
 			"billing_kind": "dari_docs_credit_purchase",
-			"user_id":      userID,
-			"amount_cents": "1200",
 		},
 	}
 	credited, err := s.creditPaidStripeCheckout(ctx, session)
@@ -677,6 +711,122 @@ VALUES ($1, $2, 1200, 'usd', 'created')
 		t.Fatal("duplicate webhook should not credit again")
 	}
 	balance, err := s.balanceCents(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if balance != 1200 {
+		t.Fatalf("balance = %d, want 1200", balance)
+	}
+}
+
+func TestCreateStripeCheckoutPersistsIntentBeforeStripeSession(t *testing.T) {
+	db := openManagedServiceTestDB(t)
+	ctx := context.Background()
+
+	userID := "usr_test_" + randomToken(8)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), `DELETE FROM stripe_checkout_sessions WHERE user_id=$1`, userID)
+		_, _ = db.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+	})
+	if _, err := db.Exec(ctx, `INSERT INTO users (id, auth_subject, email) VALUES ($1, $2, $3)`, userID, "auth_"+userID, userID+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+
+	oldCreate := createStripeCheckoutSession
+	t.Cleanup(func() {
+		createStripeCheckoutSession = oldCreate
+	})
+	sessionID := "cs_test_" + randomToken(8)
+	var gotMetadata map[string]string
+	createStripeCheckoutSession = func(ctx context.Context, secret string, httpClient *http.Client, params *stripe.CheckoutSessionCreateParams) (*stripe.CheckoutSession, error) {
+		gotMetadata = params.Metadata
+		return &stripe.CheckoutSession{ID: sessionID, URL: "https://checkout.stripe.test/session"}, nil
+	}
+
+	s := &Server{db: db, cfg: Config{StripeSecretKey: "sk_test", PublicBaseURL: "https://docs.example.test"}}
+	checkout, err := s.createStripeCheckout(ctx, user{ID: userID, Email: userID + "@example.test"}, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkout.ID != sessionID || checkout.URL == "" {
+		t.Fatalf("checkout = %#v", checkout)
+	}
+	intentID := gotMetadata["checkout_intent_id"]
+	if intentID == "" {
+		t.Fatalf("metadata missing checkout_intent_id: %#v", gotMetadata)
+	}
+	if _, ok := gotMetadata["user_id"]; ok {
+		t.Fatalf("metadata leaked user_id: %#v", gotMetadata)
+	}
+	if _, ok := gotMetadata["amount_cents"]; ok {
+		t.Fatalf("metadata leaked amount_cents: %#v", gotMetadata)
+	}
+	var rowStatus, rowSessionID string
+	if err := db.QueryRow(ctx, `
+SELECT status, coalesce(stripe_session_id,'')
+FROM stripe_checkout_sessions
+WHERE checkout_intent_id=$1
+`, intentID).Scan(&rowStatus, &rowSessionID); err != nil {
+		t.Fatal(err)
+	}
+	if rowStatus != "created" || rowSessionID != sessionID {
+		t.Fatalf("status=%q stripe_session_id=%q, want created/%s", rowStatus, rowSessionID, sessionID)
+	}
+}
+
+func TestCreditPaidStripeCheckoutCreditsPersistedIntentWithoutSessionID(t *testing.T) {
+	db := openManagedServiceTestDB(t)
+	ctx := context.Background()
+
+	userID := "usr_test_" + randomToken(8)
+	intentID := "sci_test_" + randomToken(8)
+	sessionID := "cs_test_" + randomToken(8)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), `DELETE FROM credit_ledger WHERE source_id=$1`, sessionID)
+		_, _ = db.Exec(context.Background(), `DELETE FROM stripe_checkout_sessions WHERE id=$1`, intentID)
+		_, _ = db.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+	})
+	if _, err := db.Exec(ctx, `INSERT INTO users (id, auth_subject, email) VALUES ($1, $2, $3)`, userID, "auth_"+userID, userID+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+INSERT INTO stripe_checkout_sessions (id, checkout_intent_id, user_id, amount_cents, currency, status)
+VALUES ($1, $1, $2, 1200, 'usd', 'pending')
+`, intentID, userID); err != nil {
+		t.Fatal(err)
+	}
+	session := stripe.CheckoutSession{
+		ID:            sessionID,
+		PaymentStatus: stripe.CheckoutSessionPaymentStatusPaid,
+		AmountTotal:   1200,
+		Currency:      stripe.CurrencyUSD,
+		Metadata: map[string]string{
+			"billing_kind":       "dari_docs_credit_purchase",
+			"checkout_intent_id": intentID,
+		},
+	}
+	credited, err := (&Server{db: db}).creditPaidStripeCheckout(ctx, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !credited {
+		t.Fatal("first webhook should credit the checkout intent")
+	}
+	credited, err = (&Server{db: db}).creditPaidStripeCheckout(ctx, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credited {
+		t.Fatal("duplicate webhook should not credit again")
+	}
+	var rowStatus, rowSessionID string
+	if err := db.QueryRow(ctx, `SELECT status, coalesce(stripe_session_id,'') FROM stripe_checkout_sessions WHERE id=$1`, intentID).Scan(&rowStatus, &rowSessionID); err != nil {
+		t.Fatal(err)
+	}
+	if rowStatus != "credited" || rowSessionID != sessionID {
+		t.Fatalf("status=%q stripe_session_id=%q, want credited/%s", rowStatus, rowSessionID, sessionID)
+	}
+	balance, err := (&Server{db: db}).balanceCents(ctx, userID)
 	if err != nil {
 		t.Fatal(err)
 	}
