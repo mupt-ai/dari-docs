@@ -1,28 +1,26 @@
 # dari-docs
 
-Run simulated users against your docs, then pull back edited docs.
+> Make your docs so good even the dumbest agent can ship.
 
-`dari-docs` is a standalone CLI that includes the Dari agents it needs.
+`dari-docs` is a CLI for testing whether your documentation is clear enough for agents to use. It sends your docs to simulated developer agents, asks them to complete real tasks, reports where they get stuck, and can generate proposed docs edits from that feedback.
 
-It bundles your docs, deploys Dari agents, then has them test your docs and writes the updated docs back locally.
+Use it to turn documentation quality from “seems understandable” into “an agent can actually complete the task.”
 
-You can run it two ways:
+## Why dari-docs?
 
-- **Managed**: use the hosted Dari Docs service. No local Dari API key is required.
-- **Self-managed**: use your own Dari org and API key.
+Good docs used to mean “a developer can eventually figure this out.” That is no longer enough.
 
-## How It Works
+When the reader is an agent, ambiguity becomes measurable. Inconsistent terminology, hidden assumptions, scattered context, and missing setup steps all increase the chance that the agent fails the task or wastes context trying to infer what the docs meant.
 
-```text
-local docs
-  -> bundled by the CLI
-  -> tested by remote simulated users on specific tasks
-  -> summarized into feedback
-  -> optionally edited by a remote docs editor
-  -> downloaded into .dari-docs/updated/
-```
+`dari-docs` gives you a repeatable feedback loop for agent-readable documentation: define the task, run simulated users, inspect failures, and optionally pull back edited docs.
 
-The tester agent acts like a developer trying to complete each task and reports where the docs blocked progress. The editor agent turns that feedback into proposed docs edits.
+## What it does
+
+- **Tests docs with simulated developers** — agents attempt concrete tasks using only the docs you provide.
+- **Finds task-blocking ambiguity** — reports missing context, unclear setup, inconsistent terms, and places where the agent had to guess.
+- **Generates proposed fixes** — `optimize` turns tester feedback into edited documentation you can review locally.
+- **Runs managed or self-managed** — use the hosted dari.dev Docs service, or run against agents in your own dari.dev org.
+- **Uses normal agent projects** — the tester and editor are just folders of prompts, skills, setup scripts, and a `dari.yml` manifest.
 
 ## Install
 
@@ -47,9 +45,9 @@ go build ./cmd/dari-docs
 ./dari-docs --help
 ```
 
-## Managed Quickstart
+## Quickstart
 
-Managed mode uses the hosted Dari Docs service and a separate Dari Docs credit balance. New accounts start with five dollars worth of free credits.
+Managed mode uses the hosted dari.dev Docs service and a separate dari.dev Docs credit balance. New accounts start with five dollars worth of free credits.
 
 From your docs repo:
 
@@ -59,12 +57,7 @@ dari-docs init
 dari-docs agents deploy --managed
 ```
 
-Agent deployment can continue after the CLI exits.
-
-- If the command is interrupted while waiting, rerun `dari-docs agents deploy --managed` from the same repo to resume watching the pending deployment.
-- If you changed the local agent files and want to start a new deployment in the middle of waiting on an existing deployment, use `--force-new`.
-
-Ask tester Dari agents to attempt specific tasks based on the docs:
+Run a docs check:
 
 ```bash
 dari-docs check . \
@@ -72,7 +65,7 @@ dari-docs check . \
   --task "Install the SDK and make a first API call"
 ```
 
-Generate doc revisions based on tester feedback:
+Generate proposed docs edits:
 
 ```bash
 dari-docs optimize . \
@@ -80,195 +73,34 @@ dari-docs optimize . \
   --task "Install the SDK and make a first API call"
 ```
 
-This downloads proposed revisions into `.dari-docs/updated/` without changing your repo.
+The edited files are downloaded into `.dari-docs/updated/` without changing your repo. Add `--apply` if you want `dari-docs` to apply the revisions directly.
 
-Apply the edited docs:
+## How it works
 
-```bash
-dari-docs optimize . \
-  --managed \
-  --task "Install the SDK and make a first API call" \
-  --apply
-```
+1. You point `dari-docs` at a docs directory and give it one or more tasks.
+2. The CLI bundles your docs and sends them to hosted developer-agent endpoints.
+3. Tester agents try to complete the task and report where the docs blocked progress.
+4. `dari-docs` summarizes the feedback into local run artifacts.
+5. If you run `optimize`, an editor agent proposes documentation changes.
+6. Proposed edits are written to `.dari-docs/updated/` for review.
 
-## Managed Account and Billing
+The simulated users are plain dari.dev agents. A dari.dev agent is not a special binary or hidden service; it is a portable folder containing prompts, skills, setup scripts, and `dari.yml`. Deploying that folder to dari.dev gives it a hosted endpoint, so `dari-docs` can fan out isolated tester and editor sessions without you running agent workers yourself.
 
-After logging in, check your balance:
+## Managed vs self-managed
 
-```bash
-dari-docs billing balance
-```
+| Mode | Use when | Requires |
+| --- | --- | --- |
+| Managed | You want the fastest setup and hosted execution. | `dari-docs auth login` |
+| Self-managed | You want runs in your own dari.dev org. | A dari.dev API key and deployed agents |
 
-Purchase more credits:
+Most users should start with managed mode.
 
-```bash
-dari-docs billing checkout --amount 5
-```
+## Documentation
 
-Log out:
-
-```bash
-dari-docs auth logout
-```
-
-To revoke managed tokens from all devices, run `dari-docs auth logout --all`. You can narrow that to browser-login tokens with `--interactive-only` or automation tokens with `--automation-only`.
-
-Before a managed run starts, the CLI prints a bundle summary and credit estimate. Credits are reserved before the run, then reconciled to the actual session cost after completion.
-
-- Managed runs currently support up to three tasks per run.
-- Managed runs currently support up to three active runs per account at a time.
-- Managed runs execute tasks sequentially; use self-managed mode if you need parallel tester sessions.
-
-## GitHub Actions
-
-Managed checks can run in CI with a named automation token.
-
-Create the token locally after logging in:
-
-```bash
-dari-docs auth login
-dari-docs auth token create --name github-actions
-```
-
-Add it to your repository or environment secrets as `DARI_DOCS_TOKEN`.
-
-By default, automation tokens can read managed account/run state and create managed checks. Add scopes explicitly for broader workflows, for example `--scope managed:read --scope managed:optimize` if CI should generate proposed revisions.
-
-Automation tokens do not expire by default. To set an expiration, pass `--expires-in 90d` or `--expires-in 24h`, for example.
-
-The CLI waits until the managed run finishes, so the Actions job status reflects the docs check result.
-
-Manage automation tokens:
-
-```bash
-dari-docs auth token list
-dari-docs auth token revoke tok_...
-```
-
-## Tasks
-
-Pass one or more `--task` values:
-
-```bash
-dari-docs check . \
-  --managed \
-  --task "Install the SDK" \
-  --task "Set up authentication"
-```
-
-Or keep tasks in a file, one task per paragraph or bullet:
-
-```bash
-dari-docs check . \
-  --managed \
-  --tasks-file docs-test-tasks.txt
-```
-
-By default, local run artifacts are written under `.dari-docs/`, and later runs overwrite the previous local outputs. Use `--out` to keep separate run directories:
-
-```bash
-dari-docs optimize . \
-  --managed \
-  --out .dari-docs/runs/install-sdk \
-  --task "Install the SDK and make a first API call"
-```
-
-When `--out` is used with `--apply`, the CLI still applies the downloaded revisions back into the target repo.
-
-## Bundle Selection
-
-Before a run starts, `dari-docs` creates `.dari-docs/input-docs-bundle.tar.gz`. By default it includes likely docs and docs-adjacent source files, while skipping common generated, dependency, build, and local output directories.
-
-Use repo-relative globs when your docs need extra inputs or when generated paths should be excluded:
-
-```bash
-dari-docs check . \
-  --managed \
-  --bundle-include "schemas/*.proto" \
-  --bundle-exclude "docs/generated/**" \
-  --task "Create an API key"
-```
-
-- `--bundle-include` adds files in addition to the defaults.
-- `--bundle-exclude` wins over both defaults and include patterns.
-
-The CLI prints a bundle summary before starting the run.
-
-## Live Verification Secrets
-
-Static testing is the default. To let agents use test-mode product/API keys for safe checks, pass `--live-verify` and repeat `--secret-env NAME` for local environment variables to send.
-
-Managed example:
-
-```bash
-export STRIPE_TEST_SECRET_KEY=sk_test_...
-
-dari-docs optimize . \
-  --managed \
-  --live-verify \
-  --secret-env STRIPE_TEST_SECRET_KEY \
-  --task "Create a checkout session"
-```
-
-Secret values are passed to the remote sessions only for that run. In managed mode, runtime secrets are encrypted while the run is active and cleared after use.
-
-## Agent Customization
-
-`dari-docs init` creates local agent projects under:
-
-```text
-.dari-docs/agents/
-```
-
-These are regular Dari agent projects. You can edit the local prompts and skills before deploying them.
-
-The bundled tester agent enables sandbox internet access by default so it can install packages and try docs that call external services. You can turn this off in `.dari-docs/agents/docs-user-tester-agent/dari.yml` before deploying if you want tests to run without network access.
-
-For customized agents, network access is controlled in each agent's `dari.yml`:
-
-```yaml
-sandbox:
-  internet_access: true
-```
-
-In managed mode, deploy the edited agents with:
-
-```bash
-dari-docs agents deploy --managed
-```
-
-In self-managed mode, `dari-docs init --deploy` deploys the default local agents. For more control, deploy your own Dari agents and pass their IDs with `--feedback-agent` and `--editor-agent`.
-
-## Self-Managed Usage
-
-Use self-managed mode when you want runs to execute in your own Dari org.
-
-```bash
-dari auth login
-export DARI_API_KEY=...
-dari-docs init --deploy
-```
-
-Then run the same commands without `--managed`:
-
-```bash
-dari-docs check . \
-  --task "Install the SDK and make a first API call"
-
-dari-docs optimize . \
-  --task "Install the SDK and make a first API call"
-```
-
-By default, the bundled agents expose named LLM options such as `dumb-claude`, `medium-claude`, `smart-claude`, `dumb-gpt`, `medium-gpt`, and `smart-gpt`. The Claude options use the `anthropic` provider and the GPT options use the `openai` provider. In self-managed mode, tester sessions run every task across all six options by default; the editor uses the manifest default (`medium-claude`).
-
-To explicitly choose tester model tiers:
-
-```bash
-dari-docs check . \
-  --task "Install the SDK and make a first API call" \
-  --feedback-llm dumb-claude,medium-claude,smart-claude
-```
-
-Use `--llm ID` to collapse the run to one option for all sessions, or `--editor-llm ID` to select the editor model independently.
-
-If you need BYOK at agent deploy time, add provider-specific Dari credentials and pass `--anthropic-api-key-secret` and/or `--openai-api-key-secret` to `dari-docs init --deploy`.
+- [Managed mode, billing, and deployment](docs/managed.md)
+- [GitHub Actions](docs/github-actions.md)
+- [Task files and repeated checks](docs/tasks.md)
+- [Bundle selection](docs/bundle-selection.md)
+- [Live verification secrets](docs/live-verification.md)
+- [Agent customization](docs/agent-customization.md)
+- [Self-managed usage](docs/self-managed.md)

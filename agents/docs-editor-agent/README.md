@@ -1,6 +1,6 @@
 # docs-editor-agent
 
-A Dari/Pi agent that applies documentation feedback to user-supplied docs.
+A dari.dev/Pi agent that applies documentation feedback to user-supplied docs.
 
 The manifest exposes the same named LLM options as the tester agent; `medium-claude` remains the default, and self-managed runs can select a different editor model with `--editor-llm`.
 

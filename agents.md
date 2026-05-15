@@ -1,4 +1,4 @@
-# Bundled Dari agents
+# Bundled dari.dev agents
 
 The agent template folders live at the repo root:
 
@@ -7,7 +7,7 @@ agents/docs-user-tester-agent/dari.yml
 agents/docs-editor-agent/dari.yml
 ```
 
-They are normal Dari agent projects with `dari.yml`, prompts, skills, and setup scripts. The CLI embeds these folders into the Go binary.
+They are normal dari.dev agent projects: folders with `dari.yml`, prompts, skills, and setup scripts. There is no special `dari-docs` runtime hidden inside them; they are generic agents that can be inspected, edited, versioned, and reused in other contexts. The CLI embeds these folders into the Go binary.
 
 - `docs-user-tester-agent` — lightweight simulated-user testing agent
 - `docs-editor-agent` — remote editor agent
@@ -19,13 +19,13 @@ They are normal Dari agent projects with `dari.yml`, prompts, skills, and setup 
 .dari-docs/agents/docs-editor-agent/
 ```
 
-`dari-docs init --deploy` deploys those agents into the user's current Dari org and writes their agent IDs to `.dari-docs/config.json`.
+`dari-docs init --deploy` deploys those agents into the user's current dari.dev org and writes their agent IDs to `.dari-docs/config.json`. Once deployed, dari.dev gives each agent a hosted endpoint, which lets `dari-docs` fan out isolated tester and editor sessions without running local agent workers.
 
 ## LLM configuration
 
-By default the templates omit `llm.api_key_secret`, so Dari uses the platform-managed OpenAI or Anthropic credential for each option. Claude options use `provider: anthropic`, and GPT options use `provider: openai`.
+By default the templates omit `llm.api_key_secret`, so dari.dev uses the platform-managed OpenAI or Anthropic credential for each option. Claude options use `provider: anthropic`, and GPT options use `provider: openai`.
 
-For BYOK at publish time, create provider-specific Dari credentials and pass `--anthropic-api-key-secret` and/or `--openai-api-key-secret` to `dari-docs init --deploy`. The CLI sets `api_key_secret` only on matching `llm.options` entries. No per-session LLM key is required by `dari-docs`.
+For BYOK at publish time, create provider-specific dari.dev credentials and pass `--anthropic-api-key-secret` and/or `--openai-api-key-secret` to `dari-docs init --deploy`. The CLI sets `api_key_secret` only on matching `llm.options` entries. No per-session LLM key is required by `dari-docs`.
 
 The bundled agents define these LLM option IDs for runtime selection:
 
