@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,6 +81,20 @@ func TestManagedSessionSummary(t *testing.T) {
 		if got := managedSessionSummary(tt.command, tt.tasks); got != tt.want {
 			t.Fatalf("%s summary = %q, want %q", name, got, tt.want)
 		}
+	}
+}
+
+func TestShouldRetryManagedRunCreate(t *testing.T) {
+	if !shouldRetryManagedRunCreate(context.Background(), errors.New("connection reset")) {
+		t.Fatal("expected transport error to be retried")
+	}
+	if shouldRetryManagedRunCreate(context.Background(), &managed.HTTPError{StatusCode: 402}) {
+		t.Fatal("expected HTTP error not to be retried")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if shouldRetryManagedRunCreate(ctx, errors.New("connection reset")) {
+		t.Fatal("expected canceled context not to be retried")
 	}
 }
 

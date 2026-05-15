@@ -234,6 +234,23 @@ func TestSanitizePersistedErrorsMigrationMentionsKnownCodes(t *testing.T) {
 	}
 }
 
+func TestRunRequestIDMigrationAddsUniqueUserRequestIndex(t *testing.T) {
+	data, err := migrationFS.ReadFile("migrations/0005_run_request_ids.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	for _, want := range []string{
+		"ADD COLUMN run_request_id TEXT",
+		"idx_runs_user_request_id",
+		"runs (user_id, run_request_id)",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("run request migration is missing %q", want)
+		}
+	}
+}
+
 func TestStripeCheckoutIntentMigrationAddsDurableLookupColumns(t *testing.T) {
 	data, err := migrationFS.ReadFile("migrations/0004_stripe_checkout_intents.sql")
 	if err != nil {
@@ -1074,6 +1091,67 @@ func TestRunStatusResponseDoesNotExposeEditorSessionID(t *testing.T) {
 	}
 	if strings.Contains(string(b), "editor_session_id") {
 		t.Fatalf("run status response exposed editor_session_id: %s", string(b))
+	}
+}
+
+func TestHandleRunsReturnsExistingRunForDuplicateRunRequestID(t *testing.T) {
+	db := openManagedServiceTestDB(t)
+	ctx := context.Background()
+
+	userID := "usr_test_" + randomToken(8)
+	runID := "run_test_" + randomToken(8)
+	runRequestID := "mrr_test_" + randomToken(8)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), `DELETE FROM runs WHERE id=$1`, runID)
+		_, _ = db.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+	})
+	if _, err := db.Exec(ctx, `INSERT INTO users (id, auth_subject, email) VALUES ($1, $2, $3)`, userID, "auth_"+userID, userID+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+INSERT INTO runs (id, user_id, run_request_id, mode, status, tasks, bundle_sha256, bundle_files)
+VALUES ($1, $2, $3, 'check', $4, '["task"]'::jsonb, 'sha', 1)
+`, runID, userID, runRequestID, statusQueued); err != nil {
+		t.Fatal(err)
+	}
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	if err := mw.WriteField("agent_set_id", "mags_missing"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.WriteField("run_request_id", runRequestID); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.WriteField("mode", "check"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.WriteField("tasks_json", `["check the docs"]`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mw.CreateFormFile("bundle", "input-docs-bundle.tar.gz"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &Server{db: db, cfg: Config{MaxBundleBytes: 1 << 20, MaxTasksPerRun: 3, MaxTaskBytes: 10000}}
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+
+	s.handleRuns(rec, req, user{ID: userID, TokenKind: tokenKindInteractive})
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+	var got map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["run_id"] != runID || got["status"] != statusQueued {
+		t.Fatalf("response = %#v", got)
 	}
 }
 

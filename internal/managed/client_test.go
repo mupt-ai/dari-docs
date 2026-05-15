@@ -3,6 +3,7 @@ package managed
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -31,6 +32,66 @@ func TestSaveAndLoadToken(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("credentials mode = %o, want 600", info.Mode().Perm())
+	}
+}
+
+func TestCreateRunRequiresRunRequestID(t *testing.T) {
+	bundlePath := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	if err := os.WriteFile(bundlePath, []byte("bundle"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New("https://service.example.test", "managed-token").CreateRun(context.Background(), "check", []string{"task"}, bundlePath, CreateRunOptions{AgentSetID: "mags_test"}); err == nil || !strings.Contains(err.Error(), "run request id is required") {
+		t.Fatalf("err = %v, want run request id required", err)
+	}
+}
+
+func TestCreateRunSendsRunRequestID(t *testing.T) {
+	bundlePath := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	if err := os.WriteFile(bundlePath, []byte("bundle"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/runs" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		mr, err := r.MultipartReader()
+		if err != nil {
+			t.Fatal(err)
+		}
+		fields := map[string]string{}
+		for {
+			part, err := mr.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if part.FormName() == "bundle" {
+				continue
+			}
+			data, err := io.ReadAll(part)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fields[part.FormName()] = string(data)
+		}
+		if fields["run_request_id"] != "mrr_test" {
+			t.Fatalf("run_request_id = %q, want mrr_test; fields=%#v", fields["run_request_id"], fields)
+		}
+		_ = json.NewEncoder(w).Encode(CreateRunResponse{RunID: "run_test", Status: "queued"})
+	}))
+	defer server.Close()
+
+	got, err := New(server.URL, "managed-token").CreateRun(context.Background(), "check", []string{"task"}, bundlePath, CreateRunOptions{
+		AgentSetID:   "mags_test",
+		RunRequestID: "mrr_test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RunID != "run_test" || got.Status != "queued" {
+		t.Fatalf("response = %#v", got)
 	}
 }
 

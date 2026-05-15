@@ -136,6 +136,7 @@ type CreateRunResponse struct {
 
 type CreateRunOptions struct {
 	AgentSetID         string
+	RunRequestID       string
 	LiveVerify         bool
 	RuntimeSecretsJSON string
 }
@@ -288,6 +289,12 @@ func (c *Client) CreateRun(ctx context.Context, mode string, tasks []string, bun
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	if err := mw.WriteField("agent_set_id", opts.AgentSetID); err != nil {
+		return CreateRunResponse{}, err
+	}
+	if opts.RunRequestID == "" {
+		return CreateRunResponse{}, fmt.Errorf("run request id is required")
+	}
+	if err := mw.WriteField("run_request_id", opts.RunRequestID); err != nil {
 		return CreateRunResponse{}, err
 	}
 	if err := mw.WriteField("mode", mode); err != nil {
