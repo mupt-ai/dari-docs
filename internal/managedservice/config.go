@@ -25,6 +25,7 @@ type Config struct {
 	MaxActiveRunsPerUser       int
 	AgentDeployClaimBatchSize  int
 	SessionStaleAfter          time.Duration
+	SessionStartStaleAfter     time.Duration
 	PollErrorStaleAfter        time.Duration
 	AgentDeployStaleAfter      time.Duration
 	CostFetchTimeout           time.Duration
@@ -55,6 +56,7 @@ func ConfigFromEnv() (Config, error) {
 		MaxActiveRunsPerUser:       int(managedMaxActiveRunsPerUser),
 		AgentDeployClaimBatchSize:  int(managedAgentDeployClaimBatchSize),
 		SessionStaleAfter:          time.Duration(managedSessionStaleAfterSeconds) * time.Second,
+		SessionStartStaleAfter:     time.Duration(managedSessionStartStaleAfterSeconds) * time.Second,
 		PollErrorStaleAfter:        time.Duration(managedPollErrorStaleAfterSeconds) * time.Second,
 		AgentDeployStaleAfter:      time.Duration(managedAgentDeployStaleAfterSeconds) * time.Second,
 		CostFetchTimeout:           time.Duration(managedCostFetchTimeoutSeconds) * time.Second,
