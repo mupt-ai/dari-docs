@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/mupt-ai/dari-docs/internal/bundle"
 	"github.com/mupt-ai/dari-docs/internal/dari"
 	"github.com/mupt-ai/dari-docs/internal/runner"
@@ -71,6 +72,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		mode               string
 		tasks              []string
 		agentSetID         string
+		runRequestID       string
 		liveVerify         bool
 		runtimeSecretJSON  string
 		runtimeSecretNames []string
@@ -127,6 +129,24 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 				return
 			}
 			agentSetID = strings.TrimSpace(v)
+		case "run_request_id":
+			v, err := readTextPart(part, 128)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "run_request_id field is too large")
+				return
+			}
+			runRequestID = strings.TrimSpace(v)
+			if runRequestID == "" {
+				writeError(w, http.StatusBadRequest, "run_request_id is required")
+				return
+			}
+			if existing, ok, err := s.loadRunByRequest(r.Context(), u.ID, runRequestID); err != nil {
+				writeLoggedError(w, http.StatusInternalServerError, "could not load managed run", err)
+				return
+			} else if ok {
+				writeJSON(w, http.StatusAccepted, map[string]string{"run_id": existing.ID, "status": existing.Status})
+				return
+			}
 		case "live_verify":
 			v, err := readTextPart(part, 16)
 			if err != nil {
@@ -227,6 +247,10 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusBadRequest, "missing managed agent set; run `dari-docs agents deploy --managed`")
 		return
 	}
+	if runRequestID == "" {
+		writeError(w, http.StatusBadRequest, "run_request_id is required")
+		return
+	}
 	if tmpPath == "" {
 		writeError(w, http.StatusBadRequest, "bundle file is required")
 		return
@@ -234,7 +258,18 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 	runID := "run_" + randomToken(18)
 	taskJSON, _ := json.Marshal(tasks)
 	secretNamesJSON, _ := json.Marshal(runtimeSecretNames)
-	if err := s.reserveRun(r.Context(), u.ID, runID, mode, agentSetID, taskJSON, b, reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
+	if err := s.reserveRun(r.Context(), u.ID, runID, runRequestID, mode, agentSetID, taskJSON, b, reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
+		if errors.Is(err, errRunRequestConflict) {
+			if existing, ok, loadErr := s.loadRunByRequest(r.Context(), u.ID, runRequestID); loadErr != nil {
+				writeLoggedError(w, http.StatusInternalServerError, "could not load managed run", loadErr)
+				return
+			} else if ok {
+				writeJSON(w, http.StatusAccepted, map[string]string{"run_id": existing.ID, "status": existing.Status})
+				return
+			}
+			writeError(w, http.StatusConflict, "managed run request conflicted; retry")
+			return
+		}
 		var activeErr *activeRunLimitError
 		if errors.As(err, &activeErr) {
 			writeError(w, http.StatusConflict, err.Error())
@@ -278,6 +313,30 @@ UPDATE runs SET status=$2, bundle_file_id=$3, updated_at=now() WHERE id=$1
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": runID, "status": statusQueued})
+}
+
+type runRequestRecord struct {
+	ID     string
+	Status string
+}
+
+func (s *Server) loadRunByRequest(ctx context.Context, userID, runRequestID string) (runRequestRecord, bool, error) {
+	if strings.TrimSpace(runRequestID) == "" {
+		return runRequestRecord{}, false, nil
+	}
+	var record runRequestRecord
+	err := s.db.QueryRow(ctx, `
+SELECT id, status
+FROM runs
+WHERE user_id=$1 AND run_request_id=$2
+`, userID, runRequestID).Scan(&record.ID, &record.Status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return runRequestRecord{}, false, nil
+	}
+	if err != nil {
+		return runRequestRecord{}, false, err
+	}
+	return record, true, nil
 }
 
 func (s *Server) stageManagedBundle(part *multipart.Part) (string, bundle.Result, error) {
@@ -384,7 +443,14 @@ func (s *Server) maxActiveRunsPerUser() int {
 	return int(managedMaxActiveRunsPerUser)
 }
 
-func (s *Server) reserveRun(ctx context.Context, userID, runID, mode, agentSetID string, taskJSON []byte, b bundle.Result, reserve int64, liveVerify bool, secretNamesJSON, runtimeNonce, runtimeCiphertext []byte) error {
+var errRunRequestConflict = errors.New("managed run request conflicted")
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+func (s *Server) reserveRun(ctx context.Context, userID, runID, runRequestID, mode, agentSetID string, taskJSON []byte, b bundle.Result, reserve int64, liveVerify bool, secretNamesJSON, runtimeNonce, runtimeCiphertext []byte) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -423,9 +489,12 @@ WHERE id=$1 AND user_id=$2
 		return errAgentSetNeedsDeploy
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO runs (id, user_id, mode, status, tasks, agent_set_id, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files, reserved_cents, live_verify, runtime_secret_names, runtime_secrets_nonce, runtime_secrets_ciphertext)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-		`, runID, userID, mode, statusUploading, taskJSON, agentSetID, testerAgentID, testerVersionID, editorAgentID, editorVersionID, b.SHA256, len(b.Manifest.Files), reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
+		INSERT INTO runs (id, user_id, run_request_id, mode, status, tasks, agent_set_id, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files, reserved_cents, live_verify, runtime_secret_names, runtime_secrets_nonce, runtime_secrets_ciphertext)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+		`, runID, userID, runRequestID, mode, statusUploading, taskJSON, agentSetID, testerAgentID, testerVersionID, editorAgentID, editorVersionID, b.SHA256, len(b.Manifest.Files), reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
+		if isUniqueViolation(err) {
+			return errRunRequestConflict
+		}
 		return err
 	}
 	if _, err := tx.Exec(ctx, `

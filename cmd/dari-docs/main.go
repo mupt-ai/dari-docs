@@ -300,11 +300,17 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 		b, _ := json.Marshal(cfg.RuntimeSecrets)
 		runtimeSecretJSON = string(b)
 	}
-	created, err := client.CreateRun(ctx, cfg.Command, cfg.Tasks, bundlePath, managed.CreateRunOptions{
+	runRequestID := newManagedRunRequestID()
+	createOpts := managed.CreateRunOptions{
 		AgentSetID:         cfg.AgentSetID,
+		RunRequestID:       runRequestID,
 		LiveVerify:         cfg.LiveVerify,
 		RuntimeSecretsJSON: runtimeSecretJSON,
-	})
+	}
+	created, err := client.CreateRun(ctx, cfg.Command, cfg.Tasks, bundlePath, createOpts)
+	if err != nil && shouldRetryManagedRunCreate(ctx, err) {
+		created, err = client.CreateRun(ctx, cfg.Command, cfg.Tasks, bundlePath, createOpts)
+	}
 	if err != nil {
 		return err
 	}
@@ -1044,11 +1050,27 @@ func pendingManagedDeployMatches(repoRoot, deployRequestID, deployID string) boo
 }
 
 func newManagedDeployRequestID() string {
+	return newManagedRequestID("mdr")
+}
+
+func newManagedRunRequestID() string {
+	return newManagedRequestID("mrr")
+}
+
+func shouldRetryManagedRunCreate(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
+	var httpErr *managed.HTTPError
+	return !errors.As(err, &httpErr)
+}
+
+func newManagedRequestID(prefix string) string {
 	b := make([]byte, 18)
 	if _, err := rand.Read(b); err != nil {
 		panic(err)
 	}
-	return "mdr_" + base64.RawURLEncoding.EncodeToString(b)
+	return prefix + "_" + base64.RawURLEncoding.EncodeToString(b)
 }
 
 func managedTokenHash(token string) string {
