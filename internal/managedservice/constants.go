@@ -25,6 +25,7 @@ const (
 	managedAgentDeployClaimBatchSize  int64 = 25
 
 	managedSessionStaleAfterSeconds      int64 = 24 * 60 * 60
+	managedSessionStartStaleAfterSeconds int64 = 2 * 60
 	managedPollErrorStaleAfterSeconds    int64 = 60 * 60
 	managedCostFetchTimeoutSeconds       int64 = 5 * 60
 	managedStripeWebhookToleranceSeconds int64 = 5 * 60

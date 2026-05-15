@@ -60,6 +60,9 @@ func (s *Server) sessionStarterLoop(ctx context.Context) {
 		if err := s.recoverStaleUploadingRuns(ctx); err != nil {
 			log.Printf("recover stale uploading runs: %v", err)
 		}
+		if err := s.recoverStaleStartingSessions(ctx); err != nil {
+			log.Printf("recover stale starting sessions: %v", err)
+		}
 		if err := s.recoverStaleStartingRuns(ctx); err != nil {
 			log.Printf("recover stale starting runs: %v", err)
 		}
@@ -180,7 +183,7 @@ func (s *Server) startNextSession(ctx context.Context, run queuedRun) error {
 	_, err = s.db.Exec(ctx, `
 INSERT INTO run_sessions (session_id, run_id, kind, task_index, status, version_id)
 VALUES ($1, $2, $3, $4, $5, $6)
-`, session.ID, run.ID, next.Kind, next.TaskIndex, statusRunning, next.VersionID)
+`, session.ID, run.ID, next.Kind, next.TaskIndex, statusStarting, next.VersionID)
 	if err != nil {
 		return err
 	}
@@ -188,9 +191,20 @@ VALUES ($1, $2, $3, $4, $5, $6)
 		_, _ = s.db.Exec(ctx, `
 UPDATE run_sessions
 SET status=$2, completed_at=now(), last_poll_error=$3
-WHERE session_id=$1
-`, session.ID, statusFailed, persistedErrorString(persistedErrSessionMessageFailed))
+WHERE session_id=$1 AND status=$4
+`, session.ID, statusFailed, persistedErrorString(persistedErrSessionMessageFailed), statusStarting)
 		return s.failStartedRun(ctx, run, persistedErrSessionMessageFailed, fmt.Errorf("send %s session %s message: %w", next.Kind, session.ID, err))
+	}
+	tag, err := s.db.Exec(ctx, `
+UPDATE run_sessions
+SET status=$2, last_polled_at=NULL, last_poll_error_at=NULL, last_poll_error=NULL
+WHERE session_id=$1 AND status=$3
+`, session.ID, statusRunning, statusStarting)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return s.reconcileRunProgress(ctx, run.ID)
 	}
 	if isFinalSecretBearingSession(run, next) {
 		s.clearRuntimeSecrets(ctx, run.ID)
@@ -260,11 +274,82 @@ func (s *Server) failStartedRun(ctx context.Context, run queuedRun, code persist
 
 func (s *Server) recoverStaleStartingRuns(ctx context.Context) error {
 	_, err := s.db.Exec(ctx, `
-	UPDATE runs
+UPDATE runs
 SET status=$1, updated_at=now()
 WHERE status=$2 AND updated_at < now() - interval '2 minutes'
-	`, statusQueued, statusStarting)
+  AND NOT EXISTS (
+    SELECT 1 FROM run_sessions
+    WHERE run_sessions.run_id = runs.id AND run_sessions.status IN ($3, $4)
+  )
+	`, statusQueued, statusStarting, statusStarting, statusRunning)
 	return err
+}
+
+func (s *Server) recoverStaleStartingSessions(ctx context.Context) error {
+	if s.cfg.SessionStartStaleAfter <= 0 {
+		return nil
+	}
+	rows, err := s.db.Query(ctx, `
+SELECT session_id, run_id, kind, task_index, status, created_at, last_poll_error_at, coalesce(last_poll_error,'')
+FROM run_sessions
+WHERE status=$1 AND created_at < $2
+ORDER BY created_at
+LIMIT 50
+`, statusStarting, time.Now().Add(-s.cfg.SessionStartStaleAfter))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var sessions []runSessionRecord
+	for rows.Next() {
+		var session runSessionRecord
+		if err := rows.Scan(&session.ID, &session.RunID, &session.Kind, &session.TaskIndex, &session.Status, &session.CreatedAt, &session.LastPollErrorAt, &session.LastPollError); err != nil {
+			return err
+		}
+		sessions = append(sessions, session)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, session := range sessions {
+		if err := s.recoverStartingSession(ctx, session); err != nil {
+			log.Printf("recover starting session %s: %v", session.ID, err)
+		}
+	}
+	return nil
+}
+
+func (s *Server) recoverStartingSession(ctx context.Context, session runSessionRecord) error {
+	remote, err := s.dari.GetSession(ctx, session.ID)
+	if err != nil {
+		stale, recordErr := s.recordSessionPollError(ctx, session, err)
+		if recordErr != nil {
+			return recordErr
+		}
+		if !stale {
+			return nil
+		}
+		return s.failRunSession(ctx, session, persistedErrSessionPollStale)
+	}
+	if sessionHasMessageActivity(remote) {
+		tag, err := s.db.Exec(ctx, `
+UPDATE run_sessions
+SET status=$2, last_polled_at=now(), last_poll_error_at=NULL, last_poll_error=NULL
+WHERE session_id=$1 AND status=$3
+`, session.ID, statusRunning, statusStarting)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() > 0 {
+			return s.reconcileRunProgress(ctx, session.RunID)
+		}
+		return nil
+	}
+	return s.failRunSession(ctx, session, persistedErrSessionMessageFailed)
+}
+
+func sessionHasMessageActivity(session dari.Session) bool {
+	return session.LastMessageID != nil || session.LastMessageStatus != nil
 }
 
 func (s *Server) recoverStaleUploadingRuns(ctx context.Context) error {
@@ -329,15 +414,7 @@ func (s *Server) reconcileSession(ctx context.Context, session runSessionRecord)
 			return recordErr
 		}
 		if stale {
-			_, err = s.db.Exec(ctx, `
-UPDATE run_sessions
-SET status=$2, completed_at=now(), last_poll_error=$3
-WHERE session_id=$1 AND status=$4
-`, session.ID, statusFailed, persistedErrorString(persistedErrSessionPollStale), statusRunning)
-			if err != nil {
-				return err
-			}
-			return s.reconcileRunProgress(ctx, session.RunID)
+			return s.failRunSession(ctx, session, persistedErrSessionPollStale)
 		}
 		return nil
 	}
@@ -368,15 +445,7 @@ WHERE session_id=$1 AND status=$3
 		return s.reconcileRunProgress(ctx, session.RunID)
 	default:
 		if s.cfg.SessionStaleAfter > 0 && time.Since(session.CreatedAt) > s.cfg.SessionStaleAfter {
-			_, err = s.db.Exec(ctx, `
-UPDATE run_sessions
-SET status=$2, completed_at=now(), last_polled_at=now(), last_poll_error=$3
-WHERE session_id=$1 AND status=$4
-`, session.ID, statusFailed, persistedErrorString(persistedErrSessionStale), statusRunning)
-			if err != nil {
-				return err
-			}
-			return s.reconcileRunProgress(ctx, session.RunID)
+			return s.failRunSession(ctx, session, persistedErrSessionStale)
 		}
 		_, err = s.db.Exec(ctx, `
 UPDATE run_sessions
@@ -396,7 +465,7 @@ func (s *Server) recordSessionPollError(ctx context.Context, session runSessionR
 UPDATE run_sessions
 SET last_polled_at=now(), last_poll_error_at=coalesce(last_poll_error_at, now()), last_poll_error=$2
 WHERE session_id=$1 AND status=$3
-`, session.ID, persistedErrorString(persistedErrSessionPollFailed), statusRunning)
+`, session.ID, persistedErrorString(persistedErrSessionPollFailed), session.Status)
 		if err != nil {
 			return false, err
 		}
@@ -405,12 +474,27 @@ WHERE session_id=$1 AND status=$3
 UPDATE run_sessions
 SET last_polled_at=now(), last_poll_error=$2
 WHERE session_id=$1 AND status=$3
-`, session.ID, persistedErrorString(persistedErrSessionPollFailed), statusRunning)
+`, session.ID, persistedErrorString(persistedErrSessionPollFailed), session.Status)
 		if err != nil {
 			return false, err
 		}
 	}
 	return s.cfg.PollErrorStaleAfter > 0 && time.Since(*firstErrorAt) > s.cfg.PollErrorStaleAfter, nil
+}
+
+func (s *Server) failRunSession(ctx context.Context, session runSessionRecord, code persistedErrorCode) error {
+	tag, err := s.db.Exec(ctx, `
+UPDATE run_sessions
+SET status=$2, completed_at=now(), last_polled_at=now(), last_poll_error=$3
+WHERE session_id=$1 AND status=$4
+`, session.ID, statusFailed, persistedErrorString(code), session.Status)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil
+	}
+	return s.reconcileRunProgress(ctx, session.RunID)
 }
 
 func runErrorCodeFromSession(session runSessionRecord) persistedErrorCode {
