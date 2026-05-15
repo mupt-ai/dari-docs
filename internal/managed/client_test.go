@@ -3,6 +3,7 @@ package managed
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -102,6 +103,51 @@ func TestExchangeDariTokenUsesSupabaseBearer(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Token != "managed-token" || got.Email != "user@example.test" {
+		t.Fatalf("response = %#v", got)
+	}
+}
+
+func TestCreateRunDoesNotSendAgentSetID(t *testing.T) {
+	bundlePath := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	if err := os.WriteFile(bundlePath, []byte("bundle"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/runs" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		mr, err := r.MultipartReader()
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen := map[string]bool{}
+		for {
+			part, err := mr.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen[part.FormName()] = true
+		}
+		if seen["agent_set_id"] {
+			t.Fatalf("managed run request should not include agent_set_id")
+		}
+		for _, want := range []string{"mode", "tasks_json", "bundle"} {
+			if !seen[want] {
+				t.Fatalf("missing multipart field %q; seen=%#v", want, seen)
+			}
+		}
+		_ = json.NewEncoder(w).Encode(CreateRunResponse{RunID: "run_test", Status: "queued"})
+	}))
+	defer server.Close()
+
+	got, err := New(server.URL, "managed-token").CreateRun(context.Background(), "check", []string{"task"}, bundlePath, CreateRunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RunID != "run_test" || got.Status != "queued" {
 		t.Fatalf("response = %#v", got)
 	}
 }

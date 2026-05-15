@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/mupt-ai/dari-docs/internal/bundle"
 	"github.com/mupt-ai/dari-docs/internal/dari"
 	stripe "github.com/stripe/stripe-go/v82"
 )
@@ -58,6 +59,9 @@ func TestConfigFromEnvUsesManagedConstants(t *testing.T) {
 	if cfg.DariAPIBaseURL != defaultDariAPIBaseURL {
 		t.Fatalf("DariAPIBaseURL = %q, want %q", cfg.DariAPIBaseURL, defaultDariAPIBaseURL)
 	}
+	if cfg.ManagedTesterAgentID != "agt_tester" || cfg.ManagedTesterVersionID != "ver_tester" || cfg.ManagedEditorAgentID != "agt_editor" || cfg.ManagedEditorVersionID != "ver_editor" {
+		t.Fatalf("managed agent config = %q/%q %q/%q", cfg.ManagedTesterAgentID, cfg.ManagedTesterVersionID, cfg.ManagedEditorAgentID, cfg.ManagedEditorVersionID)
+	}
 	for name, gotWant := range map[string][2]int64{
 		"FreeGrantCents":             {cfg.FreeGrantCents, managedFreeGrantCents},
 		"TesterReserveCents":         {cfg.TesterReserveCents, managedTesterReserveCents},
@@ -68,7 +72,6 @@ func TestConfigFromEnvUsesManagedConstants(t *testing.T) {
 		"BundleMaxFileBytes":         {cfg.BundleMaxFileBytes, managedBundleMaxFileBytes},
 		"MaxTaskBytes":               {cfg.MaxTaskBytes, managedMaxTaskBytes},
 		"MaxActiveRunsPerUser":       {int64(cfg.MaxActiveRunsPerUser), managedMaxActiveRunsPerUser},
-		"AgentDeployClaimBatchSize":  {int64(cfg.AgentDeployClaimBatchSize), managedAgentDeployClaimBatchSize},
 		"MaxTasksPerRun":             {int64(cfg.MaxTasksPerRun), managedMaxTasksPerRun},
 	} {
 		if gotWant[0] != gotWant[1] {
@@ -103,7 +106,6 @@ func TestConfigFromEnvKeepsDeploymentOverridesAndIgnoresManagedEnvKnobs(t *testi
 	t.Setenv("FREE_CREDIT_CENTS", "1234")
 	t.Setenv("MAX_TASKS_PER_RUN", "9")
 	t.Setenv("MAX_ACTIVE_RUNS_PER_USER", "9")
-	t.Setenv("AGENT_DEPLOY_CLAIM_BATCH_SIZE", "100")
 	t.Setenv("HTTP_READ_TIMEOUT_SECONDS", "45")
 
 	cfg, err := ConfigFromEnv()
@@ -128,9 +130,6 @@ func TestConfigFromEnvKeepsDeploymentOverridesAndIgnoresManagedEnvKnobs(t *testi
 	if cfg.MaxActiveRunsPerUser != int(managedMaxActiveRunsPerUser) {
 		t.Fatalf("MaxActiveRunsPerUser = %d, want %d", cfg.MaxActiveRunsPerUser, managedMaxActiveRunsPerUser)
 	}
-	if cfg.AgentDeployClaimBatchSize != int(managedAgentDeployClaimBatchSize) {
-		t.Fatalf("AgentDeployClaimBatchSize = %d, want %d", cfg.AgentDeployClaimBatchSize, managedAgentDeployClaimBatchSize)
-	}
 	if cfg.HTTPReadTimeout != time.Duration(managedHTTPReadTimeoutSeconds)*time.Second {
 		t.Fatalf("HTTPReadTimeout = %s, want %ds", cfg.HTTPReadTimeout, managedHTTPReadTimeoutSeconds)
 	}
@@ -139,8 +138,19 @@ func TestConfigFromEnvKeepsDeploymentOverridesAndIgnoresManagedEnvKnobs(t *testi
 func TestConfigFromEnvRequiresRuntimeSecretEncryptionKey(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/dari_docs")
 	t.Setenv("DARI_API_KEY", "dari_test")
+	setRequiredManagedAgentEnv(t)
 	_, err := ConfigFromEnv()
 	if err == nil || !strings.Contains(err.Error(), "DARI_DOCS_SECRET_ENCRYPTION_KEY is required") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestConfigFromEnvRequiresManagedHostedAgents(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example.invalid/dari_docs")
+	t.Setenv("DARI_API_KEY", "dari_test")
+	t.Setenv("DARI_DOCS_SECRET_ENCRYPTION_KEY", testManagedSecretEncryptionKey())
+	_, err := ConfigFromEnv()
+	if err == nil || !strings.Contains(err.Error(), "MANAGED_TESTER_AGENT_ID is required") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -184,6 +194,28 @@ func TestBaselineMigrationMatchesManagedSQLShape(t *testing.T) {
 	} {
 		if strings.Contains(sql, wrong) {
 			t.Fatalf("baseline migration contains stale column name %q", wrong)
+		}
+	}
+}
+
+func TestManagedAgentSetTablesAreDroppedByMigration(t *testing.T) {
+	data, err := migrationFS.ReadFile("migrations/0005_drop_managed_agent_sets.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	for _, want := range []string{
+		"DROP COLUMN IF EXISTS agent_set_id",
+		"ALTER COLUMN tester_agent_id SET NOT NULL",
+		"ALTER COLUMN tester_version_id SET NOT NULL",
+		"ALTER COLUMN editor_agent_id SET NOT NULL",
+		"ALTER COLUMN editor_version_id SET NOT NULL",
+		"DROP TABLE IF EXISTS agent_set_deploys",
+		"DROP SEQUENCE IF EXISTS agent_set_deploy_sequence",
+		"DROP TABLE IF EXISTS agent_sets",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("drop migration is missing %q", want)
 		}
 	}
 }
@@ -852,20 +884,12 @@ func TestPreflightRunAllowsConfiguredActiveRunLimit(t *testing.T) {
 	}
 	s := &Server{db: db, cfg: Config{MaxActiveRunsPerUser: 3}}
 	userID := "usr_test_" + randomToken(8)
-	agentSetID := "mags_test_" + randomToken(8)
 	t.Cleanup(func() {
 		_, _ = db.Exec(context.Background(), `DELETE FROM runs WHERE user_id=$1`, userID)
 		_, _ = db.Exec(context.Background(), `DELETE FROM credit_ledger WHERE user_id=$1`, userID)
-		_, _ = db.Exec(context.Background(), `DELETE FROM agent_sets WHERE id=$1`, agentSetID)
 		_, _ = db.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
 	})
 	if _, err := db.Exec(ctx, `INSERT INTO users (id, auth_subject, email) VALUES ($1, $2, $3)`, userID, "auth_"+userID, userID+"@example.test"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(ctx, `
-INSERT INTO agent_sets (id, user_id, tester_agent_id, editor_agent_id, tester_version_id, editor_version_id, tester_sha256, editor_sha256)
-VALUES ($1, $2, 'agt_tester', 'agt_editor', 'ver_tester', 'ver_editor', 'tester_sha', 'editor_sha')
-`, agentSetID, userID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(ctx, `INSERT INTO credit_ledger (id, user_id, amount_cents, kind, source_id) VALUES ($1, $2, 500, 'test_credit', $3)`, "cred_"+randomToken(8), userID, "src_"+randomToken(8)); err != nil {
@@ -873,25 +897,66 @@ VALUES ($1, $2, 'agt_tester', 'agt_editor', 'ver_tester', 'ver_editor', 'tester_
 	}
 	for i := 0; i < 2; i++ {
 		if _, err := db.Exec(ctx, `
-INSERT INTO runs (id, user_id, mode, status, tasks, agent_set_id, bundle_sha256, bundle_files)
-VALUES ($1, $2, 'check', $3, '["task"]'::jsonb, $4, 'sha', 1)
-`, "run_"+randomToken(8), userID, statusRunning, agentSetID); err != nil {
+INSERT INTO runs (id, user_id, mode, status, tasks, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files)
+VALUES ($1, $2, 'check', $3, '["task"]'::jsonb, 'agt_tester', 'ver_tester', 'agt_editor', 'ver_editor', 'sha', 1)
+`, "run_"+randomToken(8), userID, statusRunning); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := s.preflightRun(ctx, userID, agentSetID, 75); err != nil {
+	if err := s.preflightRun(ctx, userID, 75); err != nil {
 		t.Fatalf("preflight with 2 active runs returned error: %v", err)
 	}
 	if _, err := db.Exec(ctx, `
-INSERT INTO runs (id, user_id, mode, status, tasks, agent_set_id, bundle_sha256, bundle_files)
-VALUES ($1, $2, 'check', $3, '["task"]'::jsonb, $4, 'sha', 1)
-`, "run_"+randomToken(8), userID, statusQueued, agentSetID); err != nil {
+INSERT INTO runs (id, user_id, mode, status, tasks, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files)
+VALUES ($1, $2, 'check', $3, '["task"]'::jsonb, 'agt_tester', 'ver_tester', 'agt_editor', 'ver_editor', 'sha', 1)
+`, "run_"+randomToken(8), userID, statusQueued); err != nil {
 		t.Fatal(err)
 	}
-	err = s.preflightRun(ctx, userID, agentSetID, 75)
+	err = s.preflightRun(ctx, userID, 75)
 	var activeErr *activeRunLimitError
 	if !errors.As(err, &activeErr) || activeErr.Limit != 3 {
 		t.Fatalf("preflight error = %v, want active run limit 3", err)
+	}
+}
+
+func TestReserveRunStoresConfiguredHostedAgents(t *testing.T) {
+	db := openManagedServiceTestDB(t)
+	ctx := context.Background()
+
+	s := &Server{db: db, cfg: testManagedHostedAgentConfig()}
+	userID := "usr_test_" + randomToken(8)
+	runID := "run_test_" + randomToken(8)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), `DELETE FROM credit_ledger WHERE run_id=$1 OR user_id=$2`, runID, userID)
+		_, _ = db.Exec(context.Background(), `DELETE FROM runs WHERE id=$1`, runID)
+		_, _ = db.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+	})
+	if _, err := db.Exec(ctx, `INSERT INTO users (id, auth_subject, email) VALUES ($1, $2, $3)`, userID, "auth_"+userID, userID+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO credit_ledger (id, user_id, amount_cents, kind, source_id) VALUES ($1, $2, 500, 'test_credit', $3)`, "cred_"+randomToken(8), userID, "src_"+randomToken(8)); err != nil {
+		t.Fatal(err)
+	}
+
+	result := bundle.Result{
+		SHA256: "bundle_sha",
+		Manifest: bundle.Manifest{Files: []bundle.FileRecord{
+			{Path: "README.md", SizeBytes: 12, SHA256: "file_sha"},
+		}},
+	}
+	if err := s.reserveRun(ctx, userID, runID, "check", []byte(`["task"]`), result, 75, false, []byte(`[]`), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var testerAgentID, testerVersionID, editorAgentID, editorVersionID string
+	if err := db.QueryRow(ctx, `
+SELECT tester_agent_id, tester_version_id, editor_agent_id, editor_version_id
+FROM runs WHERE id=$1
+`, runID).Scan(&testerAgentID, &testerVersionID, &editorAgentID, &editorVersionID); err != nil {
+		t.Fatal(err)
+	}
+	if testerAgentID != "agt_tester" || testerVersionID != "ver_tester" || editorAgentID != "agt_editor" || editorVersionID != "ver_editor" {
+		t.Fatalf("agent config = tester:%q/%q editor:%q/%q", testerAgentID, testerVersionID, editorAgentID, editorVersionID)
 	}
 }
 
@@ -1174,7 +1239,7 @@ func TestHandleRunsRequiresFieldsBeforeBundle(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "agent_set_id, mode, and tasks_json must be sent before bundle") {
+	if !strings.Contains(rec.Body.String(), "mode and tasks_json must be sent before bundle") {
 		t.Fatalf("body = %s", rec.Body.String())
 	}
 }
@@ -1192,6 +1257,24 @@ func setRequiredManagedConfigEnv(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/dari_docs")
 	t.Setenv("DARI_API_KEY", "dari_test")
 	t.Setenv("DARI_DOCS_SECRET_ENCRYPTION_KEY", testManagedSecretEncryptionKey())
+	setRequiredManagedAgentEnv(t)
+}
+
+func setRequiredManagedAgentEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("MANAGED_TESTER_AGENT_ID", "agt_tester")
+	t.Setenv("MANAGED_TESTER_VERSION_ID", "ver_tester")
+	t.Setenv("MANAGED_EDITOR_AGENT_ID", "agt_editor")
+	t.Setenv("MANAGED_EDITOR_VERSION_ID", "ver_editor")
+}
+
+func testManagedHostedAgentConfig() Config {
+	return Config{
+		ManagedTesterAgentID:   "agt_tester",
+		ManagedTesterVersionID: "ver_tester",
+		ManagedEditorAgentID:   "agt_editor",
+		ManagedEditorVersionID: "ver_editor",
+	}
 }
 
 func testManagedSecretEncryptionKey() string {
@@ -1235,21 +1318,14 @@ func insertStartingRunSession(t *testing.T, db *pgxpool.Pool) (userID, runID, se
 	ctx := context.Background()
 	userID = "usr_test_" + randomToken(8)
 	runID = "run_test_" + randomToken(8)
-	agentSetID := "mags_test_" + randomToken(8)
 	sessionID = "sess_test_" + randomToken(8)
 	if _, err := db.Exec(ctx, `INSERT INTO users (id, auth_subject, email) VALUES ($1, $2, $3)`, userID, "auth_"+userID, userID+"@example.test"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(ctx, `
-INSERT INTO agent_sets (id, user_id, tester_agent_id, editor_agent_id, tester_version_id, editor_version_id, tester_sha256, editor_sha256)
-VALUES ($1, $2, 'agt_tester', 'agt_editor', 'ver_tester', 'ver_editor', 'tester_sha', 'editor_sha')
-`, agentSetID, userID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(ctx, `
-INSERT INTO runs (id, user_id, mode, status, tasks, agent_set_id, bundle_file_id, bundle_sha256, bundle_files)
-VALUES ($1, $2, 'check', $3, '["task"]'::jsonb, $4, 'file_test', 'sha', 1)
-`, runID, userID, statusStarting, agentSetID); err != nil {
+INSERT INTO runs (id, user_id, mode, status, tasks, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_file_id, bundle_sha256, bundle_files)
+VALUES ($1, $2, 'check', $3, '["task"]'::jsonb, 'agt_tester', 'ver_tester', 'agt_editor', 'ver_editor', 'file_test', 'sha', 1)
+`, runID, userID, statusStarting); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(ctx, `
@@ -1266,6 +1342,5 @@ func cleanupRunSessionTestRows(userID, runID string, db *pgxpool.Pool) {
 	_, _ = db.Exec(ctx, `DELETE FROM credit_ledger WHERE run_id=$1 OR user_id=$2`, runID, userID)
 	_, _ = db.Exec(ctx, `DELETE FROM run_sessions WHERE run_id=$1`, runID)
 	_, _ = db.Exec(ctx, `DELETE FROM runs WHERE id=$1`, runID)
-	_, _ = db.Exec(ctx, `DELETE FROM agent_sets WHERE user_id=$1`, userID)
 	_, _ = db.Exec(ctx, `DELETE FROM users WHERE id=$1`, userID)
 }

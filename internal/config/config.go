@@ -7,13 +7,12 @@ import (
 )
 
 type Config struct {
-	TesterAgentID     string            `json:"tester_agent_id"`
-	EditorAgentID     string            `json:"editor_agent_id"`
-	ManagedAgentSetID string            `json:"managed_agent_set_id,omitempty"`
-	AgentsDir         string            `json:"agents_dir"`
-	LLMMode           string            `json:"llm_mode,omitempty"`
-	LLMAPIKeySecret   string            `json:"llm_api_key_secret,omitempty"`
-	LLMAPIKeySecrets  map[string]string `json:"llm_api_key_secrets,omitempty"`
+	TesterAgentID    string            `json:"tester_agent_id"`
+	EditorAgentID    string            `json:"editor_agent_id"`
+	AgentsDir        string            `json:"agents_dir"`
+	LLMMode          string            `json:"llm_mode,omitempty"`
+	LLMAPIKeySecret  string            `json:"llm_api_key_secret,omitempty"`
+	LLMAPIKeySecrets map[string]string `json:"llm_api_key_secrets,omitempty"`
 }
 
 func Path(repoRoot string) string { return filepath.Join(repoRoot, ".dari-docs", "config.json") }

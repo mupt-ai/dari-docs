@@ -4,8 +4,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,21 +36,6 @@ type UploadedFile struct {
 	ID        string `json:"id"`
 	Filename  string `json:"filename"`
 	SizeBytes int64  `json:"size_bytes"`
-}
-
-type SourceBundle struct {
-	Content []byte
-	SHA256  string
-}
-
-type StagedSourceBundle struct {
-	ID     string
-	SHA256 string
-}
-
-type PublishedAgent struct {
-	AgentID   string
-	VersionID string
 }
 
 type Session struct {
@@ -107,139 +90,6 @@ func (c *Client) UploadReader(ctx context.Context, filename string, r io.Reader)
 	var out UploadedFile
 	err = c.doJSON(ctx, http.MethodPost, "/v1/files", mw.FormDataContentType(), &body, &out)
 	return out, err
-}
-
-func NewSourceBundle(content []byte) SourceBundle {
-	sum := sha256.Sum256(content)
-	return SourceBundle{Content: content, SHA256: hex.EncodeToString(sum[:])}
-}
-
-func (c *Client) StageSourceBundle(ctx context.Context, bundle SourceBundle) (StagedSourceBundle, error) {
-	if bundle.SHA256 == "" {
-		bundle = NewSourceBundle(bundle.Content)
-	}
-	type reserveResponse struct {
-		SourceSnapshotID string            `json:"source_snapshot_id"`
-		UploadURL        string            `json:"upload_url"`
-		UploadHeaders    map[string]string `json:"upload_headers"`
-	}
-	type finalizeResponse struct {
-		Status        string `json:"status"`
-		FailureReason string `json:"failure_reason"`
-	}
-	var reserve reserveResponse
-	err := c.doJSON(ctx, http.MethodPost, "/v1/source-snapshots", "application/json", bytes.NewReader(mustJSON(map[string]any{
-		"format":     "tar.gz",
-		"sha256":     bundle.SHA256,
-		"size_bytes": len(bundle.Content),
-	})), &reserve)
-	if err != nil {
-		return StagedSourceBundle{}, fmt.Errorf("reserve source snapshot: %w", err)
-	}
-	if reserve.SourceSnapshotID == "" || reserve.UploadURL == "" {
-		return StagedSourceBundle{}, fmt.Errorf("reserve source snapshot response missing upload fields")
-	}
-	if err := uploadSigned(ctx, c.HTTP, reserve.UploadURL, bundle.Content, reserve.UploadHeaders); err != nil {
-		_ = c.deleteSourceSnapshot(context.Background(), reserve.SourceSnapshotID)
-		return StagedSourceBundle{}, fmt.Errorf("upload source snapshot: %w", err)
-	}
-	var finalize finalizeResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/v1/source-snapshots/"+url.PathEscape(reserve.SourceSnapshotID)+"/finalize", "", nil, &finalize); err != nil {
-		_ = c.deleteSourceSnapshot(context.Background(), reserve.SourceSnapshotID)
-		return StagedSourceBundle{}, fmt.Errorf("finalize source snapshot: %w", err)
-	}
-	if finalize.Status != "ready" {
-		_ = c.deleteSourceSnapshot(context.Background(), reserve.SourceSnapshotID)
-		if strings.TrimSpace(finalize.FailureReason) == "" {
-			finalize.FailureReason = "source snapshot failed verification"
-		}
-		return StagedSourceBundle{}, fmt.Errorf("finalize source snapshot: %s", finalize.FailureReason)
-	}
-	if err := c.doJSON(ctx, http.MethodGet, "/v1/source-snapshots/"+url.PathEscape(reserve.SourceSnapshotID)+"/manifest", "", nil, nil); err != nil {
-		_ = c.deleteSourceSnapshot(context.Background(), reserve.SourceSnapshotID)
-		return StagedSourceBundle{}, fmt.Errorf("validate manifest: %w", err)
-	}
-	return StagedSourceBundle{ID: reserve.SourceSnapshotID, SHA256: bundle.SHA256}, nil
-}
-
-func (c *Client) PublishAgentFromSnapshot(ctx context.Context, sourceSnapshotID, agentID string) (PublishedAgent, error) {
-	endpoint := "/v1/agents"
-	if agentID != "" {
-		endpoint = "/v1/agents/" + url.PathEscape(agentID) + "/versions"
-	}
-	var out map[string]any
-	if err := c.doJSON(ctx, http.MethodPost, endpoint, "application/json", bytes.NewReader(mustJSON(map[string]any{"source_snapshot_id": sourceSnapshotID})), &out); err != nil {
-		return PublishedAgent{}, fmt.Errorf("publish agent: %w", err)
-	}
-	published := PublishedAgent{}
-	if id, _ := out["agent_id"].(string); id != "" {
-		published.AgentID = id
-	}
-	if published.AgentID == "" {
-		if id, _ := out["id"].(string); id != "" && agentID == "" {
-			published.AgentID = id
-		}
-	}
-	if published.AgentID == "" {
-		published.AgentID = agentID
-	}
-	if versionID, _ := out["version_id"].(string); versionID != "" {
-		published.VersionID = versionID
-	}
-	if published.VersionID == "" {
-		if versionID, _ := out["id"].(string); versionID != "" && agentID != "" {
-			published.VersionID = versionID
-		}
-	}
-	if published.AgentID == "" {
-		return PublishedAgent{}, fmt.Errorf("publish agent response missing agent_id")
-	}
-	if published.VersionID == "" {
-		return PublishedAgent{}, fmt.Errorf("publish agent response missing version_id")
-	}
-	return published, nil
-}
-
-func (c *Client) DeploySourceBundle(ctx context.Context, bundle SourceBundle, agentID string) (string, error) {
-	staged, err := c.StageSourceBundle(ctx, bundle)
-	if err != nil {
-		return "", err
-	}
-	published, err := c.PublishAgentFromSnapshot(ctx, staged.ID, agentID)
-	if err != nil {
-		_ = c.DeleteSourceSnapshot(context.Background(), staged.ID)
-		return "", err
-	}
-	return published.AgentID, nil
-}
-
-func (c *Client) DeleteSourceSnapshot(ctx context.Context, id string) error {
-	return c.doJSON(ctx, http.MethodDelete, "/v1/source-snapshots/"+url.PathEscape(id), "", nil, nil)
-}
-
-func (c *Client) deleteSourceSnapshot(ctx context.Context, id string) error {
-	return c.DeleteSourceSnapshot(ctx, id)
-}
-
-func uploadSigned(ctx context.Context, client *http.Client, uploadURL string, content []byte, headers map[string]string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, uploadURL, bytes.NewReader(content))
-	if err != nil {
-		return err
-	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("http %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
-	}
-	_, _ = io.Copy(io.Discard, resp.Body)
-	return nil
 }
 
 func mustJSON(v any) []byte {

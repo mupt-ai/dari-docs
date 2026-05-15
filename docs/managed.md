@@ -2,25 +2,15 @@
 
 Managed mode runs `dari-docs` through the hosted dari.dev Docs service. Use it when you want to test and optimize docs without managing your own dari.dev org or API key.
 
-Under the hood, the tester and editor are ordinary dari.dev agents: folders of prompts, skills, setup scripts, and a `dari.yml` manifest. Managed mode deploys those agents to hosted endpoints so `dari-docs` can run remote tester and editor sessions without you operating the agent infrastructure.
+Under the hood, the tester and editor are ordinary dari.dev agents: folders of prompts, skills, setup scripts, and a `dari.yml` manifest. Managed mode runs sessions through hosted agents so you can test docs without deploying or operating agent infrastructure.
 
 ## Set up managed mode
 
-From your docs repo, log in, initialize local configuration, and deploy the bundled agents:
+From your docs repo, log in:
 
 ```bash
 dari-docs auth login
-dari-docs init
-dari-docs agents deploy --managed
 ```
-
-Agent deployment can continue after the CLI exits. If the command is interrupted while waiting, rerun the same command from the same repo to resume watching the pending deployment:
-
-```bash
-dari-docs agents deploy --managed
-```
-
-If you changed the local agent files and want to start a new deployment while another deployment is still pending, use `--force-new`.
 
 ## Run a managed check
 

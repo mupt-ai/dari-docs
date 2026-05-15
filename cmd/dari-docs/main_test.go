@@ -98,7 +98,7 @@ func TestExpandCSVListTrimsDeduplicatesAndSplits(t *testing.T) {
 	}
 }
 
-func TestManagedCheckRequiresLoginBeforeAgentSet(t *testing.T) {
+func TestManagedCheckRequiresLoginBeforeRunConfig(t *testing.T) {
 	repo := t.TempDir()
 	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
 
@@ -114,19 +114,13 @@ func TestManagedCheckRequiresLoginBeforeAgentSet(t *testing.T) {
 	}
 }
 
-func TestManagedAgentDeployRequiresLoginBeforeInit(t *testing.T) {
+func TestManagedAgentDeployManagedNoops(t *testing.T) {
 	repo := t.TempDir()
 	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
 
 	err := runAgents([]string{"deploy", "--managed", repo})
-	if err == nil {
-		t.Fatal("expected missing login error")
-	}
-	if !strings.Contains(err.Error(), "not logged in to managed service") {
-		t.Fatalf("error = %q, want login error", err.Error())
-	}
-	if strings.Contains(err.Error(), "missing local agents") {
-		t.Fatalf("error = %q, should not mention missing local agents before login", err.Error())
+	if err != nil {
+		t.Fatalf("managed agent deploy should be a no-op: %v", err)
 	}
 }
 
