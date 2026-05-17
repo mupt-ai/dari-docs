@@ -7,82 +7,16 @@ import (
 	"fmt"
 	"time"
 
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
-	"gorm.io/gorm/logger"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type managedRunStore struct {
-	db *gorm.DB
+	db *pgxpool.Pool
 }
 
-type managedRunModel struct {
-	ID                       string     `gorm:"column:id;primaryKey"`
-	UserID                   string     `gorm:"column:user_id"`
-	Mode                     string     `gorm:"column:mode"`
-	Status                   string     `gorm:"column:status"`
-	Tasks                    []byte     `gorm:"column:tasks"`
-	TesterAgentID            string     `gorm:"column:tester_agent_id"`
-	TesterVersionID          string     `gorm:"column:tester_version_id"`
-	EditorAgentID            string     `gorm:"column:editor_agent_id"`
-	EditorVersionID          string     `gorm:"column:editor_version_id"`
-	BundleFileID             *string    `gorm:"column:bundle_file_id"`
-	BundleSHA256             string     `gorm:"column:bundle_sha256"`
-	BundleFiles              int        `gorm:"column:bundle_files"`
-	LiveVerify               bool       `gorm:"column:live_verify"`
-	RuntimeSecretNames       []byte     `gorm:"column:runtime_secret_names"`
-	ReservedCents            int64      `gorm:"column:reserved_cents"`
-	ChargedCents             int64      `gorm:"column:charged_cents"`
-	CostStatus               *string    `gorm:"column:cost_status"`
-	Error                    *string    `gorm:"column:error"`
-	EditorSessionID          *string    `gorm:"column:editor_session_id"`
-	RuntimeSecretsNonce      []byte     `gorm:"column:runtime_secrets_nonce"`
-	RuntimeSecretsCiphertext []byte     `gorm:"column:runtime_secrets_ciphertext"`
-	CreatedAt                time.Time  `gorm:"column:created_at"`
-	UpdatedAt                time.Time  `gorm:"column:updated_at"`
-	CompletedAt              *time.Time `gorm:"column:completed_at"`
-}
-
-func (managedRunModel) TableName() string { return "runs" }
-
-type runSessionModel struct {
-	SessionID       string     `gorm:"column:session_id;primaryKey"`
-	RunID           string     `gorm:"column:run_id"`
-	Kind            string     `gorm:"column:kind"`
-	TaskIndex       int        `gorm:"column:task_index"`
-	Status          string     `gorm:"column:status"`
-	VersionID       string     `gorm:"column:version_id"`
-	CostCents       int64      `gorm:"column:cost_cents"`
-	ChargeCents     int64      `gorm:"column:charge_cents"`
-	LastPollError   *string    `gorm:"column:last_poll_error"`
-	LastPollErrorAt *time.Time `gorm:"column:last_poll_error_at"`
-	LastPolledAt    *time.Time `gorm:"column:last_polled_at"`
-	CreatedAt       time.Time  `gorm:"column:created_at"`
-	CompletedAt     *time.Time `gorm:"column:completed_at"`
-}
-
-func (runSessionModel) TableName() string { return "run_sessions" }
-
-type creditLedgerModel struct {
-	ID          string `gorm:"column:id;primaryKey"`
-	UserID      string `gorm:"column:user_id"`
-	AmountCents int64  `gorm:"column:amount_cents"`
-	Kind        string `gorm:"column:kind"`
-	SourceID    string `gorm:"column:source_id"`
-	RunID       string `gorm:"column:run_id"`
-}
-
-func (creditLedgerModel) TableName() string { return "credit_ledger" }
-
-func openManagedGormDB(databaseURL string) (*gorm.DB, error) {
-	return gorm.Open(postgres.Open(databaseURL), &gorm.Config{
-		SkipDefaultTransaction: true,
-		Logger:                 logger.Default.LogMode(logger.Silent),
-	})
-}
-
-func newManagedRunStore(db *gorm.DB) *managedRunStore {
+func newManagedRunStore(db *pgxpool.Pool) *managedRunStore {
 	return &managedRunStore{db: db}
 }
 
@@ -90,34 +24,59 @@ func (s *Server) runs() (*managedRunStore, error) {
 	if s.runStore != nil {
 		return s.runStore, nil
 	}
-	if s.gormDB == nil {
+	if s.db == nil {
 		return nil, errors.New("managed run store is not configured")
 	}
-	s.runStore = newManagedRunStore(s.gormDB)
+	s.runStore = newManagedRunStore(s.db)
 	return s.runStore, nil
 }
 
 func (store *managedRunStore) ClaimStartableRun(ctx context.Context) (queuedRun, bool, error) {
-	var model managedRunModel
-	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-			Where("status = ?", statusQueued).
-			Order("created_at").
-			First(&model).Error; err != nil {
-			return err
-		}
-		return tx.Model(&managedRunModel{}).
-			Where("id = ?", model.ID).
-			Updates(map[string]any{"status": statusStarting, "updated_at": time.Now()}).Error
-	})
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	tx, err := store.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return queuedRun{}, false, err
+	}
+	defer tx.Rollback(ctx)
+
+	run, err := scanQueuedRun(tx.QueryRow(ctx, `
+SELECT id,
+       user_id,
+       mode,
+       tasks,
+       tester_agent_id,
+       tester_version_id,
+       editor_agent_id,
+       editor_version_id,
+       COALESCE(bundle_file_id, ''),
+       bundle_sha256,
+       bundle_files,
+       live_verify,
+       runtime_secret_names,
+       reserved_cents
+FROM runs
+WHERE status=$1
+ORDER BY created_at
+FOR UPDATE SKIP LOCKED
+LIMIT 1
+`, statusQueued))
+	if errors.Is(err, pgx.ErrNoRows) {
 		return queuedRun{}, false, nil
 	}
 	if err != nil {
 		return queuedRun{}, false, err
 	}
-	run, err := model.toQueuedRun()
-	return run, err == nil, err
+	if _, err := tx.Exec(ctx, `
+UPDATE runs
+SET status=$1,
+    updated_at=now()
+WHERE id=$2
+`, statusStarting, run.ID); err != nil {
+		return queuedRun{}, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return queuedRun{}, false, err
+	}
+	return run, true, nil
 }
 
 func (store *managedRunStore) InsertStartedRunSession(
@@ -128,35 +87,40 @@ func (store *managedRunStore) InsertStartedRunSession(
 	taskIndex int,
 	versionID string,
 ) error {
-	return store.db.WithContext(ctx).
-		Clauses(clause.OnConflict{DoNothing: true}).
-		Create(&runSessionModel{
-			SessionID: sessionID,
-			RunID:     runID,
-			Kind:      kind,
-			TaskIndex: taskIndex,
-			Status:    statusRunning,
-			VersionID: versionID,
-		}).Error
+	_, err := store.db.Exec(ctx, `
+INSERT INTO run_sessions (session_id, run_id, kind, task_index, status, version_id)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (session_id) DO NOTHING
+`, sessionID, runID, kind, taskIndex, statusRunning, versionID)
+	return err
 }
 
 func (store *managedRunStore) MarkRunRunningFromStarting(ctx context.Context, runID string) error {
-	return store.db.WithContext(ctx).Model(&managedRunModel{}).
-		Where("id = ?", runID).
-		Where("status = ?", statusStarting).
-		Updates(map[string]any{"status": statusRunning, "updated_at": time.Now()}).Error
+	_, err := store.db.Exec(ctx, `
+UPDATE runs
+SET status=$1,
+    updated_at=now()
+WHERE id=$2
+  AND status=$3
+`, statusRunning, runID, statusStarting)
+	return err
 }
 
 func (store *managedRunStore) RecoverStaleStartingRuns(ctx context.Context, staleBefore time.Time) error {
-	subquery := store.db.Model(&runSessionModel{}).
-		Select("1").
-		Where("run_sessions.run_id = runs.id").
-		Where("run_sessions.status IN ?", []string{statusStarting, statusRunning})
-	return store.db.WithContext(ctx).Model(&managedRunModel{}).
-		Where("status = ?", statusStarting).
-		Where("updated_at < ?", staleBefore).
-		Where("NOT EXISTS (?)", subquery).
-		Updates(map[string]any{"status": statusQueued, "updated_at": time.Now()}).Error
+	_, err := store.db.Exec(ctx, `
+UPDATE runs
+SET status=$1,
+    updated_at=now()
+WHERE status=$2
+  AND updated_at < $3
+  AND NOT EXISTS (
+    SELECT 1
+    FROM run_sessions
+    WHERE run_sessions.run_id = runs.id
+      AND run_sessions.status = ANY($4)
+  )
+`, statusQueued, statusStarting, staleBefore, []string{statusStarting, statusRunning})
+	return err
 }
 
 func (store *managedRunStore) RecoverStaleUploadingRuns(
@@ -164,65 +128,92 @@ func (store *managedRunStore) RecoverStaleUploadingRuns(
 	staleBefore time.Time,
 	code persistedErrorCode,
 ) ([]queuedRun, error) {
-	var models []managedRunModel
-	err := store.db.WithContext(ctx).Model(&models).
-		Clauses(clause.Returning{Columns: []clause.Column{{Name: "id"}, {Name: "reserved_cents"}}}).
-		Where("status = ?", statusUploading).
-		Where("updated_at < ?", staleBefore).
-		Updates(map[string]any{
-			"status":       statusFailed,
-			"error":        persistedErrorString(code),
-			"updated_at":   time.Now(),
-			"completed_at": time.Now(),
-		}).Error
+	rows, err := store.db.Query(ctx, `
+UPDATE runs
+SET status=$1,
+    error=$2,
+    updated_at=now(),
+    completed_at=now()
+WHERE status=$3
+  AND updated_at < $4
+RETURNING id, reserved_cents
+`, statusFailed, persistedErrorString(code), statusUploading, staleBefore)
 	if err != nil {
 		return nil, err
 	}
-	runs := make([]queuedRun, 0, len(models))
-	for _, model := range models {
-		runs = append(runs, queuedRun{ID: model.ID, ReservedCents: model.ReservedCents})
+	defer rows.Close()
+
+	runs := []queuedRun{}
+	for rows.Next() {
+		var run queuedRun
+		if err := rows.Scan(&run.ID, &run.ReservedCents); err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return runs, nil
 }
 
 func (store *managedRunStore) ListRunningSessions(ctx context.Context, limit int) ([]runSessionRecord, error) {
-	var models []runSessionModel
-	if err := store.db.WithContext(ctx).
-		Where("status = ?", statusRunning).
-		Order("created_at").
-		Limit(limit).
-		Find(&models).Error; err != nil {
+	rows, err := store.db.Query(ctx, `
+SELECT session_id,
+       run_id,
+       kind,
+       task_index,
+       status,
+       created_at,
+       last_poll_error_at,
+       COALESCE(last_poll_error, '')
+FROM run_sessions
+WHERE status=$1
+ORDER BY created_at
+LIMIT $2
+`, statusRunning, limit)
+	if err != nil {
 		return nil, err
 	}
-	return sessionModelsToRecords(models), nil
+	defer rows.Close()
+	return scanRunSessionRecords(rows)
 }
 
 func (store *managedRunStore) MarkSessionCompleted(ctx context.Context, sessionID string) error {
-	return store.updateRunningSession(ctx, sessionID, map[string]any{
-		"status":             statusCompleted,
-		"completed_at":       time.Now(),
-		"last_polled_at":     time.Now(),
-		"last_poll_error_at": nil,
-		"last_poll_error":    nil,
-	})
+	return store.updateRunningSession(ctx, sessionID, `
+UPDATE run_sessions
+SET status=$1,
+    completed_at=now(),
+    last_polled_at=now(),
+    last_poll_error_at=NULL,
+    last_poll_error=NULL
+WHERE session_id=$2
+  AND status=$3
+`, statusCompleted, sessionID, statusRunning)
 }
 
 func (store *managedRunStore) MarkSessionFailed(ctx context.Context, sessionID string, code persistedErrorCode) error {
-	return store.updateRunningSession(ctx, sessionID, map[string]any{
-		"status":             statusFailed,
-		"completed_at":       time.Now(),
-		"last_polled_at":     time.Now(),
-		"last_poll_error_at": nil,
-		"last_poll_error":    persistedErrorString(code),
-	})
+	return store.updateRunningSession(ctx, sessionID, `
+UPDATE run_sessions
+SET status=$1,
+    completed_at=now(),
+    last_polled_at=now(),
+    last_poll_error_at=NULL,
+    last_poll_error=$2
+WHERE session_id=$3
+  AND status=$4
+`, statusFailed, persistedErrorString(code), sessionID, statusRunning)
 }
 
 func (store *managedRunStore) MarkSessionPollSucceeded(ctx context.Context, sessionID string) error {
-	return store.updateRunningSession(ctx, sessionID, map[string]any{
-		"last_polled_at":     time.Now(),
-		"last_poll_error_at": nil,
-		"last_poll_error":    nil,
-	})
+	return store.updateRunningSession(ctx, sessionID, `
+UPDATE run_sessions
+SET last_polled_at=now(),
+    last_poll_error_at=NULL,
+    last_poll_error=NULL
+WHERE session_id=$1
+  AND status=$2
+`, sessionID, statusRunning)
 }
 
 func (store *managedRunStore) RecordSessionPollError(
@@ -231,61 +222,89 @@ func (store *managedRunStore) RecordSessionPollError(
 	code persistedErrorCode,
 ) (time.Time, error) {
 	firstErrorAt := session.LastPollErrorAt
-	updates := map[string]any{
-		"last_polled_at":  time.Now(),
-		"last_poll_error": persistedErrorString(code),
-	}
 	if firstErrorAt == nil {
 		now := time.Now()
 		firstErrorAt = &now
-		updates["last_poll_error_at"] = now
+		_, err := store.db.Exec(ctx, `
+UPDATE run_sessions
+SET last_polled_at=now(),
+    last_poll_error=$1,
+    last_poll_error_at=$2
+WHERE session_id=$3
+  AND status=$4
+`, persistedErrorString(code), now, session.ID, session.Status)
+		return *firstErrorAt, err
 	}
-	return *firstErrorAt, store.db.WithContext(ctx).Model(&runSessionModel{}).
-		Where("session_id = ?", session.ID).
-		Where("status = ?", session.Status).
-		Updates(updates).Error
+
+	_, err := store.db.Exec(ctx, `
+UPDATE run_sessions
+SET last_polled_at=now(),
+    last_poll_error=$1
+WHERE session_id=$2
+  AND status=$3
+`, persistedErrorString(code), session.ID, session.Status)
+	return *firstErrorAt, err
 }
 
 func (store *managedRunStore) FailRunSession(ctx context.Context, session runSessionRecord, code persistedErrorCode) (bool, error) {
-	result := store.db.WithContext(ctx).Model(&runSessionModel{}).
-		Where("session_id = ?", session.ID).
-		Where("status = ?", session.Status).
-		Updates(map[string]any{
-			"status":          statusFailed,
-			"completed_at":    time.Now(),
-			"last_polled_at":  time.Now(),
-			"last_poll_error": persistedErrorString(code),
-		})
-	return result.RowsAffected > 0, result.Error
+	commandTag, err := store.db.Exec(ctx, `
+UPDATE run_sessions
+SET status=$1,
+    completed_at=now(),
+    last_polled_at=now(),
+    last_poll_error=$2
+WHERE session_id=$3
+  AND status=$4
+`, statusFailed, persistedErrorString(code), session.ID, session.Status)
+	return commandTag.RowsAffected() > 0, err
 }
 
 func (store *managedRunStore) MarkRunRunningIfStartable(ctx context.Context, runID string) error {
-	return store.db.WithContext(ctx).Model(&managedRunModel{}).
-		Where("id = ?", runID).
-		Where("status IN ?", []string{statusQueued, statusStarting}).
-		Updates(map[string]any{"status": statusRunning, "updated_at": time.Now()}).Error
+	_, err := store.db.Exec(ctx, `
+UPDATE runs
+SET status=$1,
+    updated_at=now()
+WHERE id=$2
+  AND status = ANY($3)
+`, statusRunning, runID, []string{statusQueued, statusStarting})
+	return err
 }
 
 func (store *managedRunStore) MarkRunQueuedIfActive(ctx context.Context, runID string) error {
-	return store.db.WithContext(ctx).Model(&managedRunModel{}).
-		Where("id = ?", runID).
-		Where("status IN ?", []string{statusQueued, statusRunning, statusStarting}).
-		Updates(map[string]any{"status": statusQueued, "updated_at": time.Now()}).Error
+	_, err := store.db.Exec(ctx, `
+UPDATE runs
+SET status=$1,
+    updated_at=now()
+WHERE id=$2
+  AND status = ANY($3)
+`, statusQueued, runID, []string{statusQueued, statusRunning, statusStarting})
+	return err
 }
 
 func (store *managedRunStore) LoadActiveRun(ctx context.Context, runID string) (queuedRun, error) {
-	var model managedRunModel
-	err := store.db.WithContext(ctx).
-		Where("id = ?", runID).
-		Where("status IN ?", []string{statusQueued, statusStarting, statusRunning}).
-		First(&model).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	run, err := scanQueuedRun(store.db.QueryRow(ctx, `
+SELECT id,
+       user_id,
+       mode,
+       tasks,
+       tester_agent_id,
+       tester_version_id,
+       editor_agent_id,
+       editor_version_id,
+       COALESCE(bundle_file_id, ''),
+       bundle_sha256,
+       bundle_files,
+       live_verify,
+       runtime_secret_names,
+       reserved_cents
+FROM runs
+WHERE id=$1
+  AND status = ANY($2)
+`, runID, []string{statusQueued, statusStarting, statusRunning}))
+	if errors.Is(err, pgx.ErrNoRows) {
 		return queuedRun{}, nil
 	}
-	if err != nil {
-		return queuedRun{}, err
-	}
-	return model.toQueuedRun()
+	return run, err
 }
 
 func (store *managedRunStore) FinishRun(
@@ -294,146 +313,223 @@ func (store *managedRunStore) FinishRun(
 	editorSessionID string,
 	failureCode persistedErrorCode,
 ) (bool, error) {
-	updates := map[string]any{
-		"updated_at":   time.Now(),
-		"completed_at": time.Now(),
-	}
+	var commandTag pgconnCommandTag
+	var err error
+	activeStatuses := []string{statusQueued, statusStarting, statusRunning}
 	if failureCode != "" {
-		updates["status"] = statusFailed
-		updates["error"] = persistedErrorString(failureCode)
+		commandTag, err = store.exec(ctx, `
+UPDATE runs
+SET status=$1,
+    error=$2,
+    updated_at=now(),
+    completed_at=now()
+WHERE id=$3
+  AND status = ANY($4)
+`, statusFailed, persistedErrorString(failureCode), run.ID, activeStatuses)
 	} else {
-		updates["status"] = statusCompleted
-		updates["error"] = nil
-		updates["editor_session_id"] = editorSessionID
+		commandTag, err = store.exec(ctx, `
+UPDATE runs
+SET status=$1,
+    error=NULL,
+    editor_session_id=$2,
+    updated_at=now(),
+    completed_at=now()
+WHERE id=$3
+  AND status = ANY($4)
+`, statusCompleted, editorSessionID, run.ID, activeStatuses)
 	}
-	result := store.db.WithContext(ctx).Model(&managedRunModel{}).
-		Where("id = ?", run.ID).
-		Where("status IN ?", []string{statusQueued, statusStarting, statusRunning}).
-		Updates(updates)
-	return result.RowsAffected > 0, result.Error
+	return commandTag.RowsAffected() > 0, err
 }
 
 func (store *managedRunStore) ListUnsettledRuns(ctx context.Context, limit int) ([]queuedRun, error) {
-	var models []managedRunModel
-	if err := store.db.WithContext(ctx).
-		Where("status IN ?", []string{statusCompleted, statusFailed}).
-		Where("cost_status IS NULL OR cost_status = ?", "estimated").
-		Order("completed_at NULLS FIRST, updated_at").
-		Limit(limit).
-		Find(&models).Error; err != nil {
+	rows, err := store.db.Query(ctx, `
+SELECT id, reserved_cents
+FROM runs
+WHERE status = ANY($1)
+  AND (cost_status IS NULL OR cost_status=$2)
+ORDER BY completed_at NULLS FIRST, updated_at
+LIMIT $3
+`, []string{statusCompleted, statusFailed}, "estimated", limit)
+	if err != nil {
 		return nil, err
 	}
-	runs := make([]queuedRun, 0, len(models))
-	for _, model := range models {
-		runs = append(runs, queuedRun{ID: model.ID, ReservedCents: model.ReservedCents})
+	defer rows.Close()
+
+	runs := []queuedRun{}
+	for rows.Next() {
+		var run queuedRun
+		if err := rows.Scan(&run.ID, &run.ReservedCents); err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return runs, nil
 }
 
 func (store *managedRunStore) LoadRunSessions(ctx context.Context, runID string) ([]runSessionRecord, error) {
-	var models []runSessionModel
-	if err := store.db.WithContext(ctx).
-		Where("run_id = ?", runID).
-		Order("created_at").
-		Find(&models).Error; err != nil {
+	rows, err := store.db.Query(ctx, `
+SELECT session_id,
+       run_id,
+       kind,
+       task_index,
+       status,
+       created_at,
+       last_poll_error_at,
+       COALESCE(last_poll_error, '')
+FROM run_sessions
+WHERE run_id=$1
+ORDER BY created_at
+`, runID)
+	if err != nil {
 		return nil, err
 	}
-	return sessionModelsToRecords(models), nil
+	defer rows.Close()
+	return scanRunSessionRecords(rows)
 }
 
 func (store *managedRunStore) ListRunSessionIDs(ctx context.Context, runID string) ([]string, error) {
-	var ids []string
-	if err := store.db.WithContext(ctx).Model(&runSessionModel{}).
-		Where("run_id = ?", runID).
-		Pluck("session_id", &ids).Error; err != nil {
+	rows, err := store.db.Query(ctx, `
+SELECT session_id
+FROM run_sessions
+WHERE run_id=$1
+`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return ids, nil
 }
 
 func (store *managedRunStore) UpdateSessionCost(ctx context.Context, sessionID string, costCents, chargeCents int64) error {
-	return store.db.WithContext(ctx).Model(&runSessionModel{}).
-		Where("session_id = ?", sessionID).
-		Updates(map[string]any{"cost_cents": costCents, "charge_cents": chargeCents}).Error
+	_, err := store.db.Exec(ctx, `
+UPDATE run_sessions
+SET cost_cents=$1,
+    charge_cents=$2
+WHERE session_id=$3
+`, costCents, chargeCents, sessionID)
+	return err
 }
 
-func (store *managedRunStore) InsertRunLedgerAdjustment(ctx context.Context, runID string, amountCents int64, kind, sourceID string) error {
-	var run managedRunModel
-	if err := store.db.WithContext(ctx).Select("id", "user_id").First(&run, "id = ?", runID).Error; err != nil {
+func (store *managedRunStore) InsertRunLedgerAdjustment(
+	ctx context.Context,
+	runID string,
+	amountCents int64,
+	kind string,
+	sourceID string,
+) error {
+	var userID string
+	if err := store.db.QueryRow(ctx, `
+SELECT user_id
+FROM runs
+WHERE id=$1
+`, runID).Scan(&userID); err != nil {
 		return err
 	}
-	return store.db.WithContext(ctx).
-		Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "source_id"}}, DoNothing: true}).
-		Create(&creditLedgerModel{
-			ID:          "led_" + randomToken(18),
-			UserID:      run.UserID,
-			AmountCents: amountCents,
-			Kind:        kind,
-			SourceID:    sourceID,
-			RunID:       runID,
-		}).Error
+	_, err := store.db.Exec(ctx, `
+INSERT INTO credit_ledger (id, user_id, amount_cents, kind, source_id, run_id)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (source_id) DO NOTHING
+`, "led_"+randomToken(18), userID, amountCents, kind, sourceID, runID)
+	return err
 }
 
 func (store *managedRunStore) MarkRunSettled(ctx context.Context, runID string, totalCharge int64, costStatus string) error {
-	return store.db.WithContext(ctx).Model(&managedRunModel{}).
-		Where("id = ?", runID).
-		Updates(map[string]any{"charged_cents": totalCharge, "cost_status": costStatus}).Error
+	_, err := store.db.Exec(ctx, `
+UPDATE runs
+SET charged_cents=$1,
+    cost_status=$2
+WHERE id=$3
+`, totalCharge, costStatus, runID)
+	return err
 }
 
-func (store *managedRunStore) updateRunningSession(ctx context.Context, sessionID string, updates map[string]any) error {
-	return store.db.WithContext(ctx).Model(&runSessionModel{}).
-		Where("session_id = ?", sessionID).
-		Where("status = ?", statusRunning).
-		Updates(updates).Error
+func (store *managedRunStore) updateRunningSession(ctx context.Context, sql string, args ...any) error {
+	_, err := store.db.Exec(ctx, sql, args...)
+	return err
 }
 
-func (model managedRunModel) toQueuedRun() (queuedRun, error) {
-	run := queuedRun{
-		ID:              model.ID,
-		UserID:          model.UserID,
-		Mode:            model.Mode,
-		TesterAgentID:   model.TesterAgentID,
-		TesterVersionID: model.TesterVersionID,
-		EditorAgentID:   model.EditorAgentID,
-		EditorVersionID: model.EditorVersionID,
-		BundleSHA256:    model.BundleSHA256,
-		BundleFiles:     model.BundleFiles,
-		LiveVerify:      model.LiveVerify,
-		ReservedCents:   model.ReservedCents,
+func scanQueuedRun(row pgx.Row) (queuedRun, error) {
+	var run queuedRun
+	var tasksJSON []byte
+	var secretNamesJSON []byte
+	if err := row.Scan(
+		&run.ID,
+		&run.UserID,
+		&run.Mode,
+		&tasksJSON,
+		&run.TesterAgentID,
+		&run.TesterVersionID,
+		&run.EditorAgentID,
+		&run.EditorVersionID,
+		&run.BundleFileID,
+		&run.BundleSHA256,
+		&run.BundleFiles,
+		&run.LiveVerify,
+		&secretNamesJSON,
+		&run.ReservedCents,
+	); err != nil {
+		return queuedRun{}, err
 	}
-	if model.BundleFileID != nil {
-		run.BundleFileID = *model.BundleFileID
-	}
-	if len(model.Tasks) > 0 {
-		if err := json.Unmarshal(model.Tasks, &run.Tasks); err != nil {
+	if len(tasksJSON) > 0 {
+		if err := json.Unmarshal(tasksJSON, &run.Tasks); err != nil {
 			return queuedRun{}, fmt.Errorf("decode run tasks: %w", err)
 		}
 	}
-	if len(model.RuntimeSecretNames) > 0 {
-		if err := json.Unmarshal(model.RuntimeSecretNames, &run.SecretNames); err != nil {
+	if len(secretNamesJSON) > 0 {
+		if err := json.Unmarshal(secretNamesJSON, &run.SecretNames); err != nil {
 			return queuedRun{}, fmt.Errorf("decode runtime secret names: %w", err)
 		}
 	}
 	return run, nil
 }
 
-func sessionModelsToRecords(models []runSessionModel) []runSessionRecord {
-	records := make([]runSessionRecord, 0, len(models))
-	for _, model := range models {
-		lastPollError := ""
-		if model.LastPollError != nil {
-			lastPollError = *model.LastPollError
+func scanRunSessionRecords(rows pgx.Rows) ([]runSessionRecord, error) {
+	records := []runSessionRecord{}
+	for rows.Next() {
+		var record runSessionRecord
+		var lastPollErrorAt pgtype.Timestamptz
+		if err := rows.Scan(
+			&record.ID,
+			&record.RunID,
+			&record.Kind,
+			&record.TaskIndex,
+			&record.Status,
+			&record.CreatedAt,
+			&lastPollErrorAt,
+			&record.LastPollError,
+		); err != nil {
+			return nil, err
 		}
-		records = append(records, runSessionRecord{
-			ID:              model.SessionID,
-			RunID:           model.RunID,
-			Kind:            model.Kind,
-			TaskIndex:       model.TaskIndex,
-			Status:          model.Status,
-			CreatedAt:       model.CreatedAt,
-			LastPollErrorAt: model.LastPollErrorAt,
-			LastPollError:   lastPollError,
-		})
+		if lastPollErrorAt.Valid {
+			record.LastPollErrorAt = &lastPollErrorAt.Time
+		}
+		records = append(records, record)
 	}
-	return records
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
+type pgconnCommandTag interface {
+	RowsAffected() int64
+}
+
+func (store *managedRunStore) exec(ctx context.Context, sql string, args ...any) (pgconnCommandTag, error) {
+	return store.db.Exec(ctx, sql, args...)
 }
