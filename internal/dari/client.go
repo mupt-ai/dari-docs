@@ -24,6 +24,17 @@ type Client struct {
 
 const DefaultWorkspaceZipMaxUncompressedBytes int64 = 100 * 1024 * 1024
 
+type HTTPError struct {
+	Method     string
+	Path       string
+	StatusCode int
+	Body       string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("%s %s: http %d: %s", e.Method, e.Path, e.StatusCode, e.Body)
+}
+
 func New(baseURL, apiKey string) *Client {
 	if baseURL == "" {
 		baseURL = "https://api.dari.dev"
@@ -46,6 +57,17 @@ type Session struct {
 	Status            string  `json:"status"`
 	LastMessageID     *string `json:"last_message_id"`
 	LastMessageStatus *string `json:"last_message_status"`
+}
+
+type AgentVersionDetail struct {
+	Agent struct {
+		ID              string  `json:"id"`
+		ActiveVersionID *string `json:"active_version_id"`
+	} `json:"agent"`
+	Version struct {
+		ID      string `json:"id"`
+		AgentID string `json:"agent_id"`
+	} `json:"version"`
 }
 
 type MessageSummary struct {
@@ -127,6 +149,12 @@ func (c *Client) SendUserMessage(ctx context.Context, sessionID string, content 
 func (c *Client) GetSession(ctx context.Context, sessionID string) (Session, error) {
 	var out Session
 	err := c.doJSON(ctx, http.MethodGet, "/v1/sessions/"+url.PathEscape(sessionID), "", nil, &out)
+	return out, err
+}
+
+func (c *Client) GetAgentVersion(ctx context.Context, agentID string, versionID string) (AgentVersionDetail, error) {
+	var out AgentVersionDetail
+	err := c.doJSON(ctx, http.MethodGet, "/v1/agents/"+url.PathEscape(agentID)+"/versions/"+url.PathEscape(versionID), "", nil, &out)
 	return out, err
 }
 
@@ -368,7 +396,7 @@ func (c *Client) doJSON(ctx context.Context, method, path, contentType string, b
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s %s: http %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(b)))
+		return &HTTPError{Method: method, Path: path, StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(b))}
 	}
 	if out == nil || len(b) == 0 {
 		return nil

@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -33,6 +34,41 @@ func TestCreateSessionSendsLLMID(t *testing.T) {
 	_, err := New(server.URL, "dari_test").CreateSession(context.Background(), "agt_test", CreateSessionRequest{LLMID: "smart-claude"})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGetAgentVersionParsesVersionDetail(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/agents/agt_test/versions/ver_test" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"agent":{"id":"agt_test","active_version_id":"ver_test"},"version":{"id":"ver_test","agent_id":"agt_test"}}`))
+	}))
+	defer server.Close()
+
+	detail, err := New(server.URL, "dari_test").GetAgentVersion(context.Background(), "agt_test", "ver_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Agent.ID != "agt_test" || detail.Version.ID != "ver_test" || detail.Version.AgentID != "agt_test" {
+		t.Fatalf("detail = %#v", detail)
+	}
+}
+
+func TestGetAgentVersionReturnsHTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "missing version", http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	_, err := New(server.URL, "dari_test").GetAgentVersion(context.Background(), "agt_test", "ver_missing")
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("err = %T %[1]v, want HTTPError", err)
+	}
+	if httpErr.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", httpErr.StatusCode, http.StatusNotFound)
 	}
 }
 
