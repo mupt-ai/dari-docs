@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mupt-ai/dari-docs/internal/dari"
+	"gorm.io/gorm"
 )
 
 const (
@@ -31,6 +32,8 @@ const (
 type Server struct {
 	cfg        Config
 	db         *pgxpool.Pool
+	gormDB     *gorm.DB
+	runStore   *managedRunStore
 	dari       *dari.Client
 	httpClient *http.Client
 }
@@ -44,7 +47,16 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer db.Close()
-	s := &Server{cfg: cfg, db: db, dari: dari.New(cfg.DariAPIBaseURL, cfg.DariAPIKey), httpClient: &http.Client{Timeout: cfg.OutboundHTTPTimeout}}
+	gormDB, err := openManagedGormDB(cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	gormSQLDB, err := gormDB.DB()
+	if err != nil {
+		return err
+	}
+	defer gormSQLDB.Close()
+	s := &Server{cfg: cfg, db: db, gormDB: gormDB, runStore: newManagedRunStore(gormDB), dari: dari.New(cfg.DariAPIBaseURL, cfg.DariAPIKey), httpClient: &http.Client{Timeout: cfg.OutboundHTTPTimeout}}
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           s.routes(),

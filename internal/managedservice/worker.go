@@ -2,14 +2,10 @@ package managedservice
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/mupt-ai/dari-docs/internal/bundle"
 	"github.com/mupt-ai/dari-docs/internal/dari"
 	"github.com/mupt-ai/dari-docs/internal/runner"
@@ -118,35 +114,11 @@ func (s *Server) startAvailableSessions(ctx context.Context) error {
 }
 
 func (s *Server) claimStartableRun(ctx context.Context) (queuedRun, bool, error) {
-	var run queuedRun
-	var tasksJSON, secretNamesJSON []byte
-	err := s.db.QueryRow(ctx, `
-UPDATE runs r SET status=$1, updated_at=now()
-WHERE r.id = (
-  SELECT id FROM runs WHERE status=$2 ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED
-	)
-	RETURNING r.id, r.user_id, r.mode, r.tasks,
-	  r.tester_agent_id,
-	  r.tester_version_id,
-	  r.editor_agent_id,
-	  r.editor_version_id,
-	  coalesce(r.bundle_file_id,''), r.bundle_sha256, r.bundle_files, r.live_verify, r.runtime_secret_names, r.reserved_cents
-	`, statusStarting, statusQueued).Scan(
-		&run.ID, &run.UserID, &run.Mode, &tasksJSON,
-		&run.TesterAgentID, &run.TesterVersionID, &run.EditorAgentID, &run.EditorVersionID,
-		&run.BundleFileID, &run.BundleSHA256, &run.BundleFiles, &run.LiveVerify, &secretNamesJSON, &run.ReservedCents,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return queuedRun{}, false, nil
-	}
+	store, err := s.runs()
 	if err != nil {
 		return queuedRun{}, false, err
 	}
-	if err := json.Unmarshal(tasksJSON, &run.Tasks); err != nil {
-		return queuedRun{}, false, err
-	}
-	_ = json.Unmarshal(secretNamesJSON, &run.SecretNames)
-	return run, true, nil
+	return store.ClaimStartableRun(ctx)
 }
 
 func (s *Server) startNextSession(ctx context.Context, run queuedRun) error {
@@ -206,19 +178,17 @@ func (s *Server) startSingleSessionBatch(ctx context.Context, run queuedRun, nex
 	if versionID == "" {
 		versionID = next.VersionID
 	}
-	_, err = s.db.Exec(ctx, `
-INSERT INTO run_sessions (session_id, run_id, kind, task_index, status, version_id)
-VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (session_id) DO NOTHING
-`, item.SessionID, run.ID, next.Kind, next.TaskIndex, statusRunning, versionID)
+	store, err := s.runs()
 	if err != nil {
+		return err
+	}
+	if err := store.InsertStartedRunSession(ctx, item.SessionID, run.ID, next.Kind, next.TaskIndex, versionID); err != nil {
 		return err
 	}
 	if isFinalSecretBearingSession(run, next) {
 		s.clearRuntimeSecrets(ctx, run.ID)
 	}
-	_, err = s.db.Exec(ctx, `UPDATE runs SET status=$2, updated_at=now() WHERE id=$1 AND status=$3`, run.ID, statusRunning, statusStarting)
-	return err
+	return store.MarkRunRunningFromStarting(ctx, run.ID)
 }
 
 func managedSessionMetadata(run queuedRun, next nextSession) map[string]string {
@@ -281,6 +251,10 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun) error {
 	if err != nil {
 		return s.failStartedRun(ctx, run, persistedErrSessionCreateFailed, fmt.Errorf("create tester session batch: %w", err))
 	}
+	store, err := s.runs()
+	if err != nil {
+		return err
+	}
 	var createErr error
 	for _, item := range batch.Sessions {
 		if item.Index < 0 || item.Index >= len(run.Tasks) {
@@ -296,12 +270,7 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun) error {
 		if versionID == "" {
 			versionID = run.TesterVersionID
 		}
-		_, err := s.db.Exec(ctx, `
-INSERT INTO run_sessions (session_id, run_id, kind, task_index, status, version_id)
-VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (session_id) DO NOTHING
-`, item.SessionID, run.ID, "tester", item.Index+1, statusRunning, versionID)
-		if err != nil {
+		if err := store.InsertStartedRunSession(ctx, item.SessionID, run.ID, "tester", item.Index+1, versionID); err != nil {
 			return err
 		}
 	}
@@ -314,8 +283,7 @@ ON CONFLICT (session_id) DO NOTHING
 	if run.Mode == "check" {
 		s.clearRuntimeSecrets(ctx, run.ID)
 	}
-	_, err = s.db.Exec(ctx, `UPDATE runs SET status=$2, updated_at=now() WHERE id=$1 AND status=$3`, run.ID, statusRunning, statusStarting)
-	return err
+	return store.MarkRunRunningFromStarting(ctx, run.ID)
 }
 
 func (s *Server) nextSession(ctx context.Context, run queuedRun, sessions []runSessionRecord) (nextSession, bool, error) {
@@ -378,62 +346,36 @@ func (s *Server) failStartedRun(ctx context.Context, run queuedRun, code persist
 }
 
 func (s *Server) recoverStaleStartingRuns(ctx context.Context) error {
-	_, err := s.db.Exec(ctx, `
-UPDATE runs
-SET status=$1, updated_at=now()
-WHERE status=$2 AND updated_at < now() - interval '2 minutes'
-  AND NOT EXISTS (
-    SELECT 1 FROM run_sessions
-    WHERE run_sessions.run_id = runs.id AND run_sessions.status IN ($3, $4)
-  )
-	`, statusQueued, statusStarting, statusStarting, statusRunning)
-	return err
+	store, err := s.runs()
+	if err != nil {
+		return err
+	}
+	return store.RecoverStaleStartingRuns(ctx, time.Now().Add(-2*time.Minute))
 }
 
 func (s *Server) recoverStaleUploadingRuns(ctx context.Context) error {
-	rows, err := s.db.Query(ctx, `
-UPDATE runs
-SET status=$1, error=$3, updated_at=now(), completed_at=now()
-WHERE status=$2 AND updated_at < now() - interval '10 minutes'
-RETURNING id, reserved_cents
-`, statusFailed, statusUploading, persistedErrorString(persistedErrBundleUploadIncomplete))
+	store, err := s.runs()
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var runID string
-		var reserve int64
-		if err := rows.Scan(&runID, &reserve); err != nil {
-			return err
-		}
-		s.clearRuntimeSecrets(ctx, runID)
-		s.releaseReservation(ctx, runID, reserve)
+	runs, err := store.RecoverStaleUploadingRuns(ctx, time.Now().Add(-10*time.Minute), persistedErrBundleUploadIncomplete)
+	if err != nil {
+		return err
 	}
-	return rows.Err()
+	for _, run := range runs {
+		s.clearRuntimeSecrets(ctx, run.ID)
+		s.releaseReservation(ctx, run.ID, run.ReservedCents)
+	}
+	return nil
 }
 
 func (s *Server) reconcileRunningSessions(ctx context.Context) error {
-	rows, err := s.db.Query(ctx, `
-SELECT session_id, run_id, kind, task_index, status, created_at, last_poll_error_at
-FROM run_sessions
-WHERE status=$1
-ORDER BY created_at
-LIMIT 50
-`, statusRunning)
+	store, err := s.runs()
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	var sessions []runSessionRecord
-	for rows.Next() {
-		var session runSessionRecord
-		if err := rows.Scan(&session.ID, &session.RunID, &session.Kind, &session.TaskIndex, &session.Status, &session.CreatedAt, &session.LastPollErrorAt); err != nil {
-			return err
-		}
-		sessions = append(sessions, session)
-	}
-	if err := rows.Err(); err != nil {
+	sessions, err := store.ListRunningSessions(ctx, 50)
+	if err != nil {
 		return err
 	}
 	for _, session := range sessions {
@@ -460,24 +402,18 @@ func (s *Server) reconcileSession(ctx context.Context, session runSessionRecord)
 	if remote.LastMessageStatus != nil {
 		lastStatus = *remote.LastMessageStatus
 	}
+	store, err := s.runs()
+	if err != nil {
+		return err
+	}
 	switch lastStatus {
 	case "completed":
-		_, err = s.db.Exec(ctx, `
-UPDATE run_sessions
-SET status=$2, completed_at=now(), last_polled_at=now(), last_poll_error_at=NULL, last_poll_error=NULL
-WHERE session_id=$1 AND status=$3
-`, session.ID, statusCompleted, statusRunning)
-		if err != nil {
+		if err := store.MarkSessionCompleted(ctx, session.ID); err != nil {
 			return err
 		}
 		return s.reconcileRunProgress(ctx, session.RunID)
 	case "failed":
-		_, err = s.db.Exec(ctx, `
-UPDATE run_sessions
-SET status=$2, completed_at=now(), last_polled_at=now(), last_poll_error_at=NULL, last_poll_error=$4
-WHERE session_id=$1 AND status=$3
-`, session.ID, statusFailed, statusRunning, persistedErrorString(persistedErrSessionFailed))
-		if err != nil {
+		if err := store.MarkSessionFailed(ctx, session.ID, persistedErrSessionFailed); err != nil {
 			return err
 		}
 		return s.reconcileRunProgress(ctx, session.RunID)
@@ -485,52 +421,30 @@ WHERE session_id=$1 AND status=$3
 		if s.cfg.SessionStaleAfter > 0 && time.Since(session.CreatedAt) > s.cfg.SessionStaleAfter {
 			return s.failRunSession(ctx, session, persistedErrSessionStale)
 		}
-		_, err = s.db.Exec(ctx, `
-UPDATE run_sessions
-SET last_polled_at=now(), last_poll_error_at=NULL, last_poll_error=NULL
-WHERE session_id=$1 AND status=$2
-`, session.ID, statusRunning)
-		return err
+		return store.MarkSessionPollSucceeded(ctx, session.ID)
 	}
 }
 
 func (s *Server) recordSessionPollError(ctx context.Context, session runSessionRecord, _ error) (bool, error) {
-	firstErrorAt := session.LastPollErrorAt
-	if firstErrorAt == nil {
-		now := time.Now()
-		firstErrorAt = &now
-		_, err := s.db.Exec(ctx, `
-UPDATE run_sessions
-SET last_polled_at=now(), last_poll_error_at=coalesce(last_poll_error_at, now()), last_poll_error=$2
-WHERE session_id=$1 AND status=$3
-`, session.ID, persistedErrorString(persistedErrSessionPollFailed), session.Status)
-		if err != nil {
-			return false, err
-		}
-	} else {
-		_, err := s.db.Exec(ctx, `
-UPDATE run_sessions
-SET last_polled_at=now(), last_poll_error=$2
-WHERE session_id=$1 AND status=$3
-`, session.ID, persistedErrorString(persistedErrSessionPollFailed), session.Status)
-		if err != nil {
-			return false, err
-		}
+	store, err := s.runs()
+	if err != nil {
+		return false, err
 	}
-	return s.cfg.PollErrorStaleAfter > 0 && time.Since(*firstErrorAt) > s.cfg.PollErrorStaleAfter, nil
+	firstErrorAt, err := store.RecordSessionPollError(ctx, session, persistedErrSessionPollFailed)
+	if err != nil {
+		return false, err
+	}
+	return s.cfg.PollErrorStaleAfter > 0 && time.Since(firstErrorAt) > s.cfg.PollErrorStaleAfter, nil
 }
 
 func (s *Server) failRunSession(ctx context.Context, session runSessionRecord, code persistedErrorCode) error {
-	tag, err := s.db.Exec(ctx, `
-UPDATE run_sessions
-SET status=$2, completed_at=now(), last_polled_at=now(), last_poll_error=$3
-WHERE session_id=$1 AND status=$4
-`, session.ID, statusFailed, persistedErrorString(code), session.Status)
+	store, err := s.runs()
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return nil
+	updated, err := store.FailRunSession(ctx, session, code)
+	if err != nil || !updated {
+		return err
 	}
 	return s.reconcileRunProgress(ctx, session.RunID)
 }
@@ -540,6 +454,10 @@ func runErrorCodeFromSession(session runSessionRecord) persistedErrorCode {
 }
 
 func (s *Server) reconcileRunProgress(ctx context.Context, runID string) error {
+	store, err := s.runs()
+	if err != nil {
+		return err
+	}
 	run, err := s.loadRun(ctx, runID)
 	if err != nil {
 		return err
@@ -553,8 +471,7 @@ func (s *Server) reconcileRunProgress(ctx context.Context, runID string) error {
 	}
 	for _, session := range sessions {
 		if session.Status == statusRunning || session.Status == statusStarting {
-			_, err := s.db.Exec(ctx, `UPDATE runs SET status=$2, updated_at=now() WHERE id=$1 AND status IN ($3,$4)`, run.ID, statusRunning, statusQueued, statusStarting)
-			return err
+			return store.MarkRunRunningIfStartable(ctx, run.ID)
 		}
 	}
 	for _, session := range sessions {
@@ -567,8 +484,7 @@ func (s *Server) reconcileRunProgress(ctx context.Context, runID string) error {
 		return err
 	}
 	if !reportsReady {
-		_, err := s.db.Exec(ctx, `UPDATE runs SET status=$2, updated_at=now() WHERE id=$1 AND status IN ($3,$4)`, run.ID, statusQueued, statusRunning, statusStarting)
-		return err
+		return store.MarkRunQueuedIfActive(ctx, run.ID)
 	}
 	if run.Mode == "check" {
 		return s.finishRun(ctx, run, "", "")
@@ -581,8 +497,7 @@ func (s *Server) reconcileRunProgress(ctx context.Context, runID string) error {
 		}
 	}
 	if editor == nil {
-		_, err := s.db.Exec(ctx, `UPDATE runs SET status=$2, updated_at=now() WHERE id=$1 AND status IN ($3,$4)`, run.ID, statusQueued, statusRunning, statusStarting)
-		return err
+		return store.MarkRunQueuedIfActive(ctx, run.ID)
 	}
 	if editor.Status == statusFailed {
 		return s.finishRun(ctx, run, "", runErrorCodeFromSession(*editor))
@@ -594,86 +509,33 @@ func (s *Server) reconcileRunProgress(ctx context.Context, runID string) error {
 }
 
 func (s *Server) loadRun(ctx context.Context, runID string) (queuedRun, error) {
-	var run queuedRun
-	var tasksJSON, secretNamesJSON []byte
-	err := s.db.QueryRow(ctx, `
-SELECT r.id, r.user_id, r.mode, r.tasks,
-  r.tester_agent_id,
-  r.tester_version_id,
-  r.editor_agent_id,
-  r.editor_version_id,
-  coalesce(r.bundle_file_id,''), r.bundle_sha256, r.bundle_files, r.live_verify, r.runtime_secret_names, r.reserved_cents
-FROM runs r
-WHERE r.id=$1 AND r.status IN ($2,$3,$4)
-	`, runID, statusQueued, statusStarting, statusRunning).Scan(
-		&run.ID, &run.UserID, &run.Mode, &tasksJSON,
-		&run.TesterAgentID, &run.TesterVersionID, &run.EditorAgentID, &run.EditorVersionID,
-		&run.BundleFileID, &run.BundleSHA256, &run.BundleFiles, &run.LiveVerify, &secretNamesJSON, &run.ReservedCents,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return queuedRun{}, nil
-	}
+	store, err := s.runs()
 	if err != nil {
 		return queuedRun{}, err
 	}
-	if err := json.Unmarshal(tasksJSON, &run.Tasks); err != nil {
-		return queuedRun{}, err
-	}
-	_ = json.Unmarshal(secretNamesJSON, &run.SecretNames)
-	return run, nil
+	return store.LoadActiveRun(ctx, runID)
 }
 
 func (s *Server) finishRun(ctx context.Context, run queuedRun, editorSessionID string, failureCode persistedErrorCode) error {
-	var (
-		tag pgconn.CommandTag
-		err error
-	)
-	if failureCode != "" {
-		tag, err = s.db.Exec(ctx, `
-UPDATE runs SET status=$2, error=$3, updated_at=now(), completed_at=now()
-WHERE id=$1 AND status IN ($4,$5,$6)
-`, run.ID, statusFailed, persistedErrorString(failureCode), statusQueued, statusStarting, statusRunning)
-	} else {
-		tag, err = s.db.Exec(ctx, `
-UPDATE runs SET status=$2, error=NULL, editor_session_id=$3, updated_at=now(), completed_at=now()
-WHERE id=$1 AND status IN ($4,$5,$6)
-`, run.ID, statusCompleted, editorSessionID, statusQueued, statusStarting, statusRunning)
-	}
+	store, err := s.runs()
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return nil
+	updated, err := store.FinishRun(ctx, run, editorSessionID, failureCode)
+	if err != nil || !updated {
+		return err
 	}
 	s.clearRuntimeSecrets(ctx, run.ID)
 	return s.settleRun(ctx, run.ID, run.ReservedCents)
 }
 
 func (s *Server) settleUnsettledRuns(ctx context.Context) error {
-	rows, err := s.db.Query(ctx, `
-	SELECT id, reserved_cents
-	FROM runs
-	WHERE status IN ($1,$2) AND (cost_status IS NULL OR cost_status='estimated')
-	ORDER BY completed_at NULLS FIRST, updated_at
-	LIMIT 10
-	`, statusCompleted, statusFailed)
+	store, err := s.runs()
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	type unsettledRun struct {
-		ID            string
-		ReservedCents int64
-	}
-	var runs []unsettledRun
-	for rows.Next() {
-		var run unsettledRun
-		if err := rows.Scan(&run.ID, &run.ReservedCents); err != nil {
-			return err
-		}
-		runs = append(runs, run)
-	}
-	if err := rows.Err(); err != nil {
+	runs, err := store.ListUnsettledRuns(ctx, 10)
+	if err != nil {
 		return err
 	}
 	for _, run := range runs {
@@ -685,25 +547,11 @@ func (s *Server) settleUnsettledRuns(ctx context.Context) error {
 }
 
 func (s *Server) loadRunSessions(ctx context.Context, runID string) ([]runSessionRecord, error) {
-	rows, err := s.db.Query(ctx, `
-SELECT session_id, run_id, kind, task_index, status, created_at, last_poll_error_at, coalesce(last_poll_error,'')
-FROM run_sessions
-WHERE run_id=$1
-ORDER BY created_at
-`, runID)
+	store, err := s.runs()
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var sessions []runSessionRecord
-	for rows.Next() {
-		var session runSessionRecord
-		if err := rows.Scan(&session.ID, &session.RunID, &session.Kind, &session.TaskIndex, &session.Status, &session.CreatedAt, &session.LastPollErrorAt, &session.LastPollError); err != nil {
-			return nil, err
-		}
-		sessions = append(sessions, session)
-	}
-	return sessions, rows.Err()
+	return store.LoadRunSessions(ctx, runID)
 }
 
 func (s *Server) collectTesterReports(ctx context.Context, run queuedRun, sessions []runSessionRecord) ([]string, bool, error) {
@@ -729,18 +577,13 @@ func (s *Server) collectTesterReports(ctx context.Context, run queuedRun, sessio
 }
 
 func (s *Server) settleRun(ctx context.Context, runID string, reserve int64) error {
-	rows, err := s.db.Query(ctx, `SELECT session_id FROM run_sessions WHERE run_id=$1`, runID)
+	store, err := s.runs()
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	var sessionIDs []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return err
-		}
-		sessionIDs = append(sessionIDs, id)
+	sessionIDs, err := store.ListRunSessionIDs(ctx, runID)
+	if err != nil {
+		return err
 	}
 	charges := map[string]int64{}
 	deadline := time.Now().Add(s.cfg.CostFetchTimeout)
@@ -755,7 +598,7 @@ func (s *Server) settleRun(ctx context.Context, runID string, reserve int64) err
 			}
 			costCents := usdStringToCentsCeil(cost.TotalCostUSD)
 			charges[id] = costCents + s.cfg.ServiceFeeCents
-			_, _ = s.db.Exec(ctx, `UPDATE run_sessions SET cost_cents=$2, charge_cents=$3 WHERE session_id=$1`, id, costCents, charges[id])
+			_ = store.UpdateSessionCost(ctx, id, costCents, charges[id])
 		}
 		if len(charges) == len(sessionIDs) || s.cfg.CostFetchTimeout == 0 {
 			break
@@ -783,15 +626,9 @@ func (s *Server) settleRun(ctx context.Context, runID string, reserve int64) err
 		source = "overage:" + runID
 	}
 	if delta != 0 {
-		_, err = s.db.Exec(ctx, `
-INSERT INTO credit_ledger (id, user_id, amount_cents, kind, source_id, run_id)
-SELECT $1, user_id, $2, $3, $4, id FROM runs WHERE id=$5
-ON CONFLICT (source_id) DO NOTHING
-`, "led_"+randomToken(18), delta, kind, source, runID)
-		if err != nil {
+		if err := store.InsertRunLedgerAdjustment(ctx, runID, delta, kind, source); err != nil {
 			return err
 		}
 	}
-	_, err = s.db.Exec(ctx, `UPDATE runs SET charged_cents=$2, cost_status=$3 WHERE id=$1`, runID, totalCharge, costStatus)
-	return err
+	return store.MarkRunSettled(ctx, runID, totalCharge, costStatus)
 }
