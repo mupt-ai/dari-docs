@@ -21,6 +21,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mupt-ai/dari-docs/internal/bundle"
+	"github.com/mupt-ai/dari-docs/internal/dari"
 	stripe "github.com/stripe/stripe-go/v82"
 )
 
@@ -58,7 +59,7 @@ func TestConfigFromEnvUsesManagedConstants(t *testing.T) {
 	if cfg.DariAPIBaseURL != defaultDariAPIBaseURL {
 		t.Fatalf("DariAPIBaseURL = %q, want %q", cfg.DariAPIBaseURL, defaultDariAPIBaseURL)
 	}
-	if cfg.ManagedTesterAgentID != "agt_tester" || cfg.ManagedTesterVersionID != "ver_tester" || cfg.ManagedEditorAgentID != "agt_editor" || cfg.ManagedEditorVersionID != "ver_editor" {
+	if cfg.ManagedTesterAgentID != "agt_tester" || cfg.ManagedEditorAgentID != "agt_editor" || cfg.ReleaseAdminToken != "release-admin-token" {
 		t.Fatalf("managed agent config = %q/%q %q/%q", cfg.ManagedTesterAgentID, cfg.ManagedTesterVersionID, cfg.ManagedEditorAgentID, cfg.ManagedEditorVersionID)
 	}
 	for name, gotWant := range map[string][2]int64{
@@ -137,6 +138,7 @@ func TestConfigFromEnvKeepsDeploymentOverridesAndIgnoresManagedEnvKnobs(t *testi
 func TestConfigFromEnvRequiresRuntimeSecretEncryptionKey(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/dari_docs")
 	t.Setenv("DARI_API_KEY", "dari_test")
+	t.Setenv("DARI_DOCS_RELEASE_ADMIN_TOKEN", "release-admin-token")
 	setRequiredManagedAgentEnv(t)
 	_, err := ConfigFromEnv()
 	if err == nil || !strings.Contains(err.Error(), "DARI_DOCS_SECRET_ENCRYPTION_KEY is required") {
@@ -148,8 +150,20 @@ func TestConfigFromEnvRequiresManagedHostedAgents(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/dari_docs")
 	t.Setenv("DARI_API_KEY", "dari_test")
 	t.Setenv("DARI_DOCS_SECRET_ENCRYPTION_KEY", testManagedSecretEncryptionKey())
+	t.Setenv("DARI_DOCS_RELEASE_ADMIN_TOKEN", "release-admin-token")
 	_, err := ConfigFromEnv()
 	if err == nil || !strings.Contains(err.Error(), "MANAGED_TESTER_AGENT_ID is required") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestConfigFromEnvRequiresReleaseAdminToken(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example.invalid/dari_docs")
+	t.Setenv("DARI_API_KEY", "dari_test")
+	t.Setenv("DARI_DOCS_SECRET_ENCRYPTION_KEY", testManagedSecretEncryptionKey())
+	setRequiredManagedAgentEnv(t)
+	_, err := ConfigFromEnv()
+	if err == nil || !strings.Contains(err.Error(), "DARI_DOCS_RELEASE_ADMIN_TOKEN is required") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -215,6 +229,26 @@ func TestManagedAgentSetTablesAreDroppedByMigration(t *testing.T) {
 	} {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("drop migration is missing %q", want)
+		}
+	}
+}
+
+func TestManagedAgentReleaseMigrationCreatesActiveReleaseTable(t *testing.T) {
+	data, err := migrationFS.ReadFile("migrations/0006_managed_agent_releases.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	for _, want := range []string{
+		"CREATE TABLE managed_agent_releases",
+		"tester_agent_id TEXT NOT NULL",
+		"tester_version_id TEXT NOT NULL",
+		"editor_agent_id TEXT NOT NULL",
+		"editor_version_id TEXT NOT NULL",
+		"CREATE UNIQUE INDEX idx_managed_agent_releases_active",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("managed release migration is missing %q", want)
 		}
 	}
 }
@@ -858,6 +892,199 @@ FROM runs WHERE id=$1
 	}
 }
 
+func TestReserveRunStoresActiveManagedAgentRelease(t *testing.T) {
+	db := openManagedServiceTestDB(t)
+	ctx := context.Background()
+
+	s := &Server{db: db, cfg: testManagedHostedAgentConfig()}
+	userID := "usr_test_" + randomToken(8)
+	runID := "run_test_" + randomToken(8)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), `DELETE FROM credit_ledger WHERE run_id=$1 OR user_id=$2`, runID, userID)
+		_, _ = db.Exec(context.Background(), `DELETE FROM runs WHERE id=$1`, runID)
+		_, _ = db.Exec(context.Background(), `DELETE FROM managed_agent_releases WHERE id=$1`, "mar_test_"+runID)
+		_, _ = db.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+	})
+	if _, err := db.Exec(ctx, `INSERT INTO users (id, auth_subject, email) VALUES ($1, $2, $3)`, userID, "auth_"+userID, userID+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO credit_ledger (id, user_id, amount_cents, kind, source_id) VALUES ($1, $2, 500, 'test_credit', $3)`, "cred_"+randomToken(8), userID, "src_"+randomToken(8)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE managed_agent_releases SET active=false WHERE active`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+INSERT INTO managed_agent_releases (id, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, active, source)
+VALUES ($1, 'agt_tester', 'ver_active_tester', 'agt_editor', 'ver_active_editor', true, 'test')
+`, "mar_test_"+runID); err != nil {
+		t.Fatal(err)
+	}
+
+	result := bundle.Result{
+		SHA256: "bundle_sha",
+		Manifest: bundle.Manifest{Files: []bundle.FileRecord{
+			{Path: "README.md", SizeBytes: 12, SHA256: "file_sha"},
+		}},
+	}
+	if err := s.reserveRun(ctx, userID, runID, "check", []byte(`["task"]`), result, 75, false, []byte(`[]`), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var testerVersionID, editorVersionID string
+	if err := db.QueryRow(ctx, `
+SELECT tester_version_id, editor_version_id FROM runs WHERE id=$1
+`, runID).Scan(&testerVersionID, &editorVersionID); err != nil {
+		t.Fatal(err)
+	}
+	if testerVersionID != "ver_active_tester" || editorVersionID != "ver_active_editor" {
+		t.Fatalf("run versions = tester:%q editor:%q", testerVersionID, editorVersionID)
+	}
+}
+
+func TestActivateManagedAgentReleasePreservesOmittedSide(t *testing.T) {
+	db := openManagedServiceTestDB(t)
+	ctx := context.Background()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/agents/agt_tester/versions/ver_tester_new":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"agent":   map[string]any{"id": "agt_tester", "active_version_id": "ver_tester_new"},
+				"version": map[string]any{"id": "ver_tester_new", "agent_id": "agt_tester"},
+			})
+		case "/v1/agents/agt_editor/versions/ver_editor_old":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"agent":   map[string]any{"id": "agt_editor", "active_version_id": "ver_editor_old"},
+				"version": map[string]any{"id": "ver_editor_old", "agent_id": "agt_editor"},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	s := &Server{db: db, cfg: Config{ManagedTesterAgentID: "agt_tester", ManagedEditorAgentID: "agt_editor"}, dari: dari.New(upstream.URL, "dari_test")}
+	releaseID := "mar_test_" + randomToken(8)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), `DELETE FROM managed_agent_releases WHERE id=$1 OR source=$2`, releaseID, "github_actions")
+	})
+	if _, err := db.Exec(ctx, `UPDATE managed_agent_releases SET active=false WHERE active`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+INSERT INTO managed_agent_releases (id, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, active, source)
+VALUES ($1, 'agt_tester', 'ver_tester_old', 'agt_editor', 'ver_editor_old', true, 'test')
+`, releaseID); err != nil {
+		t.Fatal(err)
+	}
+
+	release, err := s.activateManagedAgentRelease(ctx, activateManagedAgentReleaseRequest{
+		TesterVersionID: "ver_tester_new",
+		Source:          "github_actions",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release.TesterVersionID != "ver_tester_new" || release.EditorVersionID != "ver_editor_old" {
+		t.Fatalf("release versions = tester:%q editor:%q", release.TesterVersionID, release.EditorVersionID)
+	}
+	var activeCount int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM managed_agent_releases WHERE active`).Scan(&activeCount); err != nil {
+		t.Fatal(err)
+	}
+	if activeCount != 1 {
+		t.Fatalf("active release count = %d, want 1", activeCount)
+	}
+}
+
+func TestActivateManagedAgentReleaseRequiresCompleteFirstRelease(t *testing.T) {
+	db := openManagedServiceTestDB(t)
+	ctx := context.Background()
+	s := &Server{db: db, cfg: Config{ManagedTesterAgentID: "agt_tester", ManagedEditorAgentID: "agt_editor"}, dari: dari.New("https://api.example.test", "dari_test")}
+	if _, err := db.Exec(ctx, `UPDATE managed_agent_releases SET active=false WHERE active`); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := s.activateManagedAgentRelease(ctx, activateManagedAgentReleaseRequest{TesterVersionID: "ver_tester"})
+	if !errors.Is(err, errNoActiveManagedAgentRelease) {
+		t.Fatalf("error = %v, want errNoActiveManagedAgentRelease", err)
+	}
+}
+
+func TestActivateManagedAgentReleaseRejectsWrongAgentVersion(t *testing.T) {
+	db := openManagedServiceTestDB(t)
+	ctx := context.Background()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"agent":   map[string]any{"id": "agt_other", "active_version_id": "ver_wrong"},
+			"version": map[string]any{"id": "ver_wrong", "agent_id": "agt_other"},
+		})
+	}))
+	defer upstream.Close()
+	s := &Server{
+		db: db,
+		cfg: Config{
+			ManagedTesterAgentID:   "agt_tester",
+			ManagedTesterVersionID: "ver_tester",
+			ManagedEditorAgentID:   "agt_editor",
+			ManagedEditorVersionID: "ver_editor",
+		},
+		dari: dari.New(upstream.URL, "dari_test"),
+	}
+
+	_, err := s.activateManagedAgentRelease(ctx, activateManagedAgentReleaseRequest{TesterVersionID: "ver_wrong"})
+	if err == nil || !strings.Contains(err.Error(), "does not belong") {
+		t.Fatalf("error = %v, want wrong-agent validation error", err)
+	}
+}
+
+func TestActivateManagedAgentReleaseRejectsMissingVersionAsInvalidRelease(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer upstream.Close()
+	s := &Server{
+		cfg: Config{
+			ManagedTesterAgentID:   "agt_tester",
+			ManagedTesterVersionID: "ver_tester",
+			ManagedEditorAgentID:   "agt_editor",
+			ManagedEditorVersionID: "ver_editor",
+		},
+		dari: dari.New(upstream.URL, "dari_test"),
+	}
+
+	err := s.validateManagedAgentVersion(context.Background(), "tester_version_id", "agt_tester", "ver_missing")
+	if !errors.Is(err, errInvalidManagedAgentRelease) {
+		t.Fatalf("error = %v, want errInvalidManagedAgentRelease", err)
+	}
+	if !strings.Contains(err.Error(), "was not found") {
+		t.Fatalf("error = %v, want missing-version message", err)
+	}
+}
+
+func TestManagedAgentReleaseAdminAuthRejectsMissingAndWrongToken(t *testing.T) {
+	s := &Server{cfg: Config{ReleaseAdminToken: "release-admin-token"}}
+	for name, header := range map[string]string{
+		"missing": "",
+		"wrong":   "Bearer wrong-token",
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/v1/admin/managed-agent-release", nil)
+			if header != "" {
+				req.Header.Set("Authorization", header)
+			}
+			rec := httptest.NewRecorder()
+			s.handleManagedAgentRelease(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+			}
+		})
+	}
+	if !validBearerToken("Bearer release-admin-token", "release-admin-token") {
+		t.Fatal("expected release admin token to validate")
+	}
+}
+
 func TestFetchDariUserInfoForwardsBearer(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/auth/userinfo" {
@@ -1154,6 +1381,7 @@ func setRequiredManagedConfigEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/dari_docs")
 	t.Setenv("DARI_API_KEY", "dari_test")
+	t.Setenv("DARI_DOCS_RELEASE_ADMIN_TOKEN", "release-admin-token")
 	t.Setenv("DARI_DOCS_SECRET_ENCRYPTION_KEY", testManagedSecretEncryptionKey())
 	setRequiredManagedAgentEnv(t)
 }
@@ -1161,9 +1389,7 @@ func setRequiredManagedConfigEnv(t *testing.T) {
 func setRequiredManagedAgentEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("MANAGED_TESTER_AGENT_ID", "agt_tester")
-	t.Setenv("MANAGED_TESTER_VERSION_ID", "ver_tester")
 	t.Setenv("MANAGED_EDITOR_AGENT_ID", "agt_editor")
-	t.Setenv("MANAGED_EDITOR_VERSION_ID", "ver_editor")
 }
 
 func testManagedHostedAgentConfig() Config {
@@ -1172,6 +1398,7 @@ func testManagedHostedAgentConfig() Config {
 		ManagedTesterVersionID: "ver_tester",
 		ManagedEditorAgentID:   "agt_editor",
 		ManagedEditorVersionID: "ver_editor",
+		ReleaseAdminToken:      "release-admin-token",
 	}
 }
 
@@ -1186,6 +1413,8 @@ func clearManagedConfigOptionalEnv(t *testing.T) {
 		"PORT",
 		"PUBLIC_BASE_URL",
 		"DARI_API_BASE_URL",
+		"MANAGED_TESTER_VERSION_ID",
+		"MANAGED_EDITOR_VERSION_ID",
 		"STRIPE_SECRET_KEY",
 		"STRIPE_WEBHOOK_SECRET",
 	} {

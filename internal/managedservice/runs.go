@@ -221,6 +221,10 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	if err := s.reserveRun(r.Context(), u.ID, runID, mode, taskJSON, b, reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
+		if errors.Is(err, errNoActiveManagedAgentRelease) {
+			writeError(w, http.StatusServiceUnavailable, "managed agents are not configured")
+			return
+		}
 		var activeErr *activeRunLimitError
 		if errors.As(err, &activeErr) {
 			writeError(w, http.StatusConflict, err.Error())
@@ -353,6 +357,10 @@ func (s *Server) maxActiveRunsPerUser() int {
 }
 
 func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, taskJSON []byte, b bundle.Result, reserve int64, liveVerify bool, secretNamesJSON, runtimeNonce, runtimeCiphertext []byte) error {
+	release, err := s.loadManagedAgentRelease(ctx)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -379,7 +387,7 @@ func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, tas
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO runs (id, user_id, mode, status, tasks, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files, reserved_cents, live_verify, runtime_secret_names, runtime_secrets_nonce, runtime_secrets_ciphertext)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-		`, runID, userID, mode, statusUploading, taskJSON, s.cfg.ManagedTesterAgentID, s.cfg.ManagedTesterVersionID, s.cfg.ManagedEditorAgentID, s.cfg.ManagedEditorVersionID, b.SHA256, len(b.Manifest.Files), reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
+		`, runID, userID, mode, statusUploading, taskJSON, release.TesterAgentID, release.TesterVersionID, release.EditorAgentID, release.EditorVersionID, b.SHA256, len(b.Manifest.Files), reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `

@@ -89,6 +89,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/v1/me", s.withAuth(s.handleMe))
 	mux.HandleFunc("/v1/billing/balance", s.withAuth(s.handleBalance))
 	mux.HandleFunc("/v1/billing/checkout", s.withAuth(s.handleCheckout))
+	mux.HandleFunc("/v1/admin/managed-agent-release", s.handleManagedAgentRelease)
 	mux.HandleFunc("/v1/runs/config", s.withAuth(s.handleRunConfig))
 	mux.HandleFunc("/v1/stripe/webhook", s.handleStripeWebhook)
 	mux.HandleFunc("/billing/success", s.handleBillingSuccess)

@@ -1,0 +1,152 @@
+name: Deploy managed Dari Docs agents
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "agents/docs-user-tester-agent/**"
+      - "agents/docs-editor-agent/**"
+      - "!agents/docs-user-tester-agent/README.md"
+      - "!agents/docs-editor-agent/README.md"
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: Agent to deploy
+        required: true
+        default: both
+        type: choice
+        options:
+          - tester
+          - editor
+          - both
+
+permissions:
+  contents: read
+
+concurrency:
+  group: managed-agent-release
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    env:
+      DARI_API_KEY: ${{ secrets.DARI_API_KEY }}
+      DARI_API_URL: https://api.dari.dev
+      DARI_DOCS_RELEASE_ADMIN_TOKEN: ${{ secrets.DARI_DOCS_RELEASE_ADMIN_TOKEN }}
+      DARI_DOCS_SERVICE_URL: ${{ vars.DARI_DOCS_SERVICE_URL || 'https://dari-docs.dari.dev' }}
+      MANAGED_TESTER_AGENT_ID: ${{ vars.MANAGED_TESTER_AGENT_ID }}
+      MANAGED_EDITOR_AGENT_ID: ${{ vars.MANAGED_EDITOR_AGENT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Dari CLI
+        run: python -m pip install --upgrade dari-cli
+
+      - name: Validate release configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in DARI_API_KEY DARI_DOCS_RELEASE_ADMIN_TOKEN DARI_DOCS_SERVICE_URL MANAGED_TESTER_AGENT_ID MANAGED_EDITOR_AGENT_ID; do
+            if [[ -z "${!name}" ]]; then
+              echo "$name is required" >&2
+              exit 1
+            fi
+          done
+
+      - name: Determine changed agents
+        id: changes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          deploy_tester=false
+          deploy_editor=false
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            case "${{ inputs.agent }}" in
+              tester) deploy_tester=true ;;
+              editor) deploy_editor=true ;;
+              both)
+                deploy_tester=true
+                deploy_editor=true
+                ;;
+              *) echo "unsupported agent input: ${{ inputs.agent }}" >&2; exit 1 ;;
+            esac
+          else
+            before="${{ github.event.before }}"
+            if [[ -z "$before" || "$before" == "0000000000000000000000000000000000000000" ]]; then
+              before="$(git rev-list --max-parents=0 HEAD)"
+            fi
+            while IFS= read -r path; do
+              case "$path" in
+                agents/docs-user-tester-agent/README.md) ;;
+                agents/docs-user-tester-agent/*) deploy_tester=true ;;
+                agents/docs-editor-agent/README.md) ;;
+                agents/docs-editor-agent/*) deploy_editor=true ;;
+              esac
+            done < <(git diff --name-only "$before" "$GITHUB_SHA")
+          fi
+
+          echo "tester=$deploy_tester" >> "$GITHUB_OUTPUT"
+          echo "editor=$deploy_editor" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy tester agent
+        if: steps.changes.outputs.tester == 'true'
+        id: tester
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$(dari deploy agents/docs-user-tester-agent --agent-id "$MANAGED_TESTER_AGENT_ID")"
+          version_id="$(python -c 'import json,sys; print(json.load(sys.stdin)["version_id"])' <<< "$output")"
+          echo "version_id=$version_id" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy editor agent
+        if: steps.changes.outputs.editor == 'true'
+        id: editor
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$(dari deploy agents/docs-editor-agent --agent-id "$MANAGED_EDITOR_AGENT_ID")"
+          version_id="$(python -c 'import json,sys; print(json.load(sys.stdin)["version_id"])' <<< "$output")"
+          echo "version_id=$version_id" >> "$GITHUB_OUTPUT"
+
+      - name: Activate managed agent release
+        if: steps.changes.outputs.tester == 'true' || steps.changes.outputs.editor == 'true'
+        shell: bash
+        env:
+          TESTER_VERSION_ID: ${{ steps.tester.outputs.version_id }}
+          EDITOR_VERSION_ID: ${{ steps.editor.outputs.version_id }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > release.json
+          import json
+          import os
+
+          payload = {
+              "source": "github_actions",
+              "git_sha": os.environ["GITHUB_SHA"],
+              "github_run_id": os.environ["GITHUB_RUN_ID"],
+          }
+          tester = os.environ.get("TESTER_VERSION_ID", "").strip()
+          editor = os.environ.get("EDITOR_VERSION_ID", "").strip()
+          if tester:
+              payload["tester_version_id"] = tester
+          if editor:
+              payload["editor_version_id"] = editor
+          print(json.dumps(payload))
+          PY
+
+          curl --fail --show-error --silent \
+            --retry 8 --retry-all-errors --retry-delay 5 \
+            -X POST "$DARI_DOCS_SERVICE_URL/v1/admin/managed-agent-release" \
+            -H "Authorization: Bearer $DARI_DOCS_RELEASE_ADMIN_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data @release.json
