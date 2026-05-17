@@ -58,9 +58,6 @@ func (s *Server) sessionStarterLoop(ctx context.Context) {
 		if err := s.recoverStaleUploadingRuns(ctx); err != nil {
 			log.Printf("recover stale uploading runs: %v", err)
 		}
-		if err := s.recoverStaleStartingSessions(ctx); err != nil {
-			log.Printf("recover stale starting sessions: %v", err)
-		}
 		if err := s.recoverStaleStartingRuns(ctx); err != nil {
 			log.Printf("recover stale starting runs: %v", err)
 		}
@@ -157,6 +154,9 @@ func (s *Server) startNextSession(ctx context.Context, run queuedRun) error {
 	if err != nil {
 		return err
 	}
+	if shouldStartTesterBatch(run, sessions) {
+		return s.startTesterBatch(ctx, run)
+	}
 	next, ok, err := s.nextSession(ctx, run, sessions)
 	if err != nil {
 		return s.failStartedRun(ctx, run, persistedErrSessionFailed, err)
@@ -164,47 +164,154 @@ func (s *Server) startNextSession(ctx context.Context, run queuedRun) error {
 	if !ok {
 		return s.reconcileRunProgress(ctx, run.ID)
 	}
-	sessionReq := dari.CreateSessionRequest{VersionID: next.VersionID}
+	return s.startSingleSessionBatch(ctx, run, next)
+}
+
+func (s *Server) startSingleSessionBatch(ctx context.Context, run queuedRun, next nextSession) error {
+	var secrets map[string]string
 	if shouldAttachRuntimeSecrets(run, next) {
 		secretJSON, err := s.runtimeSecretsJSON(ctx, run.ID)
 		if err != nil {
 			return s.failStartedRun(ctx, run, persistedErrRuntimeSecretsLoadFailed, fmt.Errorf("load runtime secrets: %w", err))
 		}
 		if secretJSON != "" {
-			sessionReq.Secrets = map[string]string{managedRuntimeSecretsName: secretJSON}
+			secrets = map[string]string{managedRuntimeSecretsName: secretJSON}
 		}
 	}
-	session, err := s.dari.CreateSession(ctx, next.AgentID, sessionReq)
+	batch, err := s.dari.CreateSessionBatch(ctx, dari.CreateSessionBatchRequest{
+		IdempotencyKey: "dari-docs-managed-" + run.ID + "-" + next.Kind,
+		Items: []dari.CreateSessionBatchItem{{
+			AgentID:   next.AgentID,
+			VersionID: next.VersionID,
+			Metadata:  managedSessionMetadata(run, next),
+			Secrets:   secrets,
+			Message: dari.CreateSessionBatchMessage{Content: []dari.ContentBlock{
+				dari.TextBlock(next.Prompt),
+				dari.FileBlock(run.BundleFileID),
+			}},
+		}},
+	})
 	if err != nil {
-		return s.failStartedRun(ctx, run, persistedErrSessionCreateFailed, fmt.Errorf("create %s session: %w", next.Kind, err))
+		return s.failStartedRun(ctx, run, persistedErrSessionCreateFailed, fmt.Errorf("create %s session batch: %w", next.Kind, err))
+	}
+	if len(batch.Sessions) != 1 || batch.Sessions[0].SessionID == "" || batch.Sessions[0].Status == statusFailed || batch.Sessions[0].Error != "" {
+		msg := "missing session"
+		if len(batch.Sessions) > 0 && batch.Sessions[0].Error != "" {
+			msg = batch.Sessions[0].Error
+		}
+		return s.failStartedRun(ctx, run, persistedErrSessionCreateFailed, fmt.Errorf("create %s session: %s", next.Kind, msg))
+	}
+	item := batch.Sessions[0]
+	versionID := item.VersionID
+	if versionID == "" {
+		versionID = next.VersionID
 	}
 	_, err = s.db.Exec(ctx, `
 INSERT INTO run_sessions (session_id, run_id, kind, task_index, status, version_id)
 VALUES ($1, $2, $3, $4, $5, $6)
-`, session.ID, run.ID, next.Kind, next.TaskIndex, statusStarting, next.VersionID)
+ON CONFLICT (session_id) DO NOTHING
+`, item.SessionID, run.ID, next.Kind, next.TaskIndex, statusRunning, versionID)
 	if err != nil {
 		return err
-	}
-	if _, err := s.dari.SendUserMessage(ctx, session.ID, []dari.ContentBlock{dari.TextBlock(next.Prompt), dari.FileBlock(run.BundleFileID)}); err != nil {
-		_, _ = s.db.Exec(ctx, `
-UPDATE run_sessions
-SET status=$2, completed_at=now(), last_poll_error=$3
-WHERE session_id=$1 AND status=$4
-`, session.ID, statusFailed, persistedErrorString(persistedErrSessionMessageFailed), statusStarting)
-		return s.failStartedRun(ctx, run, persistedErrSessionMessageFailed, fmt.Errorf("send %s session %s message: %w", next.Kind, session.ID, err))
-	}
-	tag, err := s.db.Exec(ctx, `
-UPDATE run_sessions
-SET status=$2, last_polled_at=NULL, last_poll_error_at=NULL, last_poll_error=NULL
-WHERE session_id=$1 AND status=$3
-`, session.ID, statusRunning, statusStarting)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return s.reconcileRunProgress(ctx, run.ID)
 	}
 	if isFinalSecretBearingSession(run, next) {
+		s.clearRuntimeSecrets(ctx, run.ID)
+	}
+	_, err = s.db.Exec(ctx, `UPDATE runs SET status=$2, updated_at=now() WHERE id=$1 AND status=$3`, run.ID, statusRunning, statusStarting)
+	return err
+}
+
+func managedSessionMetadata(run queuedRun, next nextSession) map[string]string {
+	metadata := map[string]string{
+		"managed_run_id": run.ID,
+		"kind":           next.Kind,
+	}
+	if next.TaskIndex > 0 {
+		metadata["task_index"] = fmt.Sprintf("%d", next.TaskIndex)
+	}
+	return metadata
+}
+
+func shouldStartTesterBatch(run queuedRun, sessions []runSessionRecord) bool {
+	if len(run.Tasks) == 0 {
+		return false
+	}
+	for _, session := range sessions {
+		if session.Kind == "tester" || session.Status == statusRunning || session.Status == statusStarting {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) startTesterBatch(ctx context.Context, run queuedRun) error {
+	b := bundle.Result{SHA256: run.BundleSHA256, Manifest: bundle.Manifest{Files: make([]bundle.FileRecord, run.BundleFiles)}}
+	var secrets map[string]string
+	if run.LiveVerify {
+		secretJSON, err := s.runtimeSecretsJSON(ctx, run.ID)
+		if err != nil {
+			return s.failStartedRun(ctx, run, persistedErrRuntimeSecretsLoadFailed, fmt.Errorf("load runtime secrets: %w", err))
+		}
+		if secretJSON != "" {
+			secrets = map[string]string{managedRuntimeSecretsName: secretJSON}
+		}
+	}
+	batchReq := dari.CreateSessionBatchRequest{
+		IdempotencyKey: "dari-docs-managed-" + run.ID + "-testers",
+		Items:          make([]dari.CreateSessionBatchItem, 0, len(run.Tasks)),
+	}
+	for i, task := range run.Tasks {
+		metadata := map[string]string{
+			"managed_run_id": run.ID,
+			"kind":           "tester",
+			"task_index":     fmt.Sprintf("%d", i+1),
+		}
+		batchReq.Items = append(batchReq.Items, dari.CreateSessionBatchItem{
+			AgentID:   run.TesterAgentID,
+			VersionID: run.TesterVersionID,
+			Metadata:  metadata,
+			Secrets:   secrets,
+			Message: dari.CreateSessionBatchMessage{Content: []dari.ContentBlock{
+				dari.TextBlock(runner.FeedbackPrompt(task, b, run.LiveVerify, secretNameMap(run.SecretNames))),
+				dari.FileBlock(run.BundleFileID),
+			}},
+		})
+	}
+	batch, err := s.dari.CreateSessionBatch(ctx, batchReq)
+	if err != nil {
+		return s.failStartedRun(ctx, run, persistedErrSessionCreateFailed, fmt.Errorf("create tester session batch: %w", err))
+	}
+	var createErr error
+	for _, item := range batch.Sessions {
+		if item.Index < 0 || item.Index >= len(run.Tasks) {
+			return s.failStartedRun(ctx, run, persistedErrSessionCreateFailed, fmt.Errorf("tester batch returned invalid item index %d", item.Index))
+		}
+		if item.Status == statusFailed || item.SessionID == "" || item.Error != "" {
+			if createErr == nil {
+				createErr = fmt.Errorf("create tester session %d: %s", item.Index+1, item.Error)
+			}
+			continue
+		}
+		versionID := item.VersionID
+		if versionID == "" {
+			versionID = run.TesterVersionID
+		}
+		_, err := s.db.Exec(ctx, `
+INSERT INTO run_sessions (session_id, run_id, kind, task_index, status, version_id)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (session_id) DO NOTHING
+`, item.SessionID, run.ID, "tester", item.Index+1, statusRunning, versionID)
+		if err != nil {
+			return err
+		}
+	}
+	if createErr == nil && len(batch.Sessions) != len(run.Tasks) {
+		createErr = fmt.Errorf("tester batch returned %d sessions, want %d", len(batch.Sessions), len(run.Tasks))
+	}
+	if createErr != nil {
+		return s.failStartedRun(ctx, run, persistedErrSessionCreateFailed, createErr)
+	}
+	if run.Mode == "check" {
 		s.clearRuntimeSecrets(ctx, run.ID)
 	}
 	_, err = s.db.Exec(ctx, `UPDATE runs SET status=$2, updated_at=now() WHERE id=$1 AND status=$3`, run.ID, statusRunning, statusStarting)
@@ -281,73 +388,6 @@ WHERE status=$2 AND updated_at < now() - interval '2 minutes'
   )
 	`, statusQueued, statusStarting, statusStarting, statusRunning)
 	return err
-}
-
-func (s *Server) recoverStaleStartingSessions(ctx context.Context) error {
-	if s.cfg.SessionStartStaleAfter <= 0 {
-		return nil
-	}
-	rows, err := s.db.Query(ctx, `
-SELECT session_id, run_id, kind, task_index, status, created_at, last_poll_error_at, coalesce(last_poll_error,'')
-FROM run_sessions
-WHERE status=$1 AND created_at < $2
-ORDER BY created_at
-LIMIT 50
-`, statusStarting, time.Now().Add(-s.cfg.SessionStartStaleAfter))
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	var sessions []runSessionRecord
-	for rows.Next() {
-		var session runSessionRecord
-		if err := rows.Scan(&session.ID, &session.RunID, &session.Kind, &session.TaskIndex, &session.Status, &session.CreatedAt, &session.LastPollErrorAt, &session.LastPollError); err != nil {
-			return err
-		}
-		sessions = append(sessions, session)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, session := range sessions {
-		if err := s.recoverStartingSession(ctx, session); err != nil {
-			log.Printf("recover starting session %s: %v", session.ID, err)
-		}
-	}
-	return nil
-}
-
-func (s *Server) recoverStartingSession(ctx context.Context, session runSessionRecord) error {
-	remote, err := s.dari.GetSession(ctx, session.ID)
-	if err != nil {
-		stale, recordErr := s.recordSessionPollError(ctx, session, err)
-		if recordErr != nil {
-			return recordErr
-		}
-		if !stale {
-			return nil
-		}
-		return s.failRunSession(ctx, session, persistedErrSessionPollStale)
-	}
-	if sessionHasMessageActivity(remote) {
-		tag, err := s.db.Exec(ctx, `
-UPDATE run_sessions
-SET status=$2, last_polled_at=now(), last_poll_error_at=NULL, last_poll_error=NULL
-WHERE session_id=$1 AND status=$3
-`, session.ID, statusRunning, statusStarting)
-		if err != nil {
-			return err
-		}
-		if tag.RowsAffected() > 0 {
-			return s.reconcileRunProgress(ctx, session.RunID)
-		}
-		return nil
-	}
-	return s.failRunSession(ctx, session, persistedErrSessionMessageFailed)
-}
-
-func sessionHasMessageActivity(session dari.Session) bool {
-	return session.LastMessageID != nil || session.LastMessageStatus != nil
 }
 
 func (s *Server) recoverStaleUploadingRuns(ctx context.Context) error {

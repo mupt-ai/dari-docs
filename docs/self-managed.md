@@ -28,7 +28,7 @@ dari-docs optimize . \
 
 By default, the bundled agents expose named LLM options such as `dumb-claude`, `medium-claude`, `smart-claude`, `dumb-gpt`, `medium-gpt`, and `smart-gpt`. The Claude options use the `anthropic` provider and the GPT options use the `openai` provider.
 
-In self-managed mode, tester sessions run every task across all six options by default. The editor uses the manifest default, `medium-claude`.
+In self-managed mode, tester sessions run every task across all six options by default. The CLI creates tester sessions through the Dari session-batch API, in chunks controlled by `--parallel`, and attaches metadata such as `kind`, `task_index`, and `llm_id` so agent webhooks can correlate lifecycle events. The editor uses the manifest default, `medium-claude`.
 
 To explicitly choose tester model tiers:
 

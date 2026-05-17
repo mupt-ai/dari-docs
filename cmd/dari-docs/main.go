@@ -116,7 +116,7 @@ func runCheckOrOptimize(cmd string, args []string) error {
 	fs.Var(&feedbackLLMIDs, "feedback-llm", "manifest LLM option ID for feedback/tester sessions; repeat or comma-separate (default: all bundled tester LLMs; overrides --llm)")
 	fs.StringVar(&editorLLMID, "editor-llm", "", "manifest LLM option ID for the editor session (overrides --llm)")
 	fs.StringVar(&outDir, "out", "", "output directory (default: <repo>/.dari-docs)")
-	fs.IntVar(&parallel, "parallel", 4, "number of feedback sessions to run concurrently")
+	fs.IntVar(&parallel, "parallel", 4, "number of feedback sessions per self-managed batch")
 	fs.BoolVar(&apply, "apply", false, "copy updated docs back into the repo after downloading")
 	fs.BoolVar(&liveVerify, "live-verify", false, "allow agents to run safe live verification using provided runtime secrets")
 	fs.BoolVar(&managedMode, "managed", false, "run through the managed dari-docs service instead of a self-managed Dari org")
@@ -1304,7 +1304,7 @@ Important flags:
   --bundle-exclude GLOB       exclude repo-relative docs bundle paths; repeatable
   --apply                     copy downloaded updated docs back into repo
   --api-base-url URL          Dari API base URL; self-managed only
-  --parallel N                tester sessions in parallel; self-managed only
+  --parallel N                tester sessions per batch; self-managed only
   --llm ID                    select a manifest LLM option for all self-managed sessions
   --feedback-llm ID           select tester LLM option(s); default is all bundled tester LLMs
   --editor-llm ID             select a manifest LLM option for the editor session
