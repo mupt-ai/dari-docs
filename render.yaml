@@ -21,11 +21,7 @@ services:
         sync: false
       - key: MANAGED_TESTER_AGENT_ID
         sync: false
-      - key: MANAGED_TESTER_VERSION_ID
-        sync: false
       - key: MANAGED_EDITOR_AGENT_ID
-        sync: false
-      - key: MANAGED_EDITOR_VERSION_ID
         sync: false
       - key: DARI_DOCS_RELEASE_ADMIN_TOKEN
         sync: false
