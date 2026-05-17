@@ -120,7 +120,14 @@ func (store *managedRunStore) ClaimStartableRun(ctx context.Context) (queuedRun,
 	return run, err == nil, err
 }
 
-func (store *managedRunStore) InsertStartedRunSession(ctx context.Context, sessionID, runID, kind string, taskIndex int, versionID string) error {
+func (store *managedRunStore) InsertStartedRunSession(
+	ctx context.Context,
+	sessionID string,
+	runID string,
+	kind string,
+	taskIndex int,
+	versionID string,
+) error {
 	return store.db.WithContext(ctx).
 		Clauses(clause.OnConflict{DoNothing: true}).
 		Create(&runSessionModel{
@@ -152,7 +159,11 @@ func (store *managedRunStore) RecoverStaleStartingRuns(ctx context.Context, stal
 		Updates(map[string]any{"status": statusQueued, "updated_at": time.Now()}).Error
 }
 
-func (store *managedRunStore) RecoverStaleUploadingRuns(ctx context.Context, staleBefore time.Time, code persistedErrorCode) ([]queuedRun, error) {
+func (store *managedRunStore) RecoverStaleUploadingRuns(
+	ctx context.Context,
+	staleBefore time.Time,
+	code persistedErrorCode,
+) ([]queuedRun, error) {
 	var models []managedRunModel
 	err := store.db.WithContext(ctx).Model(&models).
 		Clauses(clause.Returning{Columns: []clause.Column{{Name: "id"}, {Name: "reserved_cents"}}}).
@@ -214,7 +225,11 @@ func (store *managedRunStore) MarkSessionPollSucceeded(ctx context.Context, sess
 	})
 }
 
-func (store *managedRunStore) RecordSessionPollError(ctx context.Context, session runSessionRecord, code persistedErrorCode) (time.Time, error) {
+func (store *managedRunStore) RecordSessionPollError(
+	ctx context.Context,
+	session runSessionRecord,
+	code persistedErrorCode,
+) (time.Time, error) {
 	firstErrorAt := session.LastPollErrorAt
 	updates := map[string]any{
 		"last_polled_at":  time.Now(),
@@ -273,7 +288,12 @@ func (store *managedRunStore) LoadActiveRun(ctx context.Context, runID string) (
 	return model.toQueuedRun()
 }
 
-func (store *managedRunStore) FinishRun(ctx context.Context, run queuedRun, editorSessionID string, failureCode persistedErrorCode) (bool, error) {
+func (store *managedRunStore) FinishRun(
+	ctx context.Context,
+	run queuedRun,
+	editorSessionID string,
+	failureCode persistedErrorCode,
+) (bool, error) {
 	updates := map[string]any{
 		"updated_at":   time.Now(),
 		"completed_at": time.Now(),
@@ -390,7 +410,9 @@ func (model managedRunModel) toQueuedRun() (queuedRun, error) {
 		}
 	}
 	if len(model.RuntimeSecretNames) > 0 {
-		_ = json.Unmarshal(model.RuntimeSecretNames, &run.SecretNames)
+		if err := json.Unmarshal(model.RuntimeSecretNames, &run.SecretNames); err != nil {
+			return queuedRun{}, fmt.Errorf("decode runtime secret names: %w", err)
+		}
 	}
 	return run, nil
 }

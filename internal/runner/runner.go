@@ -103,7 +103,10 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 
 	var sessionSecrets map[string]string
 	if cfg.LiveVerify && len(cfg.RuntimeSecrets) > 0 {
-		secretJSON, _ := json.Marshal(cfg.RuntimeSecrets)
+		secretJSON, err := json.Marshal(cfg.RuntimeSecrets)
+		if err != nil {
+			return Result{}, fmt.Errorf("encode runtime secrets: %w", err)
+		}
 		sessionSecrets = map[string]string{RuntimeSecretsName: string(secretJSON)}
 	}
 
@@ -148,7 +151,14 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	return res, nil
 }
 
-func runFeedback(ctx context.Context, client *dari.Client, cfg Config, secrets map[string]string, fileID string, b bundle.Result) ([]string, error) {
+func runFeedback(
+	ctx context.Context,
+	client *dari.Client,
+	cfg Config,
+	secrets map[string]string,
+	fileID string,
+	b bundle.Result,
+) ([]string, error) {
 	items := feedbackItems(cfg)
 	reports := make([]string, len(items))
 	for _, chunk := range feedbackChunks(items, cfg.Parallel) {
@@ -326,9 +336,12 @@ func writeFeedbackReport(cfg Config, idx int, taskIndex int, llmID string, taskC
 	}
 	path := filepath.Join(cfg.OutDir, "runs", filename)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+		return fmt.Errorf("create feedback report directory: %w", err)
 	}
-	return os.WriteFile(path, []byte(report+"\n"), 0o644)
+	if err := os.WriteFile(path, []byte(report+"\n"), 0o644); err != nil {
+		return fmt.Errorf("write feedback report: %w", err)
+	}
+	return nil
 }
 
 func safeFilenamePart(s string) string {
@@ -354,7 +367,13 @@ func FeedbackPrompt(task string, b bundle.Result, live bool, secrets map[string]
 	}
 	liveText := "Live verification is disabled unless the docs provide a safe no-credential smoke test."
 	if live {
-		liveText = "Live verification is enabled. Runtime secrets, if present, are provided inside DARI_DOCS_RUNTIME_SECRETS_JSON as JSON. Available secret names: " + strings.Join(names, ", ") + ". Never print values. Only run safe/test-mode/read-only checks unless explicitly instructed otherwise."
+		liveText = strings.Join([]string{
+			"Live verification is enabled.",
+			"Runtime secrets, if present, are provided inside DARI_DOCS_RUNTIME_SECRETS_JSON as JSON.",
+			"Available secret names: " + strings.Join(names, ", ") + ".",
+			"Never print values.",
+			"Only run safe/test-mode/read-only checks unless explicitly instructed otherwise.",
+		}, " ")
 	}
 	return executePrompt(feedbackPromptTemplate, "feedback.md", map[string]any{
 		"Task":      task,
@@ -374,10 +393,21 @@ func AggregateFeedback(reports []string) string {
 }
 
 func writeAggregate(outDir string, reports []string) error {
-	return os.WriteFile(filepath.Join(outDir, "aggregate-feedback.md"), []byte(AggregateFeedback(reports)), 0o644)
+	path := filepath.Join(outDir, "aggregate-feedback.md")
+	if err := os.WriteFile(path, []byte(AggregateFeedback(reports)), 0o644); err != nil {
+		return fmt.Errorf("write aggregate feedback: %w", err)
+	}
+	return nil
 }
 
-func runEditor(ctx context.Context, client *dari.Client, cfg Config, secrets map[string]string, fileID string, reports []string) (string, error) {
+func runEditor(
+	ctx context.Context,
+	client *dari.Client,
+	cfg Config,
+	secrets map[string]string,
+	fileID string,
+	reports []string,
+) (string, error) {
 	prompt := EditorPrompt(reports)
 	metadata := map[string]string{"kind": "editor", "item_index": "1"}
 	batch, err := client.CreateSessionBatch(ctx, dari.CreateSessionBatchRequest{
@@ -415,8 +445,11 @@ func runEditor(ctx context.Context, client *dari.Client, cfg Config, secrets map
 		return "", fmt.Errorf("editor batch %s ended with status %q", final.BatchID, final.Status)
 	}
 	tr, err := client.GetTranscript(ctx, sessionID)
-	if err == nil {
-		_ = os.WriteFile(filepath.Join(cfg.OutDir, "editor-output.md"), []byte(dari.FinalAssistantText(tr)+"\n"), 0o644)
+	if err != nil {
+		return "", fmt.Errorf("get editor transcript: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.OutDir, "editor-output.md"), []byte(dari.FinalAssistantText(tr)+"\n"), 0o644); err != nil {
+		return "", fmt.Errorf("write editor output: %w", err)
 	}
 	return sessionID, nil
 }

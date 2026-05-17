@@ -284,7 +284,10 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 
 	runtimeSecretJSON := ""
 	if cfg.LiveVerify && len(cfg.RuntimeSecrets) > 0 {
-		b, _ := json.Marshal(cfg.RuntimeSecrets)
+		b, err := json.Marshal(cfg.RuntimeSecrets)
+		if err != nil {
+			return fmt.Errorf("encode runtime secrets: %w", err)
+		}
 		runtimeSecretJSON = string(b)
 	}
 	created, err := client.CreateRun(ctx, cfg.Command, cfg.Tasks, bundlePath, managed.CreateRunOptions{
@@ -301,6 +304,9 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 		totalSessions++
 	}
 	deadline := time.Now().Add(cfg.Timeout * time.Duration(totalSessions))
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
 	var status managed.RunStatus
 	for {
 		status, err = client.GetRun(ctx, created.RunID)
@@ -316,7 +322,7 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(5 * time.Second):
+		case <-ticker.C:
 		}
 	}
 	if err := writeManagedFeedback(cfg.OutDir, status.FeedbackReports, status.AggregateFeedback); err != nil {

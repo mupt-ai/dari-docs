@@ -166,7 +166,7 @@ func (s *Server) startSingleSessionBatch(ctx context.Context, run queuedRun, nex
 	if err != nil {
 		return s.failStartedRun(ctx, run, persistedErrSessionCreateFailed, fmt.Errorf("create %s session batch: %w", next.Kind, err))
 	}
-	if len(batch.Sessions) != 1 || batch.Sessions[0].SessionID == "" || batch.Sessions[0].Status == statusFailed || batch.Sessions[0].Error != "" {
+	if !singleBatchSessionStarted(batch) {
 		msg := "missing session"
 		if len(batch.Sessions) > 0 && batch.Sessions[0].Error != "" {
 			msg = batch.Sessions[0].Error
@@ -191,6 +191,13 @@ func (s *Server) startSingleSessionBatch(ctx context.Context, run queuedRun, nex
 	return store.MarkRunRunningFromStarting(ctx, run.ID)
 }
 
+func singleBatchSessionStarted(batch dari.SessionBatch) bool {
+	return len(batch.Sessions) == 1 &&
+		batch.Sessions[0].SessionID != "" &&
+		batch.Sessions[0].Status != statusFailed &&
+		batch.Sessions[0].Error == ""
+}
+
 func managedSessionMetadata(run queuedRun, next nextSession) map[string]string {
 	metadata := map[string]string{
 		"managed_run_id": run.ID,
@@ -203,15 +210,7 @@ func managedSessionMetadata(run queuedRun, next nextSession) map[string]string {
 }
 
 func shouldStartTesterBatch(run queuedRun, sessions []runSessionRecord) bool {
-	if len(run.Tasks) == 0 {
-		return false
-	}
-	for _, session := range sessions {
-		if session.Kind == "tester" || session.Status == statusRunning || session.Status == statusStarting {
-			return false
-		}
-	}
-	return true
+	return len(run.Tasks) > 0 && len(sessions) == 0
 }
 
 func (s *Server) startTesterBatch(ctx context.Context, run queuedRun) error {
@@ -576,6 +575,26 @@ func (s *Server) collectTesterReports(ctx context.Context, run queuedRun, sessio
 	return reports, true, nil
 }
 
+func waitForCostRetry(ctx context.Context, deadline time.Time) error {
+	wait := 5 * time.Second
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return nil
+	}
+	if remaining < wait {
+		wait = remaining
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func (s *Server) settleRun(ctx context.Context, runID string, reserve int64) error {
 	store, err := s.runs()
 	if err != nil {
@@ -598,12 +617,16 @@ func (s *Server) settleRun(ctx context.Context, runID string, reserve int64) err
 			}
 			costCents := usdStringToCentsCeil(cost.TotalCostUSD)
 			charges[id] = costCents + s.cfg.ServiceFeeCents
-			_ = store.UpdateSessionCost(ctx, id, costCents, charges[id])
+			if err := store.UpdateSessionCost(ctx, id, costCents, charges[id]); err != nil {
+				return fmt.Errorf("update session cost: %w", err)
+			}
 		}
 		if len(charges) == len(sessionIDs) || s.cfg.CostFetchTimeout == 0 {
 			break
 		}
-		time.Sleep(5 * time.Second)
+		if err := waitForCostRetry(ctx, deadline); err != nil {
+			return err
+		}
 	}
 	totalCharge := int64(0)
 	costStatus := "actual"

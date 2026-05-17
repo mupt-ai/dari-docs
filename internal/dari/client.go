@@ -131,15 +131,28 @@ type SessionBatchSession struct {
 
 func (c *Client) CreateSessionBatch(ctx context.Context, req CreateSessionBatchRequest) (SessionBatch, error) {
 	var out SessionBatch
-	b, _ := json.Marshal(req)
-	err := c.doJSON(ctx, http.MethodPost, "/v1/session-batches", "application/json", bytes.NewReader(b), &out)
-	return out, err
+	b, err := json.Marshal(req)
+	if err != nil {
+		return out, fmt.Errorf("encode session batch request: %w", err)
+	}
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/session-batches", "application/json", bytes.NewReader(b), &out); err != nil {
+		return out, err
+	}
+	if out.Sessions == nil {
+		out.Sessions = []SessionBatchSession{}
+	}
+	return out, nil
 }
 
 func (c *Client) GetSessionBatch(ctx context.Context, batchID string) (SessionBatch, error) {
 	var out SessionBatch
-	err := c.doJSON(ctx, http.MethodGet, "/v1/session-batches/"+url.PathEscape(batchID), "", nil, &out)
-	return out, err
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/session-batches/"+url.PathEscape(batchID), "", nil, &out); err != nil {
+		return out, err
+	}
+	if out.Sessions == nil {
+		out.Sessions = []SessionBatchSession{}
+	}
+	return out, nil
 }
 
 type ContentBlock map[string]any
@@ -197,12 +210,23 @@ func FinalAssistantText(t Transcript) string {
 	return strings.TrimSpace(strings.Join(parts, "\n\n"))
 }
 
-func (c *Client) WaitForBatchCompletion(ctx context.Context, batchID string, interval time.Duration, timeout time.Duration) (SessionBatch, error) {
+func (c *Client) WaitForBatchCompletion(
+	ctx context.Context,
+	batchID string,
+	interval time.Duration,
+	timeout time.Duration,
+) (SessionBatch, error) {
+	if interval <= 0 {
+		interval = time.Second
+	}
 	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
 	for {
 		b, err := c.GetSessionBatch(ctx, batchID)
 		if err != nil {
-			return b, err
+			return b, fmt.Errorf("get session batch: %w", err)
 		}
 		switch b.Status {
 		case "completed", "failed", "partial_failed":
@@ -214,7 +238,7 @@ func (c *Client) WaitForBatchCompletion(ctx context.Context, batchID string, int
 		select {
 		case <-ctx.Done():
 			return b, ctx.Err()
-		case <-time.After(interval):
+		case <-ticker.C:
 		}
 	}
 }
@@ -223,7 +247,13 @@ func (c *Client) DownloadWorkspaceZip(ctx context.Context, sessionID string, pat
 	return c.DownloadWorkspaceZipWithLimit(ctx, sessionID, paths, outPath, 0)
 }
 
-func (c *Client) DownloadWorkspaceZipWithLimit(ctx context.Context, sessionID string, paths []string, outPath string, maxBytes int64) error {
+func (c *Client) DownloadWorkspaceZipWithLimit(
+	ctx context.Context,
+	sessionID string,
+	paths []string,
+	outPath string,
+	maxBytes int64,
+) error {
 	u := "/v1/sessions/" + url.PathEscape(sessionID) + "/workspace.zip"
 	if len(paths) > 0 {
 		q := url.Values{}
