@@ -214,7 +214,7 @@ function EmptyRuns() {
         Run a check from your docs repo. The run will appear here while it is queued, running, and completed.
       </p>
       <div className="mt-4 flex flex-col gap-3">
-        <CopyableCommand command="brew install mupt-ai/tap/dari-docs" />
+        <CopyableCommand command="curl -fsSL https://raw.githubusercontent.com/mupt-ai/dari-docs/main/install.sh | bash" />
         <CopyableCommand command="dari-docs auth login" />
         <CopyableCommand command={'dari-docs check . --managed --task "Install the SDK and make a first API call"'} />
       </div>

@@ -6,5 +6,6 @@ bin/
 /dari-docs
 /dari-docs-service
 web/dist/
+web/node_modules
 web/node_modules/
 web/*.tsbuildinfo

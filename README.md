@@ -24,11 +24,17 @@ When the reader is an agent, ambiguity becomes measurable. Inconsistent terminol
 
 ## Install
 
-Install with Homebrew:
+Install the native macOS/Linux binary:
 
 ```bash
-brew install mupt-ai/tap/dari-docs
+curl -fsSL https://raw.githubusercontent.com/mupt-ai/dari-docs/main/install.sh | bash
 dari-docs --help
+```
+
+To choose a destination, set `DARI_DOCS_INSTALL_DIR`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mupt-ai/dari-docs/main/install.sh | DARI_DOCS_INSTALL_DIR="$HOME/bin" bash
 ```
 
 Install with Go:
