@@ -50,7 +50,7 @@ export default function AppLayout({ profile }: { profile: ManagedProfile }) {
               <SidebarMenu>
                 <SidebarNavItem to="/runs" label="Runs" icon={ListChecks} />
                 <SidebarNavItem to="/billing" label="Billing" icon={CreditCard} />
-                <SidebarNavItem to="/tokens" label="Tokens" icon={KeyRound} />
+                <SidebarNavItem to="/api-keys" label="API Keys" icon={KeyRound} />
                 <SidebarNavItem to="/settings" label="Settings" icon={SettingsIcon} />
               </SidebarMenu>
             </SidebarGroupContent>

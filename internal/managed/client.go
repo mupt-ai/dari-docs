@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	DefaultBaseURL = "https://optimize.dari.dev"
-	EnvTokenName   = "DARI_DOCS_TOKEN"
+	DefaultBaseURL     = "https://optimize.dari.dev"
+	EnvTokenName       = "DARI_DOCS_API_KEY"
+	LegacyEnvTokenName = "DARI_DOCS_TOKEN"
 )
 
 const (
@@ -51,7 +52,7 @@ type InvalidEnvTokenError struct {
 }
 
 func (e *InvalidEnvTokenError) Error() string {
-	return fmt.Sprintf("%s is set, but it is invalid, expired, or revoked. Create a new token with `dari-docs auth token create --name github-actions`, then update your CI secret store.", EnvTokenName)
+	return fmt.Sprintf("%s is set, but it is invalid, expired, or revoked. Create a new API key with `dari-docs auth api-key create --name github-actions`, then update your CI secret store.", EnvTokenName)
 }
 
 func New(baseURL, token string) *Client {
@@ -401,12 +402,11 @@ func LoadToken(baseURL string) (string, error) {
 }
 
 func LoadAuthToken(baseURL string) (AuthToken, error) {
-	if rawToken, ok := os.LookupEnv(EnvTokenName); ok {
-		token := strings.TrimSpace(rawToken)
-		if token == "" {
-			return AuthToken{}, fmt.Errorf("%s is set but empty; unset it or provide a valid token", EnvTokenName)
-		}
-		return AuthToken{Token: token, Source: AuthSourceEnv}, nil
+	if auth, ok, err := loadAuthTokenFromEnv(EnvTokenName); ok || err != nil {
+		return auth, err
+	}
+	if auth, ok, err := loadAuthTokenFromEnv(LegacyEnvTokenName); ok || err != nil {
+		return auth, err
 	}
 	token, err := LoadToken(baseURL)
 	if err != nil {
@@ -416,6 +416,18 @@ func LoadAuthToken(baseURL string) (AuthToken, error) {
 		return AuthToken{}, nil
 	}
 	return AuthToken{Token: token, Source: AuthSourceLocal}, nil
+}
+
+func loadAuthTokenFromEnv(name string) (AuthToken, bool, error) {
+	rawToken, ok := os.LookupEnv(name)
+	if !ok {
+		return AuthToken{}, false, nil
+	}
+	token := strings.TrimSpace(rawToken)
+	if token == "" {
+		return AuthToken{}, true, fmt.Errorf("%s is set but empty; unset it or provide a valid API key", name)
+	}
+	return AuthToken{Token: token, Source: AuthSourceEnv}, true, nil
 }
 
 func SaveToken(baseURL, token string) error {

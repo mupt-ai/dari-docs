@@ -8,7 +8,7 @@ import Login from "@/routes/Login";
 import RunDetail from "@/routes/RunDetail";
 import Runs from "@/routes/Runs";
 import Settings from "@/routes/Settings";
-import Tokens from "@/routes/Tokens";
+import ApiKeys from "@/routes/ApiKeys";
 
 export default function App() {
   const auth = useAuthState();
@@ -35,7 +35,8 @@ export default function App() {
           <Route path="/runs" element={<Runs />} />
           <Route path="/runs/:runId" element={<RunDetail />} />
           <Route path="/billing" element={<Billing />} />
-          <Route path="/tokens" element={<Tokens />} />
+          <Route path="/api-keys" element={<ApiKeys />} />
+          <Route path="/tokens" element={<Navigate to="/api-keys" replace />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/runs" replace />} />
         </Route>

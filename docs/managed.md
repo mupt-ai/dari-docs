@@ -67,10 +67,10 @@ Log out with:
 dari-docs auth logout
 ```
 
-To revoke managed tokens from all devices, run:
+To revoke managed credentials from all devices, run:
 
 ```bash
 dari-docs auth logout --all
 ```
 
-You can narrow revocation to browser-login tokens with `--interactive-only` or automation tokens with `--automation-only`.
+You can narrow revocation to browser-login sessions with `--interactive-only` or API keys with `--automation-only`.

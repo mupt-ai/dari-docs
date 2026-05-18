@@ -339,7 +339,7 @@ func (s *Server) handleLogoutAll(w http.ResponseWriter, r *http.Request, u user)
 		return
 	}
 	if effectiveTokenKind(u.TokenKind) != tokenKindInteractive && !u.hasScope(scopeManagedTokens) {
-		writeError(w, http.StatusForbidden, fmt.Sprintf("token missing required scope %s", scopeManagedTokens))
+		writeError(w, http.StatusForbidden, fmt.Sprintf("credential missing required scope %s", scopeManagedTokens))
 		return
 	}
 	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
@@ -452,7 +452,7 @@ func (s *Server) handleCreateAuthToken(w http.ResponseWriter, r *http.Request, u
 			return
 		}
 		if !u.hasScope(scope) {
-			writeError(w, http.StatusForbidden, fmt.Sprintf("token cannot grant scope %s", scope))
+			writeError(w, http.StatusForbidden, fmt.Sprintf("API key cannot grant scope %s", scope))
 			return
 		}
 	}
@@ -463,11 +463,11 @@ SELECT EXISTS (
   WHERE user_id=$1 AND kind=$2 AND lower(name)=lower($3) AND revoked_at IS NULL
 )
 `, u.ID, tokenKindAutomation, name).Scan(&activeNameExists); err != nil {
-		writeLoggedError(w, http.StatusInternalServerError, "could not create token", err)
+		writeLoggedError(w, http.StatusInternalServerError, "could not create API key", err)
 		return
 	}
 	if activeNameExists {
-		writeError(w, http.StatusConflict, "an active automation token with this name already exists")
+		writeError(w, http.StatusConflict, "an active API key with this name already exists")
 		return
 	}
 	tokenID := "tok_" + randomToken(12)
@@ -483,10 +483,10 @@ RETURNING created_at
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			writeError(w, http.StatusConflict, "an active automation token with this name already exists")
+			writeError(w, http.StatusConflict, "an active API key with this name already exists")
 			return
 		}
-		writeLoggedError(w, http.StatusInternalServerError, "could not create token", err)
+		writeLoggedError(w, http.StatusInternalServerError, "could not create API key", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, authTokenResponse{
@@ -513,7 +513,7 @@ WHERE user_id=$1 AND revoked_at IS NULL
 ORDER BY created_at DESC
 `, u.ID)
 	if err != nil {
-		writeLoggedError(w, http.StatusInternalServerError, "could not list tokens", err)
+		writeLoggedError(w, http.StatusInternalServerError, "could not list API keys", err)
 		return
 	}
 	defer rows.Close()
@@ -522,7 +522,7 @@ ORDER BY created_at DESC
 		var token authTokenResponse
 		var scopesJSON string
 		if err := rows.Scan(&token.ID, &token.Name, &token.Kind, &token.TokenPrefix, &scopesJSON, &token.CreatedAt, &token.LastUsedAt, &token.ExpiresAt, &token.RevokedAt); err != nil {
-			writeLoggedError(w, http.StatusInternalServerError, "could not list tokens", err)
+			writeLoggedError(w, http.StatusInternalServerError, "could not list API keys", err)
 			return
 		}
 		token.Scopes = parseScopesJSON(scopesJSON)
@@ -534,7 +534,7 @@ ORDER BY created_at DESC
 		tokens = append(tokens, token)
 	}
 	if rows.Err() != nil {
-		writeLoggedError(w, http.StatusInternalServerError, "could not list tokens", rows.Err())
+		writeLoggedError(w, http.StatusInternalServerError, "could not list API keys", rows.Err())
 		return
 	}
 	writeJSON(w, http.StatusOK, authTokenListResponse{Tokens: tokens})

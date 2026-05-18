@@ -410,7 +410,7 @@ func writeManagedFeedback(outDir string, reports []string, aggregate string) err
 
 func runAuth(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: dari-docs auth [login|logout|status|token]")
+		return fmt.Errorf("usage: dari-docs auth [login|logout|status|api-key]")
 	}
 	switch args[0] {
 	case "login":
@@ -419,10 +419,10 @@ func runAuth(args []string) error {
 		return runAuthLogout(args[1:])
 	case "status":
 		return runAuthStatus(args[1:])
-	case "token":
+	case "api-key", "api-keys", "token":
 		return runAuthToken(args[1:])
 	default:
-		return fmt.Errorf("usage: dari-docs auth [login|logout|status|token]")
+		return fmt.Errorf("usage: dari-docs auth [login|logout|status|api-key]")
 	}
 }
 
@@ -478,9 +478,9 @@ func runAuthLogout(args []string) error {
 	var all bool
 	var interactiveOnly bool
 	var automationOnly bool
-	fs.BoolVar(&all, "all", false, "revoke all managed service tokens for this account")
-	fs.BoolVar(&interactiveOnly, "interactive-only", false, "with --all, revoke only browser-login tokens")
-	fs.BoolVar(&automationOnly, "automation-only", false, "with --all, revoke only automation tokens")
+	fs.BoolVar(&all, "all", false, "revoke all managed service credentials for this account")
+	fs.BoolVar(&interactiveOnly, "interactive-only", false, "with --all, revoke only browser-login sessions")
+	fs.BoolVar(&automationOnly, "automation-only", false, "with --all, revoke only API keys")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -505,7 +505,7 @@ func runAuthLogout(args []string) error {
 		return err
 	}
 	if auth.Token == "" {
-		fmt.Printf("Already logged out locally.\nTo revoke server-side tokens from other devices or deleted local sessions, run `dari-docs auth logout --all`.\n")
+		fmt.Printf("Already logged out locally.\nTo revoke server-side credentials from other devices or deleted local sessions, run `dari-docs auth logout --all`.\n")
 		return nil
 	}
 	client := managed.NewWithAuthToken(managed.DefaultBaseURL, auth)
@@ -525,7 +525,7 @@ func runAuthLogout(args []string) error {
 		}
 		fmt.Printf("Logged out of %s\n", managed.DefaultBaseURL)
 	} else {
-		fmt.Printf("Revoked token from %s. Unset %s to stop using it locally.\n", managed.EnvTokenName, managed.EnvTokenName)
+		fmt.Printf("Revoked API key from %s. Unset %s to stop using it locally.\n", managed.EnvTokenName, managed.EnvTokenName)
 	}
 	return nil
 }
@@ -558,13 +558,13 @@ func runAuthLogoutAll(ctx context.Context, kind string) error {
 				if err := managed.DeleteToken(managed.DefaultBaseURL); err != nil {
 					return err
 				}
-				fmt.Fprintln(os.Stderr, "Stored login was invalid; re-authenticating to revoke server-side tokens.")
+				fmt.Fprintln(os.Stderr, "Stored login was invalid; re-authenticating to revoke server-side credentials.")
 			} else {
 				return err
 			}
 		}
 	} else {
-		fmt.Fprintln(os.Stderr, "No local login found; re-authenticating to revoke server-side tokens.")
+		fmt.Fprintln(os.Stderr, "No local login found; re-authenticating to revoke server-side credentials.")
 	}
 	verified, err := exchangeManagedBrowserLogin(ctx)
 	if err != nil {
@@ -586,11 +586,11 @@ func runAuthLogoutAll(ctx context.Context, kind string) error {
 func logoutAllMessage(kind string) string {
 	switch kind {
 	case "interactive":
-		return "Revoked all interactive Dari Docs managed tokens"
+		return "Revoked all interactive Dari Docs managed sessions"
 	case "automation":
-		return "Revoked all automation Dari Docs managed tokens"
+		return "Revoked all Dari Docs API keys"
 	default:
-		return "Revoked all Dari Docs managed tokens"
+		return "Revoked all Dari Docs managed credentials"
 	}
 }
 
@@ -615,7 +615,7 @@ func runAuthStatus(args []string) error {
 		if name == "" {
 			name = me.Token.ID
 		}
-		fmt.Printf("Token: %s (%s)\n", name, me.Token.Kind)
+		fmt.Printf("Credential: %s (%s)\n", name, me.Token.Kind)
 	}
 	if len(me.Token.Scopes) > 0 {
 		fmt.Printf("Scopes: %s\n", strings.Join(me.Token.Scopes, ", "))
@@ -625,7 +625,7 @@ func runAuthStatus(args []string) error {
 
 func runAuthToken(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: dari-docs auth token [create|list|revoke]")
+		return fmt.Errorf("usage: dari-docs auth api-key [create|list|revoke]")
 	}
 	switch args[0] {
 	case "create":
@@ -635,17 +635,17 @@ func runAuthToken(args []string) error {
 	case "revoke":
 		return runAuthTokenRevoke(args[1:])
 	default:
-		return fmt.Errorf("usage: dari-docs auth token [create|list|revoke]")
+		return fmt.Errorf("usage: dari-docs auth api-key [create|list|revoke]")
 	}
 }
 
 func runAuthTokenCreate(args []string) error {
-	fs := flag.NewFlagSet("dari-docs auth token create", flag.ExitOnError)
+	fs := flag.NewFlagSet("dari-docs auth api-key create", flag.ExitOnError)
 	var name string
 	var scopes repeated
 	var expiresIn string
-	fs.StringVar(&name, "name", "", "automation token name, for example github-actions")
-	fs.Var(&scopes, "scope", "token scope; repeatable (default: managed:read, managed:check, and managed:optimize)")
+	fs.StringVar(&name, "name", "", "API key name, for example github-actions")
+	fs.Var(&scopes, "scope", "API key scope; repeatable (default: managed:read, managed:check, and managed:optimize)")
 	fs.StringVar(&expiresIn, "expires-in", "", "optional expiration such as 90d or 24h")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -674,14 +674,14 @@ func runAuthTokenCreate(args []string) error {
 	if displayName == "" {
 		displayName = resp.ID
 	}
-	fmt.Printf("Created automation token %q.\n\n", displayName)
+	fmt.Printf("Created API key %q.\n\n", displayName)
 	fmt.Printf("%s=%s\n\n", managed.EnvTokenName, resp.Token)
 	fmt.Println("Copy this value now. It will not be shown again.")
 	return nil
 }
 
 func runAuthTokenList(args []string) error {
-	fs := flag.NewFlagSet("dari-docs auth token list", flag.ExitOnError)
+	fs := flag.NewFlagSet("dari-docs auth api-key list", flag.ExitOnError)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -713,12 +713,12 @@ func runAuthTokenList(args []string) error {
 }
 
 func runAuthTokenRevoke(args []string) error {
-	fs := flag.NewFlagSet("dari-docs auth token revoke", flag.ExitOnError)
+	fs := flag.NewFlagSet("dari-docs auth api-key revoke", flag.ExitOnError)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: dari-docs auth token revoke <token-id>")
+		return fmt.Errorf("usage: dari-docs auth api-key revoke <api-key-id>")
 	}
 	client, _, err := managedClientWithAuth()
 	if err != nil {
@@ -728,7 +728,7 @@ func runAuthTokenRevoke(args []string) error {
 	if err := client.RevokeAuthToken(context.Background(), tokenID); err != nil {
 		return err
 	}
-	fmt.Printf("Revoked token %s\n", tokenID)
+	fmt.Printf("Revoked API key %s\n", tokenID)
 	return nil
 }
 
@@ -845,7 +845,7 @@ func loadManagedAuthToken() (managed.AuthToken, error) {
 }
 
 func managedAuthRequiredError() error {
-	return fmt.Errorf("not logged in to managed service\n\nFor local use:\n  dari-docs auth login\n\nFor CI:\n  dari-docs auth token create --name github-actions\n  Set %s in your CI secret store", managed.EnvTokenName)
+	return fmt.Errorf("not logged in to managed service\n\nFor local use:\n  dari-docs auth login\n\nFor CI:\n  dari-docs auth api-key create --name github-actions\n  Set %s in your CI secret store", managed.EnvTokenName)
 }
 
 func authSourceLabel(source string) string {
@@ -1305,9 +1305,9 @@ Usage:
   dari-docs --version
   dari-docs auth login
   dari-docs auth status
-  dari-docs auth token create --name github-actions
-  dari-docs auth token list
-  dari-docs auth token revoke <token-id>
+  dari-docs auth api-key create --name github-actions
+  dari-docs auth api-key list
+  dari-docs auth api-key revoke <api-key-id>
   dari-docs auth logout [--all] [--interactive-only|--automation-only]
   dari-docs init [repo]
   dari-docs billing balance
