@@ -45,6 +45,29 @@ go build ./cmd/dari-docs
 ./dari-docs --help
 ```
 
+## Local web/service development with Docker Compose
+
+Run Postgres, the managed-service backend, and the Vite frontend together:
+
+```bash
+docker compose up
+```
+
+Then open:
+
+- Frontend: <http://localhost:5174>
+- Backend health: <http://localhost:8080/healthz>
+- Postgres: `localhost:5433` (`dari_docs` / `dari_docs` / `dari_docs_local`)
+
+The compose file supplies local placeholder service secrets so the backend can boot and run migrations. To exercise real Dari-managed runs, export real values before starting compose, for example:
+
+```bash
+export DARI_API_KEY=...
+export MANAGED_TESTER_AGENT_ID=...
+export MANAGED_EDITOR_AGENT_ID=...
+docker compose up
+```
+
 ## Quickstart
 
 Managed mode uses the hosted dari.dev Docs service and a separate dari.dev Docs credit balance. New accounts start with five dollars worth of free credits.

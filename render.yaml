@@ -14,7 +14,7 @@ services:
           name: dari-docs-service-db
           property: connectionString
       - key: PUBLIC_BASE_URL
-        value: https://dari-docs.dari.dev
+        value: https://optimize.dari.dev
       - key: DARI_API_BASE_URL
         value: https://api.dari.dev
       - key: DARI_API_KEY
