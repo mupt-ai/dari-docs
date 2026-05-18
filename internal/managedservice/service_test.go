@@ -1211,6 +1211,66 @@ WHERE user_id IN (SELECT id FROM users WHERE auth_subject=$1)
 	}
 }
 
+func TestBrowserSessionCanRevokeAllTokens(t *testing.T) {
+	db := openManagedServiceTestDB(t)
+	ctx := context.Background()
+	authSubject := "sup_browser_revoke_" + randomToken(8)
+	userID := "usr_browser_revoke_" + randomToken(8)
+	email := "browser-revoke-" + randomToken(8) + "@example.test"
+	accessToken := "header.payload.signature"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/auth/userinfo" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer "+accessToken {
+			t.Fatalf("authorization = %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(dariUserInfo{
+			AuthSubject: authSubject,
+			Email:       email,
+			DisplayName: "Browser Revoke",
+		})
+	}))
+	defer upstream.Close()
+	cleanup := func() {
+		_, _ = db.Exec(context.Background(), `DELETE FROM api_tokens WHERE user_id=$1`, userID)
+		_, _ = db.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+
+	if _, err := db.Exec(ctx, `
+INSERT INTO users (id, auth_subject, email, free_credit_granted_at)
+VALUES ($1, $2, $3, now())
+`, userID, authSubject, email); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+INSERT INTO api_tokens (id, user_id, token_hash, kind, scopes)
+VALUES
+  ($1, $3, $4, $5, $7),
+  ($2, $3, $6, $5, $7)
+`, "tok_browser_revoke_a_"+randomToken(6), "tok_browser_revoke_b_"+randomToken(6), userID, sha256Hex("token-a"), tokenKindAutomation, sha256Hex("token-b"), mustJSON([]string{scopeManagedRead})); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &Server{db: db, cfg: Config{DariAPIBaseURL: upstream.URL}}
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/logout-all", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", rec.Code, rec.Body.String())
+	}
+	var revoked int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM api_tokens WHERE user_id=$1 AND revoked_at IS NOT NULL`, userID).Scan(&revoked); err != nil {
+		t.Fatal(err)
+	}
+	if revoked != 2 {
+		t.Fatalf("revoked tokens = %d, want 2", revoked)
+	}
+}
+
 func TestDariAuthExchangeStillCreatesInteractiveToken(t *testing.T) {
 	db := openManagedServiceTestDB(t)
 	authSubject := "sup_cli_" + randomToken(8)
@@ -1477,6 +1537,47 @@ func TestRunListOrderExprWhitelistsSorts(t *testing.T) {
 	}
 	if _, ok := runListOrderExpr("created_at; drop table runs"); ok {
 		t.Fatal("unsafe sort should not be accepted")
+	}
+}
+
+func TestRunListResponseSerializesEmptyLLMsAsArray(t *testing.T) {
+	body, err := json.Marshal(runListResponse{Runs: []runListItem{
+		{ID: "run_test", LLMs: []runLLMSummary{}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), `"llms":null`) {
+		t.Fatalf("body = %s, llms should not be null", body)
+	}
+	if !strings.Contains(string(body), `"llms":[]`) {
+		t.Fatalf("body = %s, want empty llms array", body)
+	}
+}
+
+func TestRunStatusResponseSerializesEmptyLLMsAsArray(t *testing.T) {
+	body, err := json.Marshal(runStatusResponse{ID: "run_test", LLMs: []runLLMSummary{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), `"llms":null`) {
+		t.Fatalf("body = %s, llms should not be null", body)
+	}
+	if !strings.Contains(string(body), `"llms":[]`) {
+		t.Fatalf("body = %s, want empty llms array", body)
+	}
+}
+
+func TestAuthTokenListSerializesEmptyTokensAsArray(t *testing.T) {
+	body, err := json.Marshal(authTokenListResponse{Tokens: []authTokenResponse{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), `"tokens":null`) {
+		t.Fatalf("body = %s, tokens should not be null", body)
+	}
+	if !strings.Contains(string(body), `"tokens":[]`) {
+		t.Fatalf("body = %s, want empty tokens array", body)
 	}
 }
 

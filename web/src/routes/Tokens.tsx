@@ -64,7 +64,10 @@ export default function Tokens() {
     try {
       const created = await createToken(trimmed, scopes);
       setIssued(created);
-      setTokens((prev) => (prev ? [created, ...prev] : [created]));
+      setTokens((prev) => {
+        const listed = tokenWithoutSecret(created);
+        return prev ? [listed, ...prev] : [listed];
+      });
       setName("");
       setScopes(defaultScopes);
       setScopesOpen(false);
@@ -283,4 +286,10 @@ export default function Tokens() {
 
 function automationTokens(tokens: AuthTokenInfo[]): AuthTokenInfo[] {
   return tokens.filter((token) => token.kind === "automation");
+}
+
+function tokenWithoutSecret(token: AuthTokenInfo): AuthTokenInfo {
+  const listed = { ...token };
+  delete listed.token;
+  return listed;
 }

@@ -133,14 +133,24 @@ func (s *Server) authenticateDariSession(ctx context.Context, accessToken string
 	if err != nil {
 		return user{}, err
 	}
+	u, needsGrant, found, err := s.lookupDariSessionUser(ctx, info)
+	if err != nil {
+		return user{}, err
+	}
+	if found && !needsGrant {
+		return u, nil
+	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return user{}, err
 	}
 	defer tx.Rollback(ctx)
-	userID, err := upsertUserForDariIdentity(ctx, tx, info)
-	if err != nil {
-		return user{}, err
+	userID := u.ID
+	if !found {
+		userID, err = upsertUserForDariIdentity(ctx, tx, info)
+		if err != nil {
+			return user{}, err
+		}
 	}
 	if err := s.ensureFreeGrant(ctx, tx, userID); err != nil {
 		return user{}, err
@@ -153,6 +163,26 @@ func (s *Server) authenticateDariSession(ctx context.Context, accessToken string
 		Email:     info.Email,
 		TokenKind: tokenKindBrowserSession,
 	}, nil
+}
+
+func (s *Server) lookupDariSessionUser(ctx context.Context, info dariUserInfo) (user, bool, bool, error) {
+	var u user
+	var grantedAt *time.Time
+	err := s.db.QueryRow(ctx, `
+SELECT id, free_credit_granted_at
+FROM users
+WHERE auth_subject=$1
+`, info.AuthSubject).Scan(&u.ID, &grantedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return user{}, false, false, nil
+	}
+	if err != nil {
+		return user{}, false, false, err
+	}
+	u.Email = info.Email
+	u.TokenKind = tokenKindBrowserSession
+	needsGrant := grantedAt == nil && s.cfg.FreeGrantCents > 0
+	return u, needsGrant, true, nil
 }
 
 func bearerToken(header string) (string, error) {
@@ -346,6 +376,10 @@ type authTokenResponse struct {
 	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
 }
 
+type authTokenListResponse struct {
+	Tokens []authTokenResponse `json:"tokens"`
+}
+
 func (s *Server) handleAuthTokens(w http.ResponseWriter, r *http.Request, u user) {
 	switch r.Method {
 	case http.MethodGet:
@@ -483,7 +517,7 @@ ORDER BY created_at DESC
 		return
 	}
 	defer rows.Close()
-	var tokens []authTokenResponse
+	tokens := []authTokenResponse{}
 	for rows.Next() {
 		var token authTokenResponse
 		var scopesJSON string
@@ -494,6 +528,8 @@ ORDER BY created_at DESC
 		token.Scopes = parseScopesJSON(scopesJSON)
 		if token.Kind == tokenKindInteractive {
 			token.Scopes = append([]string{}, allManagedScopes...)
+		} else if token.Scopes == nil {
+			token.Scopes = []string{}
 		}
 		tokens = append(tokens, token)
 	}
@@ -501,7 +537,7 @@ ORDER BY created_at DESC
 		writeLoggedError(w, http.StatusInternalServerError, "could not list tokens", rows.Err())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tokens": tokens})
+	writeJSON(w, http.StatusOK, authTokenListResponse{Tokens: tokens})
 }
 
 func mustJSON(v any) []byte {
@@ -559,12 +595,36 @@ func (s *Server) fetchDariUserInfo(ctx context.Context, accessToken string) (dar
 func upsertUserForDariIdentity(ctx context.Context, tx pgx.Tx, info dariUserInfo) (string, error) {
 	userID := "usr_" + randomToken(18)
 	err := tx.QueryRow(ctx, `
-INSERT INTO users (id, auth_subject, email, display_name)
-VALUES ($4, $1, $2, $3)
-ON CONFLICT (auth_subject) DO UPDATE
-SET email=EXCLUDED.email,
-    display_name=EXCLUDED.display_name
-RETURNING id
+WITH by_subject AS (
+  UPDATE users
+  SET email=CASE
+        WHEN EXISTS (
+          SELECT 1 FROM users other
+          WHERE other.email=$2 AND other.auth_subject IS DISTINCT FROM $1
+        ) THEN users.email
+        ELSE $2
+      END,
+      display_name=$3
+  WHERE auth_subject=$1
+  RETURNING id
+), by_email AS (
+  UPDATE users
+  SET auth_subject=$1, display_name=$3
+  WHERE email=$2 AND auth_subject IS NULL AND NOT EXISTS (SELECT 1 FROM by_subject)
+  RETURNING id
+), inserted AS (
+  INSERT INTO users (id, auth_subject, email, display_name)
+  SELECT $4, $1, $2, $3
+  WHERE NOT EXISTS (SELECT 1 FROM by_subject) AND NOT EXISTS (SELECT 1 FROM by_email)
+  ON CONFLICT (email) DO UPDATE
+  SET auth_subject=EXCLUDED.auth_subject, display_name=EXCLUDED.display_name
+  WHERE users.auth_subject IS NULL OR users.auth_subject=EXCLUDED.auth_subject
+  RETURNING id
+)
+SELECT id FROM by_subject
+UNION ALL SELECT id FROM by_email
+UNION ALL SELECT id FROM inserted
+LIMIT 1
 `, info.AuthSubject, info.Email, nullableString(info.DisplayName), userID).Scan(&userID)
 	return userID, err
 }

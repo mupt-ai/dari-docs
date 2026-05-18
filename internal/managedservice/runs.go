@@ -369,6 +369,9 @@ LIMIT $2 OFFSET $3
 	}
 	for i := range runs {
 		runs[i].LLMs = llms[runs[i].ID]
+		if runs[i].LLMs == nil {
+			runs[i].LLMs = []runLLMSummary{}
+		}
 	}
 	writeJSON(w, http.StatusOK, runListResponse{Runs: runs, NextCursor: nextCursor})
 }
@@ -693,7 +696,7 @@ type runStatusResponse struct {
 	Tasks                []string        `json:"tasks,omitempty"`
 	CreatedAt            time.Time       `json:"created_at"`
 	CompletedAt          *time.Time      `json:"completed_at,omitempty"`
-	LLMs                 []runLLMSummary `json:"llms,omitempty"`
+	LLMs                 []runLLMSummary `json:"llms"`
 	FeedbackReports      []string        `json:"feedback_reports,omitempty"`
 	AggregateFeedback    string          `json:"aggregate_feedback,omitempty"`
 	UpdatedDocsAvailable bool            `json:"updated_docs_available"`
@@ -723,6 +726,9 @@ FROM runs WHERE id=$1 AND user_id=$2
 		return rs, err
 	}
 	rs.LLMs = llms[runID]
+	if rs.LLMs == nil {
+		rs.LLMs = []runLLMSummary{}
+	}
 	if rs.Status == statusCompleted || rs.Status == statusFailed {
 		reports, err := s.completedTesterReports(ctx, runID)
 		if err != nil {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 
+import { API_URL } from "@/lib/env";
 import { getSupabaseClient, signOutSupabase } from "@/lib/supabase";
 
 const LEGACY_MANAGED_TOKEN_KEY = "dariDocs.managedToken";
@@ -25,6 +26,34 @@ export function clearLegacyManagedSession(): void {
   }
 }
 
+function legacyManagedToken(): string | null {
+  try {
+    const token = window.localStorage.getItem(LEGACY_MANAGED_TOKEN_KEY);
+    return token && token.trim() !== "" ? token : null;
+  } catch {
+    return null;
+  }
+}
+
+async function revokeLegacyManagedToken(token: string): Promise<void> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 3000);
+  try {
+    await fetch(`${API_URL}/v1/auth/logout`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      signal: controller.signal,
+    });
+  } catch {
+    // Logout should still clear local browser auth if legacy token revocation fails.
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 function profileFromUser(user: User): ManagedProfile {
   const metadata = user.user_metadata ?? {};
   return {
@@ -43,6 +72,10 @@ function stringMetadata(value: unknown): string | null {
 }
 
 export async function logoutManaged(): Promise<void> {
+  const legacyToken = legacyManagedToken();
+  if (legacyToken) {
+    await revokeLegacyManagedToken(legacyToken);
+  }
   clearLegacyManagedSession();
   try {
     await signOutSupabase();
