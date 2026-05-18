@@ -80,6 +80,8 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		runtimeSecretNames []string
 		runtimeNonce       []byte
 		runtimeCiphertext  []byte
+		testerLLMIDs       []string
+		editorLLMID        string
 		tmpPath            string
 		b                  bundle.Result
 		bundleName         string
@@ -143,6 +145,28 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
+		case "feedback_llm_ids_json":
+			v, err := readTextPart(part, 1024)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "feedback_llm_ids_json field is too large")
+				return
+			}
+			testerLLMIDs, err = parseManagedLLMIDsJSON(v)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		case "editor_llm_id":
+			v, err := readTextPart(part, 128)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "editor_llm_id field is too large")
+				return
+			}
+			editorLLMID, err = normalizeManagedLLMID(v)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
 		case "bundle":
 			if mode == "" || tasks == nil {
 				writeError(w, http.StatusBadRequest, "mode and tasks_json must be sent before bundle")
@@ -159,7 +183,13 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 					return
 				}
 			}
-			reserve = reserveCentsForRun(mode, len(tasks), s.cfg)
+			if len(testerLLMIDs) == 0 {
+				testerLLMIDs = allowedManagedLLMIDs()
+			}
+			if editorLLMID == "" {
+				editorLLMID = managedDefaultLLMID
+			}
+			reserve = reserveCentsForRun(mode, len(tasks), len(testerLLMIDs), s.cfg)
 			if err := s.preflightRun(r.Context(), u.ID, reserve); err != nil {
 				var activeErr *activeRunLimitError
 				if errors.As(err, &activeErr) {
@@ -222,12 +252,17 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		writeLoggedError(w, http.StatusInternalServerError, "could not encode managed run tasks", err)
 		return
 	}
+	testerLLMIDsJSON, err := json.Marshal(testerLLMIDs)
+	if err != nil {
+		writeLoggedError(w, http.StatusInternalServerError, "could not encode managed run LLM IDs", err)
+		return
+	}
 	secretNamesJSON, err := json.Marshal(runtimeSecretNames)
 	if err != nil {
 		writeLoggedError(w, http.StatusInternalServerError, "could not encode runtime secret names", err)
 		return
 	}
-	if err := s.reserveRun(r.Context(), u.ID, runID, mode, taskJSON, b, reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
+	if err := s.reserveRun(r.Context(), u.ID, runID, mode, taskJSON, testerLLMIDsJSON, editorLLMID, b, reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
 		if errors.Is(err, errNoActiveManagedAgentRelease) {
 			writeError(w, http.StatusServiceUnavailable, "managed agents are not configured")
 			return
@@ -443,8 +478,7 @@ func runListOrderExpr(sort string) (runListOrder, bool) {
 		return runListOrder{Expr: "coalesce(completed_at, '0001-01-01'::timestamptz)"}, true
 	case "llms":
 		return runListOrder{
-			Expr: `(SELECT string_agg(coalesce(nullif(rs.llm_id,''), $4), ',' ORDER BY CASE rs.kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, rs.task_index) FROM run_sessions rs WHERE rs.run_id = runs.id)`,
-			Args: []any{managedDefaultLLMID},
+			Expr: `(array_to_string(ARRAY(SELECT jsonb_array_elements_text(runs.tester_llm_ids)), ',') || ',' || runs.editor_llm_id)`,
 		}, true
 	default:
 		return runListOrder{}, false
@@ -472,6 +506,50 @@ func (s *Server) loadRunLLMSummaries(ctx context.Context, userID string, runIDs 
 	if len(runIDs) == 0 {
 		return out, nil
 	}
+	plannedRows, err := s.db.Query(ctx, `
+SELECT id, mode, jsonb_array_length(tasks), tester_llm_ids, editor_llm_id
+FROM runs
+WHERE user_id=$1 AND id = ANY($2)
+`, userID, runIDs)
+	if err != nil {
+		return nil, err
+	}
+	for plannedRows.Next() {
+		var runID, mode, editorLLMID string
+		var taskCount int
+		var testerLLMIDsJSON []byte
+		if err := plannedRows.Scan(&runID, &mode, &taskCount, &testerLLMIDsJSON, &editorLLMID); err != nil {
+			plannedRows.Close()
+			return nil, err
+		}
+		var testerLLMIDs []string
+		if err := json.Unmarshal(testerLLMIDsJSON, &testerLLMIDs); err != nil {
+			plannedRows.Close()
+			return nil, err
+		}
+		testerLLMIDs, err = normalizeManagedLLMIDs(testerLLMIDs)
+		if err != nil {
+			plannedRows.Close()
+			return nil, err
+		}
+		for _, llmID := range testerLLMIDs {
+			out[runID] = append(out[runID], runLLMSummary{Role: "tester", LLMID: llmID, Count: taskCount})
+		}
+		if mode == "optimize" {
+			editorLLMID, err = normalizeManagedLLMID(editorLLMID)
+			if err != nil {
+				plannedRows.Close()
+				return nil, err
+			}
+			out[runID] = append(out[runID], runLLMSummary{Role: "editor", LLMID: editorLLMID, Count: 1})
+		}
+	}
+	if err := plannedRows.Err(); err != nil {
+		plannedRows.Close()
+		return nil, err
+	}
+	plannedRows.Close()
+
 	rows, err := s.db.Query(ctx, `
 SELECT rs.run_id, rs.kind, coalesce(nullif(rs.llm_id,''), $3) AS llm_id, count(*)
 FROM run_sessions rs
@@ -484,15 +562,24 @@ ORDER BY rs.run_id, CASE rs.kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 
 		return nil, err
 	}
 	defer rows.Close()
+	actual := make(map[string][]runLLMSummary, len(runIDs))
 	for rows.Next() {
 		var runID string
 		var item runLLMSummary
 		if err := rows.Scan(&runID, &item.Role, &item.LLMID, &item.Count); err != nil {
 			return nil, err
 		}
-		out[runID] = append(out[runID], item)
+		actual[runID] = append(actual[runID], item)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for runID, llms := range actual {
+		if len(llms) > 0 {
+			out[runID] = llms
+		}
+	}
+	return out, nil
 }
 
 func (s *Server) stageManagedBundle(part *multipart.Part) (string, bundle.Result, error) {
@@ -567,8 +654,11 @@ func parseManagedTasksJSON(raw string, maxTasks int, maxTaskBytes int64) ([]stri
 	return tasks, nil
 }
 
-func reserveCentsForRun(mode string, taskCount int, cfg Config) int64 {
-	reserve := int64(taskCount) * cfg.TesterReserveCents
+func reserveCentsForRun(mode string, taskCount int, testerLLMCount int, cfg Config) int64 {
+	if testerLLMCount <= 0 {
+		testerLLMCount = 1
+	}
+	reserve := int64(taskCount*testerLLMCount) * cfg.TesterReserveCents
 	if mode == "optimize" {
 		reserve += cfg.EditorReserveCents
 	}
@@ -589,7 +679,7 @@ func (s *Server) maxActiveRunsPerUser() int {
 	return int(managedMaxActiveRunsPerUser)
 }
 
-func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, taskJSON []byte, b bundle.Result, reserve int64, liveVerify bool, secretNamesJSON, runtimeNonce, runtimeCiphertext []byte) error {
+func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, taskJSON, testerLLMIDsJSON []byte, editorLLMID string, b bundle.Result, reserve int64, liveVerify bool, secretNamesJSON, runtimeNonce, runtimeCiphertext []byte) error {
 	release, err := s.loadManagedAgentRelease(ctx)
 	if err != nil {
 		return err
@@ -617,10 +707,13 @@ func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, tas
 	if balance < reserve {
 		return &insufficientCreditsError{Need: reserve, Balance: balance}
 	}
+	if editorLLMID == "" {
+		editorLLMID = managedDefaultLLMID
+	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO runs (id, user_id, mode, status, tasks, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files, reserved_cents, live_verify, runtime_secret_names, runtime_secrets_nonce, runtime_secrets_ciphertext)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-		`, runID, userID, mode, statusUploading, taskJSON, release.TesterAgentID, release.TesterVersionID, release.EditorAgentID, release.EditorVersionID, b.SHA256, len(b.Manifest.Files), reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
+		INSERT INTO runs (id, user_id, mode, status, tasks, tester_llm_ids, editor_llm_id, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files, reserved_cents, live_verify, runtime_secret_names, runtime_secrets_nonce, runtime_secrets_ciphertext)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+		`, runID, userID, mode, statusUploading, taskJSON, testerLLMIDsJSON, editorLLMID, release.TesterAgentID, release.TesterVersionID, release.EditorAgentID, release.EditorVersionID, b.SHA256, len(b.Manifest.Files), reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -783,7 +876,7 @@ SELECT rs.kind,
 FROM run_sessions rs
 JOIN runs r ON r.id = rs.run_id
 WHERE r.id=$1 AND r.user_id=$2
-ORDER BY CASE rs.kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, rs.task_index, rs.created_at
+ORDER BY CASE rs.kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, rs.task_index, rs.llm_id, rs.created_at
 `, runID, userID, managedDefaultLLMID)
 	if err != nil {
 		return nil, err
@@ -810,33 +903,40 @@ ORDER BY CASE rs.kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, rs.t
 
 func (s *Server) completedTesterReports(ctx context.Context, runID string) ([]string, error) {
 	rows, err := s.db.Query(ctx, `
-SELECT session_id
+SELECT session_id,
+       task_index,
+       coalesce(nullif(llm_id,''), $3)
 FROM run_sessions
 WHERE run_id=$1 AND kind='tester' AND status=$2
-ORDER BY task_index
-`, runID, statusCompleted)
+ORDER BY task_index, llm_id, created_at
+`, runID, statusCompleted, managedDefaultLLMID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var sessionIDs []string
+	type testerSession struct {
+		id        string
+		taskIndex int
+		llmID     string
+	}
+	var sessions []testerSession
 	for rows.Next() {
-		var sessionID string
-		if err := rows.Scan(&sessionID); err != nil {
+		var session testerSession
+		if err := rows.Scan(&session.id, &session.taskIndex, &session.llmID); err != nil {
 			return nil, err
 		}
-		sessionIDs = append(sessionIDs, sessionID)
+		sessions = append(sessions, session)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	reports := make([]string, 0, len(sessionIDs))
-	for _, sessionID := range sessionIDs {
-		tr, err := s.dari.GetTranscript(ctx, sessionID)
+	reports := make([]string, 0, len(sessions))
+	for _, session := range sessions {
+		tr, err := s.dari.GetTranscript(ctx, session.id)
 		if err != nil {
-			return nil, fmt.Errorf("%w: get transcript %s: %v", errRunFeedbackLoad, sessionID, err)
+			return nil, fmt.Errorf("%w: get transcript %s: %v", errRunFeedbackLoad, session.id, err)
 		}
-		reports = append(reports, dari.FinalAssistantText(tr))
+		reports = append(reports, formatManagedFeedbackReport(session.taskIndex, session.llmID, dari.FinalAssistantText(tr)))
 	}
 	return reports, nil
 }

@@ -23,6 +23,8 @@ export type RunConfig = {
   max_bundle_bytes: number;
   bundle_max_uncompressed_bytes: number;
   bundle_max_file_bytes: number;
+  default_llm_id: string;
+  allowed_llm_ids: string[];
 };
 
 export type CheckoutResponse = {

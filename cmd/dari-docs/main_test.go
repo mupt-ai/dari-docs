@@ -56,11 +56,11 @@ func TestParseExpiresIn(t *testing.T) {
 
 func TestManagedRunReserveCents(t *testing.T) {
 	cfg := managed.RunConfig{TesterSessionReserveCents: 75, EditorSessionReserveCents: 150}
-	if got := managedRunReserveCents("check", 3, cfg); got != 225 {
-		t.Fatalf("check reserve = %d, want 225", got)
+	if got := managedRunReserveCents("check", 3, 3, cfg); got != 675 {
+		t.Fatalf("check reserve = %d, want 675", got)
 	}
-	if got := managedRunReserveCents("optimize", 3, cfg); got != 375 {
-		t.Fatalf("optimize reserve = %d, want 375", got)
+	if got := managedRunReserveCents("optimize", 3, 3, cfg); got != 825 {
+		t.Fatalf("optimize reserve = %d, want 825", got)
 	}
 }
 
@@ -68,17 +68,56 @@ func TestManagedSessionSummary(t *testing.T) {
 	tests := map[string]struct {
 		command string
 		tasks   int
+		llms    int
 		want    string
 	}{
-		"single check":    {command: "check", tasks: 1, want: "1 tester session"},
-		"multi check":     {command: "check", tasks: 3, want: "3 tester sessions"},
-		"single optimize": {command: "optimize", tasks: 1, want: "1 tester session + 1 editor session"},
-		"multi optimize":  {command: "optimize", tasks: 3, want: "3 tester sessions + 1 editor session"},
+		"single check":    {command: "check", tasks: 1, llms: 1, want: "1 tester session"},
+		"multi check":     {command: "check", tasks: 3, llms: 1, want: "3 tester sessions"},
+		"matrix check":    {command: "check", tasks: 3, llms: 3, want: "9 tester sessions (3 tasks x 3 LLMs)"},
+		"single optimize": {command: "optimize", tasks: 1, llms: 1, want: "1 tester session + 1 editor session"},
+		"multi optimize":  {command: "optimize", tasks: 3, llms: 3, want: "9 tester sessions (3 tasks x 3 LLMs) + 1 editor session"},
 	}
 	for name, tt := range tests {
-		if got := managedSessionSummary(tt.command, tt.tasks); got != tt.want {
+		if got := managedSessionSummary(tt.command, tt.tasks, tt.llms); got != tt.want {
 			t.Fatalf("%s summary = %q, want %q", name, got, tt.want)
 		}
+	}
+}
+
+func TestManagedRunTimeoutScalesByPhase(t *testing.T) {
+	base := 15 * time.Minute
+	if got := managedRunTimeout("check", base); got != base {
+		t.Fatalf("check timeout = %s, want %s", got, base)
+	}
+	if got := managedRunTimeout("optimize", base); got != 2*base {
+		t.Fatalf("optimize timeout = %s, want %s", got, 2*base)
+	}
+}
+
+func TestManagedLLMSelectionDefaultsToAllowedClaudeMatrix(t *testing.T) {
+	cfg := managed.RunConfig{
+		DefaultLLMID:  "medium-claude",
+		AllowedLLMIDs: []string{"dumb-claude", "medium-claude", "smart-claude"},
+	}
+	feedback, editor, err := managedLLMSelection(nil, "", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(feedback, ",") != "dumb-claude,medium-claude,smart-claude" {
+		t.Fatalf("feedback = %#v", feedback)
+	}
+	if editor != "medium-claude" {
+		t.Fatalf("editor = %q", editor)
+	}
+}
+
+func TestManagedLLMSelectionRejectsGPT(t *testing.T) {
+	cfg := managed.RunConfig{
+		DefaultLLMID:  "medium-claude",
+		AllowedLLMIDs: []string{"dumb-claude", "medium-claude", "smart-claude"},
+	}
+	if _, _, err := managedLLMSelection([]string{"smart-gpt"}, "", cfg); err == nil {
+		t.Fatal("expected managed GPT rejection")
 	}
 }
 

@@ -113,7 +113,7 @@ func runCheckOrOptimize(cmd string, args []string) error {
 	fs.StringVar(&feedbackAgent, "feedback-agent", "", "Dari docs user-test agent ID (defaults to .dari-docs/config.json)")
 	fs.StringVar(&editorAgent, "editor-agent", "", "Dari docs editor agent ID (defaults to .dari-docs/config.json)")
 	fs.StringVar(&llmID, "llm", "", "manifest LLM option ID to use for all sessions")
-	fs.Var(&feedbackLLMIDs, "feedback-llm", "manifest LLM option ID for feedback/tester sessions; repeat or comma-separate (default: all bundled tester LLMs; overrides --llm)")
+	fs.Var(&feedbackLLMIDs, "feedback-llm", "manifest LLM option ID for feedback/tester sessions; repeat or comma-separate (overrides --llm)")
 	fs.StringVar(&editorLLMID, "editor-llm", "", "manifest LLM option ID for the editor session (overrides --llm)")
 	fs.StringVar(&outDir, "out", "", "output directory (default: <repo>/.dari-docs)")
 	fs.IntVar(&parallel, "parallel", 4, "number of feedback sessions per self-managed batch")
@@ -169,20 +169,23 @@ func runCheckOrOptimize(cmd string, args []string) error {
 		return fmt.Errorf("--secret-env requires --live-verify")
 	}
 	feedbackLLMList := expandCSVList(feedbackLLMIDs)
-	feedbackLLMExplicit := len(feedbackLLMList) > 0
 	if editorLLMID == "" {
 		editorLLMID = llmID
 	}
 	if managedMode {
-		if apiKey != "" || apiBaseURL != "" || feedbackAgent != "" || editorAgent != "" || llmID != "" || feedbackLLMExplicit || editorLLMID != "" {
-			return fmt.Errorf("--managed cannot be combined with --api-key, --api-base-url, --feedback-agent, --editor-agent, or LLM selection flags")
+		if apiKey != "" || apiBaseURL != "" || feedbackAgent != "" || editorAgent != "" {
+			return fmt.Errorf("--managed cannot be combined with --api-key, --api-base-url, --feedback-agent, or --editor-agent")
 		}
 		if _, err := loadManagedToken(); err != nil {
 			return err
 		}
+		if len(feedbackLLMList) == 0 && llmID != "" {
+			feedbackLLMList = []string{llmID}
+		}
 		return runManagedCheckOrOptimize(context.Background(), managedRunConfig{
 			Command: cmd, RepoRoot: absRepo, OutDir: outDir,
-			Tasks: allTasks, Apply: apply, LiveVerify: liveVerify, RuntimeSecrets: secrets, Timeout: time.Duration(timeoutMinutes) * time.Minute,
+			Tasks: allTasks, FeedbackLLMIDs: feedbackLLMList, EditorLLMID: editorLLMID, Apply: apply,
+			LiveVerify: liveVerify, RuntimeSecrets: secrets, Timeout: time.Duration(timeoutMinutes) * time.Minute,
 			BundleOptions: bundle.CreateOptions{Include: bundleIncludes, Exclude: bundleExcludes},
 		})
 	}
@@ -243,6 +246,8 @@ type managedRunConfig struct {
 	RepoRoot       string
 	OutDir         string
 	Tasks          []string
+	FeedbackLLMIDs []string
+	EditorLLMID    string
 	LiveVerify     bool
 	RuntimeSecrets map[string]string
 	Apply          bool
@@ -263,6 +268,10 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 	if err != nil {
 		return err
 	}
+	feedbackLLMIDs, editorLLMID, err := managedLLMSelection(cfg.FeedbackLLMIDs, cfg.EditorLLMID, runCfg)
+	if err != nil {
+		return err
+	}
 	bundlePath := filepath.Join(cfg.OutDir, "input-docs-bundle.tar.gz")
 	cfg.BundleOptions.MaxFileBytes = runCfg.BundleMaxFileBytes
 	b, err := bundle.CreateWithOptions(cfg.RepoRoot, bundlePath, cfg.BundleOptions)
@@ -275,10 +284,14 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 	if err != nil {
 		return err
 	}
-	reserve := managedRunReserveCents(cfg.Command, len(cfg.Tasks), runCfg)
+	reserve := managedRunReserveCents(cfg.Command, len(cfg.Tasks), len(feedbackLLMIDs), runCfg)
 	fmt.Fprintln(os.Stderr, "\nManaged run estimate:")
 	fmt.Fprintf(os.Stderr, "  Balance: %s\n", formatCents(bal.BalanceCents))
-	fmt.Fprintf(os.Stderr, "  Sessions: %s\n", managedSessionSummary(cfg.Command, len(cfg.Tasks)))
+	fmt.Fprintf(os.Stderr, "  Sessions: %s\n", managedSessionSummary(cfg.Command, len(cfg.Tasks), len(feedbackLLMIDs)))
+	fmt.Fprintf(os.Stderr, "  Tester LLMs: %s\n", strings.Join(feedbackLLMIDs, ", "))
+	if cfg.Command != "check" {
+		fmt.Fprintf(os.Stderr, "  Editor LLM: %s\n", editorLLMID)
+	}
 	fmt.Fprintf(os.Stderr, "  Reserved before start: %s\n", formatCents(reserve))
 	fmt.Fprintln(os.Stderr, "  Final charge reconciles to actual session cost after completion.")
 
@@ -293,17 +306,15 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 	created, err := client.CreateRun(ctx, cfg.Command, cfg.Tasks, bundlePath, managed.CreateRunOptions{
 		LiveVerify:         cfg.LiveVerify,
 		RuntimeSecretsJSON: runtimeSecretJSON,
+		FeedbackLLMIDs:     feedbackLLMIDs,
+		EditorLLMID:        editorLLMID,
 	})
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "Managed run: %s\n", created.RunID)
 	fmt.Fprintf(os.Stderr, "Reserved: %s\n", formatCents(reserve))
-	totalSessions := len(cfg.Tasks)
-	if cfg.Command != "check" {
-		totalSessions++
-	}
-	deadline := time.Now().Add(cfg.Timeout * time.Duration(totalSessions))
+	deadline := time.Now().Add(managedRunTimeout(cfg.Command, cfg.Timeout))
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -371,25 +382,99 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 	return nil
 }
 
-func managedRunReserveCents(command string, taskCount int, cfg managed.RunConfig) int64 {
-	reserve := int64(taskCount) * cfg.TesterSessionReserveCents
+func managedRunReserveCents(command string, taskCount int, testerLLMCount int, cfg managed.RunConfig) int64 {
+	if testerLLMCount <= 0 {
+		testerLLMCount = 1
+	}
+	reserve := int64(taskCount*testerLLMCount) * cfg.TesterSessionReserveCents
 	if command != "check" {
 		reserve += cfg.EditorSessionReserveCents
 	}
 	return reserve
 }
 
-func managedSessionSummary(command string, taskCount int) string {
-	tester := fmt.Sprintf("%d tester", taskCount)
-	if taskCount != 1 {
+func managedSessionSummary(command string, taskCount int, testerLLMCount int) string {
+	if testerLLMCount <= 0 {
+		testerLLMCount = 1
+	}
+	testerSessions := taskCount * testerLLMCount
+	tester := fmt.Sprintf("%d tester", testerSessions)
+	if testerSessions != 1 {
 		tester += " sessions"
 	} else {
 		tester += " session"
+	}
+	if testerLLMCount > 1 {
+		taskLabel := "tasks"
+		if taskCount == 1 {
+			taskLabel = "task"
+		}
+		tester += fmt.Sprintf(" (%d %s x %d LLMs)", taskCount, taskLabel, testerLLMCount)
 	}
 	if command == "check" {
 		return tester
 	}
 	return tester + " + 1 editor session"
+}
+
+func managedRunTimeout(command string, base time.Duration) time.Duration {
+	if command == "check" {
+		return base
+	}
+	return 2 * base
+}
+
+func managedLLMSelection(feedbackLLMIDs []string, editorLLMID string, cfg managed.RunConfig) ([]string, string, error) {
+	allowed := cfg.AllowedLLMIDs
+	if len(allowed) == 0 {
+		return nil, "", fmt.Errorf("managed service did not return allowed LLM IDs")
+	}
+	defaultLLM := strings.TrimSpace(cfg.DefaultLLMID)
+	if defaultLLM == "" {
+		defaultLLM = allowed[0]
+	}
+	if len(feedbackLLMIDs) == 0 {
+		feedbackLLMIDs = append([]string{}, allowed...)
+	}
+	feedback, err := validateManagedLLMIDs(feedbackLLMIDs, allowed)
+	if err != nil {
+		return nil, "", err
+	}
+	if editorLLMID == "" {
+		editorLLMID = defaultLLM
+	}
+	editor, err := validateManagedLLMID(editorLLMID, allowed)
+	if err != nil {
+		return nil, "", err
+	}
+	return feedback, editor, nil
+}
+
+func validateManagedLLMIDs(llmIDs []string, allowed []string) ([]string, error) {
+	out := make([]string, 0, len(llmIDs))
+	seen := map[string]bool{}
+	for _, raw := range llmIDs {
+		llmID, err := validateManagedLLMID(raw, allowed)
+		if err != nil {
+			return nil, err
+		}
+		if seen[llmID] {
+			continue
+		}
+		seen[llmID] = true
+		out = append(out, llmID)
+	}
+	return out, nil
+}
+
+func validateManagedLLMID(llmID string, allowed []string) (string, error) {
+	llmID = strings.TrimSpace(llmID)
+	for _, candidate := range allowed {
+		if llmID == candidate {
+			return llmID, nil
+		}
+	}
+	return "", fmt.Errorf("managed mode supports only these LLM IDs: %s", strings.Join(allowed, ", "))
 }
 
 func writeManagedFeedback(outDir string, reports []string, aggregate string) error {
@@ -1332,8 +1417,8 @@ Important flags:
   --apply                     copy downloaded updated docs back into repo
   --api-base-url URL          Dari API base URL; self-managed only
   --parallel N                tester sessions per batch; self-managed only
-  --llm ID                    select a manifest LLM option for all self-managed sessions
-  --feedback-llm ID           select tester LLM option(s); default is all bundled tester LLMs
+  --llm ID                    select an LLM option for all sessions
+  --feedback-llm ID           select tester LLM option(s); repeat or comma-separate
   --editor-llm ID             select a manifest LLM option for the editor session
   --anthropic-api-key-secret  stored Dari credential name for Anthropic BYOK deploys
   --openai-api-key-secret     stored Dari credential name for OpenAI BYOK deploys

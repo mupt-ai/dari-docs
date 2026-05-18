@@ -40,4 +40,6 @@ dari-docs check . \
 
 Use `--llm ID` to collapse the run to one option for all sessions, or `--editor-llm ID` to select the editor model independently.
 
+Managed mode uses the same model-selection flags, but only the hosted Claude options are available there. See [Managed mode and billing](managed.md#model-selection).
+
 If you need BYOK at agent deploy time, add provider-specific dari.dev credentials and pass `--anthropic-api-key-secret` and/or `--openai-api-key-secret` to `dari-docs init --deploy`.

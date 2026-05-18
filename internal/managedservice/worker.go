@@ -20,6 +20,8 @@ type queuedRun struct {
 	TesterVersionID string
 	EditorAgentID   string
 	EditorVersionID string
+	TesterLLMIDs    []string
+	EditorLLMID     string
 	BundleFileID    string
 	BundleSHA256    string
 	BundleFiles     int
@@ -45,6 +47,7 @@ type nextSession struct {
 	TaskIndex int
 	AgentID   string
 	VersionID string
+	LLMID     string
 	Prompt    string
 }
 
@@ -156,7 +159,7 @@ func (s *Server) startSingleSessionBatch(ctx context.Context, run queuedRun, nex
 		Items: []dari.CreateSessionBatchItem{{
 			AgentID:   next.AgentID,
 			VersionID: next.VersionID,
-			LLMID:     managedDefaultLLMID,
+			LLMID:     managedLLMIDOrDefault(next.LLMID),
 			Metadata:  managedSessionMetadata(run, next),
 			Secrets:   secrets,
 			Message: dari.CreateSessionBatchMessage{Content: []dari.ContentBlock{
@@ -230,22 +233,24 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun) error {
 	}
 	batchReq := dari.CreateSessionBatchRequest{
 		IdempotencyKey: "dari-docs-managed-" + run.ID + "-testers",
-		Items:          make([]dari.CreateSessionBatchItem, 0, len(run.Tasks)),
+		Items:          make([]dari.CreateSessionBatchItem, 0, expectedTesterSessions(run)),
 	}
-	for i, task := range run.Tasks {
+	items := testerBatchItems(run)
+	for _, item := range items {
 		metadata := map[string]string{
 			"managed_run_id": run.ID,
 			"kind":           "tester",
-			"task_index":     fmt.Sprintf("%d", i+1),
+			"task_index":     fmt.Sprintf("%d", item.taskIndex+1),
+			"llm_id":         item.llmID,
 		}
 		batchReq.Items = append(batchReq.Items, dari.CreateSessionBatchItem{
 			AgentID:   run.TesterAgentID,
 			VersionID: run.TesterVersionID,
-			LLMID:     managedDefaultLLMID,
+			LLMID:     item.llmID,
 			Metadata:  metadata,
 			Secrets:   secrets,
 			Message: dari.CreateSessionBatchMessage{Content: []dari.ContentBlock{
-				dari.TextBlock(runner.FeedbackPrompt(task, b, run.LiveVerify, secretNameMap(run.SecretNames))),
+				dari.TextBlock(runner.FeedbackPrompt(item.task, b, run.LiveVerify, secretNameMap(run.SecretNames))),
 				dari.FileBlock(run.BundleFileID),
 			}},
 		})
@@ -260,9 +265,10 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun) error {
 	}
 	var createErr error
 	for _, item := range batch.Sessions {
-		if item.Index < 0 || item.Index >= len(run.Tasks) {
+		if item.Index < 0 || item.Index >= len(items) {
 			return s.failStartedRun(ctx, run, persistedErrSessionCreateFailed, fmt.Errorf("tester batch returned invalid item index %d", item.Index))
 		}
+		expected := items[item.Index]
 		if item.Status == statusFailed || item.SessionID == "" || item.Error != "" {
 			if createErr == nil {
 				createErr = fmt.Errorf("create tester session %d: %s", item.Index+1, item.Error)
@@ -273,13 +279,12 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun) error {
 		if versionID == "" {
 			versionID = run.TesterVersionID
 		}
-		llmID := managedLLMIDOrDefault(item.LLMID)
-		if err := store.InsertStartedRunSession(ctx, item.SessionID, run.ID, "tester", item.Index+1, versionID, llmID); err != nil {
+		if err := store.InsertStartedRunSession(ctx, item.SessionID, run.ID, "tester", expected.taskIndex+1, versionID, expected.llmID); err != nil {
 			return err
 		}
 	}
-	if createErr == nil && len(batch.Sessions) != len(run.Tasks) {
-		createErr = fmt.Errorf("tester batch returned %d sessions, want %d", len(batch.Sessions), len(run.Tasks))
+	if createErr == nil && len(batch.Sessions) != len(items) {
+		createErr = fmt.Errorf("tester batch returned %d sessions, want %d", len(batch.Sessions), len(items))
 	}
 	if createErr != nil {
 		return s.failStartedRun(ctx, run, persistedErrSessionCreateFailed, createErr)
@@ -301,22 +306,8 @@ func (s *Server) nextSession(ctx context.Context, run queuedRun, sessions []runS
 			return nextSession{}, false, fmt.Errorf("%s session %s failed", session.Kind, session.ID)
 		}
 	}
-	completedTesters := map[int]bool{}
-	for _, session := range sessions {
-		if session.Kind == "tester" && session.Status == statusCompleted {
-			completedTesters[session.TaskIndex] = true
-		}
-	}
-	if len(completedTesters) < len(run.Tasks) {
-		taskIndex := len(completedTesters) + 1
-		b := bundle.Result{SHA256: run.BundleSHA256, Manifest: bundle.Manifest{Files: make([]bundle.FileRecord, run.BundleFiles)}}
-		return nextSession{
-			Kind:      "tester",
-			TaskIndex: taskIndex,
-			AgentID:   run.TesterAgentID,
-			VersionID: run.TesterVersionID,
-			Prompt:    runner.FeedbackPrompt(run.Tasks[taskIndex-1], b, run.LiveVerify, secretNameMap(run.SecretNames)),
-		}, true, nil
+	if completedTesterSessionCount(run, sessions) < expectedTesterSessions(run) {
+		return nextSession{}, false, nil
 	}
 	if run.Mode != "optimize" {
 		return nextSession{}, false, nil
@@ -338,6 +329,7 @@ func (s *Server) nextSession(ctx context.Context, run queuedRun, sessions []runS
 		TaskIndex: 0,
 		AgentID:   run.EditorAgentID,
 		VersionID: run.EditorVersionID,
+		LLMID:     run.EditorLLMID,
 		Prompt:    runner.EditorPrompt(reports),
 	}, true, nil
 }
@@ -430,6 +422,9 @@ func (s *Server) reconcileSession(ctx context.Context, session runSessionRecord)
 }
 
 func sessionLLMID(current string, remote dari.Session) string {
+	if current != "" {
+		return current
+	}
 	if remote.LLMID != nil {
 		return *remote.LLMID
 	}
@@ -566,25 +561,87 @@ func (s *Server) loadRunSessions(ctx context.Context, runID string) ([]runSessio
 }
 
 func (s *Server) collectTesterReports(ctx context.Context, run queuedRun, sessions []runSessionRecord) ([]string, bool, error) {
-	reports := make([]string, len(run.Tasks))
-	seen := make([]bool, len(run.Tasks))
+	expected := expectedTesterKeys(run)
+	reports := make([]string, 0, len(expected))
+	seen := map[string]bool{}
 	for _, session := range sessions {
 		if session.Kind != "tester" || session.Status != statusCompleted || session.TaskIndex < 1 || session.TaskIndex > len(run.Tasks) {
+			continue
+		}
+		llmID := managedLLMIDOrDefault(session.LLMID)
+		key := testerSessionKey(session.TaskIndex, llmID)
+		if !expected[key] || seen[key] {
 			continue
 		}
 		tr, err := s.dari.GetTranscript(ctx, session.ID)
 		if err != nil {
 			return nil, false, fmt.Errorf("get transcript %s: %w", session.ID, err)
 		}
-		reports[session.TaskIndex-1] = dari.FinalAssistantText(tr)
-		seen[session.TaskIndex-1] = true
+		reports = append(reports, formatManagedFeedbackReport(session.TaskIndex, llmID, dari.FinalAssistantText(tr)))
+		seen[key] = true
 	}
-	for _, ok := range seen {
-		if !ok {
+	for key := range expected {
+		if !seen[key] {
 			return reports, false, nil
 		}
 	}
 	return reports, true, nil
+}
+
+type testerBatchItem struct {
+	taskIndex int
+	task      string
+	llmID     string
+}
+
+func testerBatchItems(run queuedRun) []testerBatchItem {
+	llmIDs := run.TesterLLMIDs
+	if len(llmIDs) == 0 {
+		llmIDs = allowedManagedLLMIDs()
+	}
+	items := make([]testerBatchItem, 0, len(run.Tasks)*len(llmIDs))
+	for taskIndex, task := range run.Tasks {
+		for _, llmID := range llmIDs {
+			items = append(items, testerBatchItem{taskIndex: taskIndex, task: task, llmID: managedLLMIDOrDefault(llmID)})
+		}
+	}
+	return items
+}
+
+func expectedTesterSessions(run queuedRun) int {
+	return len(testerBatchItems(run))
+}
+
+func completedTesterSessionCount(run queuedRun, sessions []runSessionRecord) int {
+	expected := expectedTesterKeys(run)
+	seen := map[string]bool{}
+	for _, session := range sessions {
+		if session.Kind != "tester" || session.Status != statusCompleted {
+			continue
+		}
+		key := testerSessionKey(session.TaskIndex, managedLLMIDOrDefault(session.LLMID))
+		if expected[key] {
+			seen[key] = true
+		}
+	}
+	return len(seen)
+}
+
+func expectedTesterKeys(run queuedRun) map[string]bool {
+	out := map[string]bool{}
+	for _, item := range testerBatchItems(run) {
+		out[testerSessionKey(item.taskIndex+1, item.llmID)] = true
+	}
+	return out
+}
+
+func testerSessionKey(taskIndex int, llmID string) string {
+	return fmt.Sprintf("%d:%s", taskIndex, managedLLMIDOrDefault(llmID))
+}
+
+func formatManagedFeedbackReport(taskIndex int, llmID string, report string) string {
+	header := fmt.Sprintf("Task index: %d\nTester LLM: %s", taskIndex, managedLLMIDOrDefault(llmID))
+	return header + "\n\n" + report
 }
 
 func waitForCostRetry(ctx context.Context, deadline time.Time) error {

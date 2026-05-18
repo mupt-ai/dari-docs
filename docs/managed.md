@@ -59,6 +59,37 @@ Before a managed run starts, the CLI prints a bundle summary and credit estimate
 
 Managed runs currently support up to three tasks per run and three active runs per account at a time. Tester sessions are started with the Dari session-batch API; optimize runs start the editor after tester feedback is complete.
 
+## Model selection
+
+Managed mode supports the hosted Claude LLM options:
+
+- `dumb-claude`
+- `medium-claude`
+- `smart-claude`
+
+By default, managed tester sessions run each task across all three Claude options. The editor uses `medium-claude`.
+
+Use one model for every managed session:
+
+```bash
+dari-docs check . \
+  --managed \
+  --llm smart-claude \
+  --task "Install the SDK and make a first API call"
+```
+
+Or choose the tester and editor models separately:
+
+```bash
+dari-docs optimize . \
+  --managed \
+  --feedback-llm dumb-claude,smart-claude \
+  --editor-llm smart-claude \
+  --task "Install the SDK and make a first API call"
+```
+
+The GPT options are available only in self-managed mode.
+
 ## Log out
 
 Log out with:
