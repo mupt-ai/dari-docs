@@ -4,7 +4,7 @@ import ReactMarkdown from "react-markdown";
 import { Download, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { downloadUpdatedDocs, getRun, isActiveRun, type RunStatus } from "@/lib/runs";
+import { downloadUpdatedDocs, formatLLMID, getRun, isActiveRun, type RunSession, type RunStatus } from "@/lib/runs";
 import { formatCents, formatDate } from "@/lib/utils";
 import { LLMSummary, StatusBadge } from "@/routes/Runs";
 
@@ -146,8 +146,11 @@ export default function RunDetail() {
             <div className="flex flex-col gap-3">
               {run.tasks?.map((task, index) => (
                 <div key={`${index}:${task}`} className="border border-border bg-background p-3 text-sm">
-                  <div className="mb-2 text-xs uppercase tracking-widest text-muted-foreground">
-                    Task {index + 1}
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-xs uppercase tracking-widest text-muted-foreground">
+                      Task {index + 1}
+                    </div>
+                    <SessionSummary session={sessionForTask(run.sessions, index + 1)} fallbackStatus={run.status} />
                   </div>
                   <div className="whitespace-pre-wrap">{task}</div>
                   {run.feedback_reports?.[index] && (
@@ -163,6 +166,13 @@ export default function RunDetail() {
             </div>
           </section>
 
+          {run.mode === "optimize" && (
+            <section className="border border-border bg-card p-4">
+              <div className="mb-3 text-sm font-medium">Editor session</div>
+              <SessionSummary session={editorSession(run.sessions)} fallbackStatus={editorFallbackStatus(run)} />
+            </section>
+          )}
+
           {run.aggregate_feedback && (
             <section className="border border-border bg-card p-4">
               <div className="mb-3 text-sm font-medium">Aggregate feedback</div>
@@ -172,6 +182,64 @@ export default function RunDetail() {
         </div>
       ) : null}
     </div>
+  );
+}
+
+function sessionForTask(sessions: RunSession[] | undefined, taskIndex: number): RunSession | undefined {
+  return sessions?.find((session) => session.kind === "tester" && session.task_index === taskIndex);
+}
+
+function editorSession(sessions: RunSession[] | undefined): RunSession | undefined {
+  return sessions?.find((session) => session.kind === "editor");
+}
+
+function editorFallbackStatus(run: RunStatus): string {
+  if (run.status === "failed" || run.status === "completed") return run.status;
+  const testers = run.sessions?.filter((session) => session.kind === "tester") ?? [];
+  const taskCount = run.task_count || run.tasks?.length || 0;
+  if (taskCount === 0 || testers.length < taskCount) return "waiting";
+  if (testers.some((session) => session.status !== "completed")) return "waiting";
+  return "queued";
+}
+
+function SessionSummary({
+  session,
+  fallbackStatus,
+}: {
+  session?: RunSession;
+  fallbackStatus: string;
+}) {
+  const status = session?.status ?? fallbackStatus;
+  const llmID = formatLLMID(session?.llm_id);
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      <SessionStatus status={status} />
+      {llmID !== "-" && <span className="text-muted-foreground">{llmID}</span>}
+      {session?.completed_at && (
+        <span className="text-muted-foreground">completed {formatDate(session.completed_at)}</span>
+      )}
+    </div>
+  );
+}
+
+function SessionStatus({ status }: { status: string }) {
+  const failed = status === "failed";
+  const waiting = status === "waiting" || status === "queued";
+  const active = isActiveRun(status) && !waiting;
+  return (
+    <span
+      className={
+        failed
+          ? "inline-flex min-w-20 justify-center border border-destructive/60 bg-destructive/10 px-2 py-1 text-xs text-destructive-foreground"
+          : active
+            ? "inline-flex min-w-20 justify-center border border-brand/60 bg-brand/10 px-2 py-1 text-xs text-brand"
+            : waiting
+              ? "inline-flex min-w-20 justify-center border border-border bg-muted/30 px-2 py-1 text-xs text-muted-foreground"
+              : "inline-flex min-w-20 justify-center border border-border bg-muted/40 px-2 py-1 text-xs text-muted-foreground"
+      }
+    >
+      {status}
+    </span>
   );
 }
 
