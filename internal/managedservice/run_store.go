@@ -8,12 +8,20 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+type managedRunDB interface {
+	BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error)
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
 type managedRunStore struct {
-	db *pgxpool.Pool
+	db managedRunDB
 }
 
 func newManagedRunStore(db *pgxpool.Pool) *managedRunStore {
@@ -180,7 +188,7 @@ LIMIT $2
 }
 
 func (store *managedRunStore) MarkSessionCompleted(ctx context.Context, sessionID string) error {
-	return store.updateRunningSession(ctx, `
+	_, err := store.db.Exec(ctx, `
 UPDATE run_sessions
 SET status=$1,
     completed_at=now(),
@@ -190,10 +198,11 @@ SET status=$1,
 WHERE session_id=$2
   AND status=$3
 `, statusCompleted, sessionID, statusRunning)
+	return err
 }
 
 func (store *managedRunStore) MarkSessionFailed(ctx context.Context, sessionID string, code persistedErrorCode) error {
-	return store.updateRunningSession(ctx, `
+	_, err := store.db.Exec(ctx, `
 UPDATE run_sessions
 SET status=$1,
     completed_at=now(),
@@ -203,10 +212,11 @@ SET status=$1,
 WHERE session_id=$3
   AND status=$4
 `, statusFailed, persistedErrorString(code), sessionID, statusRunning)
+	return err
 }
 
 func (store *managedRunStore) MarkSessionPollSucceeded(ctx context.Context, sessionID string) error {
-	return store.updateRunningSession(ctx, `
+	_, err := store.db.Exec(ctx, `
 UPDATE run_sessions
 SET last_polled_at=now(),
     last_poll_error_at=NULL,
@@ -214,6 +224,7 @@ SET last_polled_at=now(),
 WHERE session_id=$1
   AND status=$2
 `, sessionID, statusRunning)
+	return err
 }
 
 func (store *managedRunStore) RecordSessionPollError(
@@ -313,11 +324,9 @@ func (store *managedRunStore) FinishRun(
 	editorSessionID string,
 	failureCode persistedErrorCode,
 ) (bool, error) {
-	var commandTag pgconnCommandTag
-	var err error
 	activeStatuses := []string{statusQueued, statusStarting, statusRunning}
 	if failureCode != "" {
-		commandTag, err = store.exec(ctx, `
+		commandTag, err := store.db.Exec(ctx, `
 UPDATE runs
 SET status=$1,
     error=$2,
@@ -326,8 +335,9 @@ SET status=$1,
 WHERE id=$3
   AND status = ANY($4)
 `, statusFailed, persistedErrorString(failureCode), run.ID, activeStatuses)
-	} else {
-		commandTag, err = store.exec(ctx, `
+		return commandTag.RowsAffected() > 0, err
+	}
+	commandTag, err := store.db.Exec(ctx, `
 UPDATE runs
 SET status=$1,
     error=NULL,
@@ -337,7 +347,6 @@ SET status=$1,
 WHERE id=$3
   AND status = ANY($4)
 `, statusCompleted, editorSessionID, run.ID, activeStatuses)
-	}
 	return commandTag.RowsAffected() > 0, err
 }
 
@@ -458,11 +467,6 @@ WHERE id=$3
 	return err
 }
 
-func (store *managedRunStore) updateRunningSession(ctx context.Context, sql string, args ...any) error {
-	_, err := store.db.Exec(ctx, sql, args...)
-	return err
-}
-
 func scanQueuedRun(row pgx.Row) (queuedRun, error) {
 	var run queuedRun
 	var tasksJSON []byte
@@ -524,12 +528,4 @@ func scanRunSessionRecords(rows pgx.Rows) ([]runSessionRecord, error) {
 		return nil, err
 	}
 	return records, nil
-}
-
-type pgconnCommandTag interface {
-	RowsAffected() int64
-}
-
-func (store *managedRunStore) exec(ctx context.Context, sql string, args ...any) (pgconnCommandTag, error) {
-	return store.db.Exec(ctx, sql, args...)
 }
