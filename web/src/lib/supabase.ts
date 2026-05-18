@@ -49,6 +49,18 @@ export async function signInWithGoogle(redirectTo: string) {
   if (error) throw error;
 }
 
+export async function signInWithMagicLink(email: string, redirectTo: string) {
+  const client = await getSupabaseClient();
+  const { error } = await client.auth.signInWithOtp({
+    email,
+    options: {
+      emailRedirectTo: redirectTo,
+      shouldCreateUser: true,
+    },
+  });
+  if (error) throw error;
+}
+
 export async function signOutSupabase() {
   const client = await getSupabaseClient();
   await client.auth.signOut();
