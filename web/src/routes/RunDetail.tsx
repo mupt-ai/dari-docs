@@ -17,6 +17,7 @@ export default function RunDetail() {
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [collapsedTasks, setCollapsedTasks] = useState<Record<number, boolean>>({});
+  const [aggregateCollapsed, setAggregateCollapsed] = useState(false);
 
   const refresh = useCallback(async (quiet = false) => {
     if (!runId) return;
@@ -165,6 +166,13 @@ export default function RunDetail() {
                   />
                 );
               })}
+              {run.aggregate_feedback && (
+                <AggregateFeedbackPanel
+                  feedback={run.aggregate_feedback}
+                  collapsed={aggregateCollapsed}
+                  onToggle={() => setAggregateCollapsed((current) => !current)}
+                />
+              )}
             </div>
           </section>
 
@@ -178,12 +186,6 @@ export default function RunDetail() {
             </section>
           )}
 
-          {run.aggregate_feedback && (
-            <section className="border border-border bg-card p-4">
-              <div className="mb-3 text-sm font-medium">Aggregate feedback</div>
-              <Markdown text={run.aggregate_feedback} />
-            </section>
-          )}
         </div>
       ) : null}
     </div>
@@ -280,6 +282,41 @@ function SessionHeader({
   );
 }
 
+function AggregateFeedbackPanel({
+  feedback,
+  collapsed,
+  onToggle,
+}: {
+  feedback: string;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  const headerClassName = `flex min-h-12 flex-wrap items-center justify-between gap-2 px-3 py-2 ${
+    collapsed ? "" : "border-b border-border"
+  }`;
+
+  return (
+    <div className="border border-border bg-background text-sm">
+      <div className={headerClassName}>
+        <button
+          type="button"
+          onClick={onToggle}
+          className="inline-flex min-w-0 items-center gap-2 text-left text-xs text-muted-foreground hover:text-foreground"
+          aria-expanded={!collapsed}
+        >
+          {collapsed ? <ChevronRight className="h-3.5 w-3.5 shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0" />}
+          <span className="uppercase tracking-widest">Aggregate feedback</span>
+        </button>
+      </div>
+      {!collapsed && (
+        <div className="p-3">
+          <Markdown text={feedback} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SessionModel({ session }: { session?: RunSession }) {
   const llmID = formatLLMID(session?.llm_id);
   if (llmID === "-") return null;
@@ -339,8 +376,81 @@ function Summary({ label, value }: { label: string; value: React.ReactNode }) {
 
 function Markdown({ text }: { text: string }) {
   return (
-    <div className="prose prose-invert max-w-none text-sm prose-p:my-2 prose-pre:border prose-pre:border-border prose-pre:bg-background prose-pre:p-3">
-      <ReactMarkdown skipHtml>{text}</ReactMarkdown>
+    <div className="max-w-none text-sm leading-6 text-foreground/90">
+      <ReactMarkdown
+        skipHtml
+        components={{
+          h3: ({ children }) => (
+            <h3 className="mb-2 mt-4 text-xs font-medium uppercase tracking-widest text-muted-foreground first:mt-0">
+              {children}
+            </h3>
+          ),
+          p: ({ children }) => <p className="my-2 whitespace-pre-wrap">{children}</p>,
+          strong: ({ children }) => <strong className="font-medium text-foreground">{children}</strong>,
+          ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>,
+          ol: ({ children }) => <ol className="my-2 list-decimal space-y-1 pl-5">{children}</ol>,
+          li: ({ children }) => <li className="pl-1">{children}</li>,
+          code: ({ children }) => (
+            <code className="border border-border bg-muted/30 px-1 py-0.5 text-[0.85em] text-foreground">
+              {children}
+            </code>
+          ),
+          pre: ({ children }) => (
+            <pre className="my-3 overflow-x-auto border border-border bg-card p-3 text-xs leading-5">
+              {children}
+            </pre>
+          ),
+        }}
+      >
+        {formatFeedbackMarkdown(text)}
+      </ReactMarkdown>
     </div>
   );
+}
+
+function formatFeedbackMarkdown(text: string): string {
+  const labels = new Set(["Tried", "Result", "Got stuck on", "Docs feedback", "Artifacts"]);
+  const lines = text.trim().split(/\r?\n/);
+  const output: string[] = [];
+  let inFence = false;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
+    const trimmed = line.trim();
+
+    if (trimmed.toLowerCase() === "dari docs aggregate feedback") {
+      continue;
+    }
+
+    if (trimmed.startsWith("```")) {
+      inFence = !inFence;
+      output.push(line);
+      continue;
+    }
+
+    if (!inFence && /^Run\s+\d+/i.test(trimmed)) {
+      pushBlank(output);
+      output.push(`### ${trimmed}`);
+      continue;
+    }
+
+    if (!inFence) {
+      const match = trimmed.match(/^([^:]{1,40}):\s*(.*)$/);
+      if (match && labels.has(match[1])) {
+        pushBlank(output);
+        output.push(match[2] ? `**${match[1]}:** ${match[2]}` : `**${match[1]}:**`);
+        continue;
+      }
+    }
+
+    output.push(line);
+  }
+
+  return output.join("\n").trim();
+}
+
+function pushBlank(lines: string[]) {
+  if (lines.length > 0 && lines[lines.length - 1] !== "") {
+    lines.push("");
+  }
 }
