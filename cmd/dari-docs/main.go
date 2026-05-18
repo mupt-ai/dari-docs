@@ -128,7 +128,7 @@ func runCheckOrOptimize(cmd string, args []string) error {
 	fs.BoolVar(&apply, "apply", false, "copy updated docs back into the repo after downloading")
 	fs.BoolVar(&liveVerify, "live-verify", false, "allow agents to run safe live verification using provided runtime secrets")
 	fs.BoolVar(&managedMode, "managed", false, "run through the managed dari-docs service instead of a self-managed Dari org")
-	fs.IntVar(&timeoutMinutes, "timeout-minutes", 15, "per-session timeout in minutes")
+	fs.IntVar(&timeoutMinutes, "timeout-minutes", 30, "managed CLI wait timeout in minutes")
 	if cmd == "check" {
 		fs.Bool("remote-editor", false, "ignored for check")
 	}
@@ -322,7 +322,7 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 	}
 	fmt.Fprintf(os.Stderr, "Managed run: %s\n", created.RunID)
 	fmt.Fprintf(os.Stderr, "Reserved: %s\n", formatCents(reserve))
-	deadline := time.Now().Add(managedRunTimeout(cfg.Command, cfg.Timeout))
+	deadline := time.Now().Add(managedRunTimeout(cfg.Timeout))
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -425,11 +425,8 @@ func managedSessionSummary(command string, taskCount int, testerLLMCount int) st
 	return tester + " + 1 editor session"
 }
 
-func managedRunTimeout(command string, base time.Duration) time.Duration {
-	if command == "check" {
-		return base
-	}
-	return 2 * base
+func managedRunTimeout(base time.Duration) time.Duration {
+	return base
 }
 
 func managedLLMSelection(feedbackLLMIDs []string, editorLLMID string, cfg managed.RunConfig) ([]string, string, error) {

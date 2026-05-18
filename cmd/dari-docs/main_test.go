@@ -84,13 +84,10 @@ func TestManagedSessionSummary(t *testing.T) {
 	}
 }
 
-func TestManagedRunTimeoutScalesByPhase(t *testing.T) {
-	base := 15 * time.Minute
-	if got := managedRunTimeout("check", base); got != base {
-		t.Fatalf("check timeout = %s, want %s", got, base)
-	}
-	if got := managedRunTimeout("optimize", base); got != 2*base {
-		t.Fatalf("optimize timeout = %s, want %s", got, 2*base)
+func TestManagedRunTimeoutUsesConfiguredWait(t *testing.T) {
+	base := 30 * time.Minute
+	if got := managedRunTimeout(base); got != base {
+		t.Fatalf("managed run timeout = %s, want %s", got, base)
 	}
 }
 
