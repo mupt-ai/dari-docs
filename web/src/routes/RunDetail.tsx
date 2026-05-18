@@ -187,6 +187,7 @@ function taskGroups(run: RunStatus): TaskGroup[] {
   });
 
   const testerSessions = (run.sessions ?? []).filter((session) => session.kind === "tester");
+  let completedFeedbackIndex = 0;
   testerSessions.forEach((session, index) => {
     const taskIndex = Math.max(1, session.task_index || 1);
     const group = groups.get(taskIndex) ?? {
@@ -194,10 +195,12 @@ function taskGroups(run: RunStatus): TaskGroup[] {
       task: tasks[taskIndex - 1] ?? `Task ${taskIndex}`,
       results: [],
     };
+    const feedback =
+      session.status === "completed" ? run.feedback_reports?.[completedFeedbackIndex++] : undefined;
     group.results.push({
       key: `tester:${taskIndex}:${index}:${session.llm_id}`,
       session,
-      feedback: run.feedback_reports?.[index],
+      feedback,
     });
     groups.set(taskIndex, group);
   });

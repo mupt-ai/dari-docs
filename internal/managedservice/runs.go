@@ -813,7 +813,7 @@ func (s *Server) completedTesterReports(ctx context.Context, runID string) ([]st
 SELECT session_id
 FROM run_sessions
 WHERE run_id=$1 AND kind='tester' AND status=$2
-ORDER BY task_index
+ORDER BY task_index, created_at
 `, runID, statusCompleted)
 	if err != nil {
 		return nil, err
