@@ -14,26 +14,41 @@ import (
 	"testing"
 )
 
-func TestCreateSessionSendsLLMID(t *testing.T) {
+func TestCreateSessionBatchSendsItems(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/agents/agt_test/sessions" {
+		if r.URL.Path != "/v1/session-batches" {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
-		var got map[string]any
+		var got CreateSessionBatchRequest
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Fatal(err)
 		}
-		if got["llm_id"] != "smart-claude" {
-			t.Fatalf("llm_id = %#v, want smart-claude; body=%#v", got["llm_id"], got)
+		if got.IdempotencyKey != "batch-key" || len(got.Items) != 1 {
+			t.Fatalf("batch request = %#v", got)
+		}
+		item := got.Items[0]
+		if item.AgentID != "agt_test" || item.LLMID != "smart-claude" || item.Metadata["kind"] != "tester" || len(item.Message.Content) != 1 {
+			t.Fatalf("batch item = %#v", item)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"sess_test","agent_id":"agt_test","version_id":"ver_test","status":"active"}`))
+		_, _ = w.Write([]byte(`{"batch_id":"batch_test","status":"queued","sessions":[{"index":0,"session_id":"sess_test","status":"queued","last_message_status":"queued","agent_id":"agt_test","version_id":"ver_test","llm_id":"smart-claude","metadata":{"kind":"tester"}}]}`))
 	}))
 	defer server.Close()
 
-	_, err := New(server.URL, "dari_test").CreateSession(context.Background(), "agt_test", CreateSessionRequest{LLMID: "smart-claude"})
+	batch, err := New(server.URL, "dari_test").CreateSessionBatch(context.Background(), CreateSessionBatchRequest{
+		IdempotencyKey: "batch-key",
+		Items: []CreateSessionBatchItem{{
+			AgentID:  "agt_test",
+			LLMID:    "smart-claude",
+			Metadata: map[string]string{"kind": "tester"},
+			Message:  CreateSessionBatchMessage{Content: []ContentBlock{TextBlock("hello")}},
+		}},
+	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if batch.BatchID != "batch_test" || len(batch.Sessions) != 1 || batch.Sessions[0].SessionID != "sess_test" {
+		t.Fatalf("batch response = %#v", batch)
 	}
 }
 

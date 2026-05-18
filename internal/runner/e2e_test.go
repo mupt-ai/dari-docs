@@ -42,26 +42,44 @@ func TestRunCheckE2EDefaultFeedbackLLMMatrix(t *testing.T) {
 			mu.Unlock()
 			writeJSON(t, w, map[string]any{"id": "file_docs", "filename": "input-docs-bundle.tar.gz", "size_bytes": 123})
 
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/agents/agt_tester/sessions":
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/session-batches":
 			var body struct {
-				LLMID string `json:"llm_id"`
+				Items []struct {
+					AgentID  string            `json:"agent_id"`
+					LLMID    string            `json:"llm_id"`
+					Metadata map[string]string `json:"metadata"`
+				} `json:"items"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatal(err)
 			}
 			mu.Lock()
-			llmIDs = append(llmIDs, body.LLMID)
-			sessionID := fmt.Sprintf("sess_%02d", len(llmIDs))
-			sessions[sessionID] = body.LLMID
+			batchSessions := make([]any, 0, len(body.Items))
+			for i, item := range body.Items {
+				if item.AgentID != "agt_tester" {
+					t.Fatalf("batch item agent_id = %q", item.AgentID)
+				}
+				if item.Metadata["kind"] != "tester" || item.Metadata["task_index"] != "1" {
+					t.Fatalf("batch item metadata = %#v", item.Metadata)
+				}
+				llmIDs = append(llmIDs, item.LLMID)
+				sessionID := fmt.Sprintf("sess_%02d", len(llmIDs))
+				sessions[sessionID] = item.LLMID
+				batchSessions = append(batchSessions, map[string]any{"index": i, "session_id": sessionID, "status": "running", "last_message_status": "running", "agent_id": "agt_tester", "version_id": "ver_tester", "llm_id": item.LLMID, "metadata": item.Metadata})
+			}
 			mu.Unlock()
-			writeJSON(t, w, map[string]any{"id": sessionID, "agent_id": "agt_tester", "version_id": "ver_tester", "llm_id": body.LLMID, "status": "active"})
+			w.WriteHeader(http.StatusCreated)
+			writeJSON(t, w, map[string]any{"batch_id": "batch_feedback", "status": "running", "sessions": batchSessions})
 
-		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/sessions/") && strings.HasSuffix(r.URL.Path, "/events"):
-			sessionID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/sessions/"), "/events")
-			writeJSON(t, w, map[string]any{
-				"message": map[string]any{"id": "msg_" + sessionID, "status": "completed"},
-				"session": map[string]any{"id": sessionID, "agent_id": "agt_tester", "version_id": "ver_tester", "status": "active", "last_message_id": "msg_" + sessionID, "last_message_status": "completed"},
-			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/session-batches/batch_feedback":
+			mu.Lock()
+			batchSessions := make([]any, 0, len(llmIDs))
+			for i, llmID := range llmIDs {
+				sessionID := fmt.Sprintf("sess_%02d", i+1)
+				batchSessions = append(batchSessions, map[string]any{"index": i, "session_id": sessionID, "status": "completed", "last_message_status": "completed", "agent_id": "agt_tester", "version_id": "ver_tester", "llm_id": llmID, "metadata": map[string]string{"kind": "tester", "task_index": "1"}})
+			}
+			mu.Unlock()
+			writeJSON(t, w, map[string]any{"batch_id": "batch_feedback", "status": "completed", "counts": map[string]any{"completed": len(batchSessions)}, "sessions": batchSessions})
 
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/sessions/") && strings.HasSuffix(r.URL.Path, "/transcript"):
 			sessionID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/sessions/"), "/transcript")
@@ -96,7 +114,7 @@ func TestRunCheckE2EDefaultFeedbackLLMMatrix(t *testing.T) {
 		FeedbackAgent: "agt_tester",
 		Tasks:         []string{"do task"},
 		SkipEditor:    true,
-		Parallel:      1,
+		Parallel:      6,
 		Timeout:       0,
 	})
 	if err != nil {

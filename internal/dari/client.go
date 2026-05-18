@@ -50,13 +50,14 @@ type UploadedFile struct {
 }
 
 type Session struct {
-	ID                string  `json:"id"`
-	AgentID           string  `json:"agent_id"`
-	VersionID         string  `json:"version_id"`
-	LLMID             *string `json:"llm_id"`
-	Status            string  `json:"status"`
-	LastMessageID     *string `json:"last_message_id"`
-	LastMessageStatus *string `json:"last_message_status"`
+	ID                string            `json:"id"`
+	AgentID           string            `json:"agent_id"`
+	VersionID         string            `json:"version_id"`
+	LLMID             *string           `json:"llm_id"`
+	Status            string            `json:"status"`
+	LastMessageID     *string           `json:"last_message_id"`
+	LastMessageStatus *string           `json:"last_message_status"`
+	Metadata          map[string]string `json:"metadata,omitempty"`
 }
 
 type AgentVersionDetail struct {
@@ -68,16 +69,6 @@ type AgentVersionDetail struct {
 		ID      string `json:"id"`
 		AgentID string `json:"agent_id"`
 	} `json:"version"`
-}
-
-type MessageSummary struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-}
-
-type SendEventResponse struct {
-	Message MessageSummary `json:"message"`
-	Session Session        `json:"session"`
 }
 
 type CostSummary struct {
@@ -114,37 +105,82 @@ func (c *Client) UploadReader(ctx context.Context, filename string, r io.Reader)
 	return out, err
 }
 
-func mustJSON(v any) []byte {
-	b, _ := json.Marshal(v)
-	return b
+type CreateSessionBatchRequest struct {
+	IdempotencyKey string                   `json:"idempotency_key,omitempty"`
+	Items          []CreateSessionBatchItem `json:"items"`
 }
 
-type CreateSessionRequest struct {
-	Secrets   map[string]string `json:"secrets,omitempty"`
-	LLMID     string            `json:"llm_id,omitempty"`
-	LLMAPIKey string            `json:"llm_api_key,omitempty"`
-	VersionID string            `json:"version_id,omitempty"`
+type CreateSessionBatchItem struct {
+	AgentID   string                    `json:"agent_id"`
+	VersionID string                    `json:"version_id,omitempty"`
+	LLMID     string                    `json:"llm_id,omitempty"`
+	Metadata  map[string]string         `json:"metadata,omitempty"`
+	Secrets   map[string]string         `json:"secrets,omitempty"`
+	Message   CreateSessionBatchMessage `json:"message"`
 }
 
-func (c *Client) CreateSession(ctx context.Context, agentID string, req CreateSessionRequest) (Session, error) {
-	var out Session
-	b, _ := json.Marshal(req)
-	err := c.doJSON(ctx, http.MethodPost, "/v1/agents/"+url.PathEscape(agentID)+"/sessions", "application/json", bytes.NewReader(b), &out)
-	return out, err
+type CreateSessionBatchMessage struct {
+	Content  []ContentBlock `json:"content"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
+type SessionBatch struct {
+	BatchID  string                `json:"batch_id"`
+	Status   string                `json:"status"`
+	Counts   SessionBatchCounts    `json:"counts,omitempty"`
+	Sessions []SessionBatchSession `json:"sessions"`
+}
+
+type SessionBatchCounts struct {
+	Queued    int `json:"queued"`
+	Running   int `json:"running"`
+	Completed int `json:"completed"`
+	Failed    int `json:"failed"`
+}
+
+type SessionBatchSession struct {
+	Index             int               `json:"index"`
+	SessionID         string            `json:"session_id"`
+	Status            string            `json:"status"`
+	LastMessageStatus string            `json:"last_message_status"`
+	AgentID           string            `json:"agent_id"`
+	VersionID         string            `json:"version_id"`
+	LLMID             string            `json:"llm_id"`
+	Metadata          map[string]string `json:"metadata"`
+	TranscriptURL     string            `json:"transcript_url"`
+	Error             string            `json:"error"`
+}
+
+func (c *Client) CreateSessionBatch(ctx context.Context, req CreateSessionBatchRequest) (SessionBatch, error) {
+	var out SessionBatch
+	b, err := json.Marshal(req)
+	if err != nil {
+		return out, fmt.Errorf("encode session batch request: %w", err)
+	}
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/session-batches", "application/json", bytes.NewReader(b), &out); err != nil {
+		return out, err
+	}
+	if out.Sessions == nil {
+		out.Sessions = []SessionBatchSession{}
+	}
+	return out, nil
+}
+
+func (c *Client) GetSessionBatch(ctx context.Context, batchID string) (SessionBatch, error) {
+	var out SessionBatch
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/session-batches/"+url.PathEscape(batchID), "", nil, &out); err != nil {
+		return out, err
+	}
+	if out.Sessions == nil {
+		out.Sessions = []SessionBatchSession{}
+	}
+	return out, nil
 }
 
 type ContentBlock map[string]any
 
 func TextBlock(text string) ContentBlock   { return ContentBlock{"type": "text", "text": text} }
 func FileBlock(fileID string) ContentBlock { return ContentBlock{"type": "file", "file_id": fileID} }
-
-func (c *Client) SendUserMessage(ctx context.Context, sessionID string, content []ContentBlock) (SendEventResponse, error) {
-	payload := map[string]any{"type": "user.message", "content": content}
-	b, _ := json.Marshal(payload)
-	var out SendEventResponse
-	err := c.doJSON(ctx, http.MethodPost, "/v1/sessions/"+url.PathEscape(sessionID)+"/events", "application/json", bytes.NewReader(b), &out)
-	return out, err
-}
 
 func (c *Client) GetSession(ctx context.Context, sessionID string) (Session, error) {
 	var out Session
@@ -202,27 +238,35 @@ func FinalAssistantText(t Transcript) string {
 	return strings.TrimSpace(strings.Join(parts, "\n\n"))
 }
 
-func (c *Client) WaitForCompletion(ctx context.Context, sessionID string, interval time.Duration, timeout time.Duration) (Session, error) {
+func (c *Client) WaitForBatchCompletion(
+	ctx context.Context,
+	batchID string,
+	interval time.Duration,
+	timeout time.Duration,
+) (SessionBatch, error) {
+	if interval <= 0 {
+		interval = time.Second
+	}
 	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
 	for {
-		s, err := c.GetSession(ctx, sessionID)
+		b, err := c.GetSessionBatch(ctx, batchID)
 		if err != nil {
-			return s, err
+			return b, fmt.Errorf("get session batch: %w", err)
 		}
-		status := ""
-		if s.LastMessageStatus != nil {
-			status = *s.LastMessageStatus
-		}
-		if status == "completed" || status == "failed" {
-			return s, nil
+		switch b.Status {
+		case "completed", "failed", "partial_failed":
+			return b, nil
 		}
 		if time.Now().After(deadline) {
-			return s, fmt.Errorf("timeout waiting for session %s last_message_status=%q", sessionID, status)
+			return b, fmt.Errorf("timeout waiting for session batch %s status=%q", batchID, b.Status)
 		}
 		select {
 		case <-ctx.Done():
-			return s, ctx.Err()
-		case <-time.After(interval):
+			return b, ctx.Err()
+		case <-ticker.C:
 		}
 	}
 }
@@ -231,7 +275,13 @@ func (c *Client) DownloadWorkspaceZip(ctx context.Context, sessionID string, pat
 	return c.DownloadWorkspaceZipWithLimit(ctx, sessionID, paths, outPath, 0)
 }
 
-func (c *Client) DownloadWorkspaceZipWithLimit(ctx context.Context, sessionID string, paths []string, outPath string, maxBytes int64) error {
+func (c *Client) DownloadWorkspaceZipWithLimit(
+	ctx context.Context,
+	sessionID string,
+	paths []string,
+	outPath string,
+	maxBytes int64,
+) error {
 	u := "/v1/sessions/" + url.PathEscape(sessionID) + "/workspace.zip"
 	if len(paths) > 0 {
 		q := url.Values{}

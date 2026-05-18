@@ -416,107 +416,6 @@ func TestShouldAttachRuntimeSecretsOnlyForLiveVerifySessions(t *testing.T) {
 	}
 }
 
-func TestSessionHasMessageActivity(t *testing.T) {
-	messageID := "msg_test"
-	status := "queued"
-	tests := []struct {
-		name    string
-		session dari.Session
-		want    bool
-	}{
-		{name: "no message", session: dari.Session{}, want: false},
-		{name: "message id", session: dari.Session{LastMessageID: &messageID}, want: true},
-		{name: "message status", session: dari.Session{LastMessageStatus: &status}, want: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := sessionHasMessageActivity(tt.session); got != tt.want {
-				t.Fatalf("sessionHasMessageActivity() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestRecoverStaleStartingSessionPromotesWhenDariHasMessageActivity(t *testing.T) {
-	db := openManagedServiceTestDB(t)
-	ctx := context.Background()
-
-	userID, runID, sessionID := insertStartingRunSession(t, db)
-	t.Cleanup(func() {
-		cleanupRunSessionTestRows(userID, runID, db)
-	})
-
-	status := "queued"
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/v1/sessions/"+sessionID {
-			t.Fatalf("unexpected upstream request %s %s", r.Method, r.URL.Path)
-		}
-		_ = json.NewEncoder(w).Encode(dari.Session{ID: sessionID, LastMessageStatus: &status})
-	}))
-	defer upstream.Close()
-
-	s := &Server{
-		db:   db,
-		dari: dari.New(upstream.URL, "dari_test"),
-		cfg:  Config{SessionStartStaleAfter: time.Nanosecond, PollErrorStaleAfter: time.Hour},
-	}
-	if err := s.recoverStaleStartingSessions(ctx); err != nil {
-		t.Fatal(err)
-	}
-
-	var sessionStatus, runStatus string
-	if err := db.QueryRow(ctx, `SELECT status FROM run_sessions WHERE session_id=$1`, sessionID).Scan(&sessionStatus); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.QueryRow(ctx, `SELECT status FROM runs WHERE id=$1`, runID).Scan(&runStatus); err != nil {
-		t.Fatal(err)
-	}
-	if sessionStatus != statusRunning || runStatus != statusRunning {
-		t.Fatalf("session status=%q run status=%q, want both running", sessionStatus, runStatus)
-	}
-}
-
-func TestRecoverStaleStartingSessionFailsWhenDariHasNoMessageActivity(t *testing.T) {
-	db := openManagedServiceTestDB(t)
-	ctx := context.Background()
-
-	userID, runID, sessionID := insertStartingRunSession(t, db)
-	t.Cleanup(func() {
-		cleanupRunSessionTestRows(userID, runID, db)
-	})
-
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/v1/sessions/"+sessionID {
-			t.Fatalf("unexpected upstream request %s %s", r.Method, r.URL.Path)
-		}
-		_ = json.NewEncoder(w).Encode(dari.Session{ID: sessionID})
-	}))
-	defer upstream.Close()
-
-	s := &Server{
-		db:   db,
-		dari: dari.New(upstream.URL, "dari_test"),
-		cfg:  Config{SessionStartStaleAfter: time.Nanosecond, PollErrorStaleAfter: time.Hour},
-	}
-	if err := s.recoverStaleStartingSessions(ctx); err != nil {
-		t.Fatal(err)
-	}
-
-	var sessionStatus, sessionError, runStatus, runError string
-	if err := db.QueryRow(ctx, `SELECT status, coalesce(last_poll_error,'') FROM run_sessions WHERE session_id=$1`, sessionID).Scan(&sessionStatus, &sessionError); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.QueryRow(ctx, `SELECT status, coalesce(error,'') FROM runs WHERE id=$1`, runID).Scan(&runStatus, &runError); err != nil {
-		t.Fatal(err)
-	}
-	if sessionStatus != statusFailed || runStatus != statusFailed {
-		t.Fatalf("session status=%q run status=%q, want both failed", sessionStatus, runStatus)
-	}
-	if sessionError != string(persistedErrSessionMessageFailed) || runError != string(persistedErrSessionMessageFailed) {
-		t.Fatalf("session error=%q run error=%q, want %q", sessionError, runError, persistedErrSessionMessageFailed)
-	}
-}
-
 func TestStripeWebhookRequiresConfiguredSecret(t *testing.T) {
 	s := &Server{}
 	req := httptest.NewRequest(http.MethodPost, "/v1/stripe/webhook", strings.NewReader(`{"type":"checkout.session.completed"}`))
@@ -1581,6 +1480,26 @@ func TestRunListOrderExprWhitelistsSorts(t *testing.T) {
 	}
 }
 
+func TestCreateAuthTokenDefaultScopesIncludeOptimize(t *testing.T) {
+	body := strings.NewReader(`{"name":"github-actions"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/tokens", body)
+	rec := httptest.NewRecorder()
+
+	s := &Server{}
+	s.handleCreateAuthToken(rec, req, user{
+		ID:          "usr_test",
+		TokenKind:   tokenKindAutomation,
+		TokenScopes: []string{scopeManagedRead, scopeManagedCheck, scopeManagedTokens},
+	})
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "token cannot grant scope managed:optimize") {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
 func TestLogoutAllRevokesOnlyCurrentUserTokens(t *testing.T) {
 	dsn := os.Getenv("MANAGEDSERVICE_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -1832,36 +1751,4 @@ func openManagedServiceTestDB(t *testing.T) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	return db
-}
-
-func insertStartingRunSession(t *testing.T, db *pgxpool.Pool) (userID, runID, sessionID string) {
-	t.Helper()
-	ctx := context.Background()
-	userID = "usr_test_" + randomToken(8)
-	runID = "run_test_" + randomToken(8)
-	sessionID = "sess_test_" + randomToken(8)
-	if _, err := db.Exec(ctx, `INSERT INTO users (id, auth_subject, email) VALUES ($1, $2, $3)`, userID, "auth_"+userID, userID+"@example.test"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(ctx, `
-INSERT INTO runs (id, user_id, mode, status, tasks, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_file_id, bundle_sha256, bundle_files)
-VALUES ($1, $2, 'check', $3, '["task"]'::jsonb, 'agt_tester', 'ver_tester', 'agt_editor', 'ver_editor', 'file_test', 'sha', 1)
-`, runID, userID, statusStarting); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(ctx, `
-INSERT INTO run_sessions (session_id, run_id, kind, task_index, status, version_id, created_at)
-VALUES ($1, $2, 'tester', 1, $3, 'ver_tester', now() - interval '10 minutes')
-`, sessionID, runID, statusStarting); err != nil {
-		t.Fatal(err)
-	}
-	return userID, runID, sessionID
-}
-
-func cleanupRunSessionTestRows(userID, runID string, db *pgxpool.Pool) {
-	ctx := context.Background()
-	_, _ = db.Exec(ctx, `DELETE FROM credit_ledger WHERE run_id=$1 OR user_id=$2`, runID, userID)
-	_, _ = db.Exec(ctx, `DELETE FROM run_sessions WHERE run_id=$1`, runID)
-	_, _ = db.Exec(ctx, `DELETE FROM runs WHERE id=$1`, runID)
-	_, _ = db.Exec(ctx, `DELETE FROM users WHERE id=$1`, userID)
 }

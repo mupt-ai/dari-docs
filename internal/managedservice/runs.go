@@ -217,8 +217,16 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	runID := "run_" + randomToken(18)
-	taskJSON, _ := json.Marshal(tasks)
-	secretNamesJSON, _ := json.Marshal(runtimeSecretNames)
+	taskJSON, err := json.Marshal(tasks)
+	if err != nil {
+		writeLoggedError(w, http.StatusInternalServerError, "could not encode managed run tasks", err)
+		return
+	}
+	secretNamesJSON, err := json.Marshal(runtimeSecretNames)
+	if err != nil {
+		writeLoggedError(w, http.StatusInternalServerError, "could not encode runtime secret names", err)
+		return
+	}
 	if err := s.reserveRun(r.Context(), u.ID, runID, mode, taskJSON, b, reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
 		if errors.Is(err, errNoActiveManagedAgentRelease) {
 			writeError(w, http.StatusServiceUnavailable, "managed agents are not configured")

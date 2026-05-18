@@ -116,7 +116,7 @@ func runCheckOrOptimize(cmd string, args []string) error {
 	fs.Var(&feedbackLLMIDs, "feedback-llm", "manifest LLM option ID for feedback/tester sessions; repeat or comma-separate (default: all bundled tester LLMs; overrides --llm)")
 	fs.StringVar(&editorLLMID, "editor-llm", "", "manifest LLM option ID for the editor session (overrides --llm)")
 	fs.StringVar(&outDir, "out", "", "output directory (default: <repo>/.dari-docs)")
-	fs.IntVar(&parallel, "parallel", 4, "number of feedback sessions to run concurrently")
+	fs.IntVar(&parallel, "parallel", 4, "number of feedback sessions per self-managed batch")
 	fs.BoolVar(&apply, "apply", false, "copy updated docs back into the repo after downloading")
 	fs.BoolVar(&liveVerify, "live-verify", false, "allow agents to run safe live verification using provided runtime secrets")
 	fs.BoolVar(&managedMode, "managed", false, "run through the managed dari-docs service instead of a self-managed Dari org")
@@ -284,7 +284,10 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 
 	runtimeSecretJSON := ""
 	if cfg.LiveVerify && len(cfg.RuntimeSecrets) > 0 {
-		b, _ := json.Marshal(cfg.RuntimeSecrets)
+		b, err := json.Marshal(cfg.RuntimeSecrets)
+		if err != nil {
+			return fmt.Errorf("encode runtime secrets: %w", err)
+		}
 		runtimeSecretJSON = string(b)
 	}
 	created, err := client.CreateRun(ctx, cfg.Command, cfg.Tasks, bundlePath, managed.CreateRunOptions{
@@ -301,6 +304,9 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 		totalSessions++
 	}
 	deadline := time.Now().Add(cfg.Timeout * time.Duration(totalSessions))
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
 	var status managed.RunStatus
 	for {
 		status, err = client.GetRun(ctx, created.RunID)
@@ -316,7 +322,7 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(5 * time.Second):
+		case <-ticker.C:
 		}
 	}
 	if err := writeManagedFeedback(cfg.OutDir, status.FeedbackReports, status.AggregateFeedback); err != nil {
@@ -652,9 +658,13 @@ func runAuthTokenCreate(args []string) error {
 	if err != nil {
 		return err
 	}
+	tokenScopes := expandCSVList(scopes)
+	if len(tokenScopes) == 0 {
+		tokenScopes = []string{"managed:read", "managed:check", "managed:optimize"}
+	}
 	resp, err := client.CreateAuthToken(context.Background(), managed.TokenCreateRequest{
 		Name:      name,
-		Scopes:    expandCSVList(scopes),
+		Scopes:    tokenScopes,
 		ExpiresAt: expiresAt,
 	})
 	if err != nil {
@@ -1321,7 +1331,7 @@ Important flags:
   --bundle-exclude GLOB       exclude repo-relative docs bundle paths; repeatable
   --apply                     copy downloaded updated docs back into repo
   --api-base-url URL          Dari API base URL; self-managed only
-  --parallel N                tester sessions in parallel; self-managed only
+  --parallel N                tester sessions per batch; self-managed only
   --llm ID                    select a manifest LLM option for all self-managed sessions
   --feedback-llm ID           select tester LLM option(s); default is all bundled tester LLMs
   --editor-llm ID             select a manifest LLM option for the editor session
