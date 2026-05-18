@@ -157,9 +157,7 @@ export default function Runs() {
                           className={column.align === "right" ? "ml-auto inline-flex items-center gap-1 hover:text-foreground" : "inline-flex items-center gap-1 hover:text-foreground"}
                         >
                           {column.label}
-                          {sort === column.key ? (
-                            direction === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                          ) : null}
+                          <SortIcon active={sort === column.key} direction={direction} />
                         </button>
                       </th>
                     ))}
@@ -201,6 +199,11 @@ export default function Runs() {
       )}
     </div>
   );
+}
+
+function SortIcon({ active, direction }: { active: boolean; direction: SortDirection }) {
+  const className = active ? "h-3 w-3 shrink-0" : "h-3 w-3 shrink-0 opacity-0";
+  return direction === "asc" ? <ArrowUp className={className} /> : <ArrowDown className={className} />;
 }
 
 function EmptyRuns() {
