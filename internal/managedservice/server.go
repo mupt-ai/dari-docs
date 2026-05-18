@@ -31,6 +31,7 @@ const (
 type Server struct {
 	cfg        Config
 	db         *pgxpool.Pool
+	runStore   *managedRunStore
 	dari       *dari.Client
 	httpClient *http.Client
 }
@@ -44,7 +45,13 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer db.Close()
-	s := &Server{cfg: cfg, db: db, dari: dari.New(cfg.DariAPIBaseURL, cfg.DariAPIKey), httpClient: &http.Client{Timeout: cfg.OutboundHTTPTimeout}}
+	s := &Server{
+		cfg:        cfg,
+		db:         db,
+		runStore:   newManagedRunStore(db),
+		dari:       dari.New(cfg.DariAPIBaseURL, cfg.DariAPIKey),
+		httpClient: &http.Client{Timeout: cfg.OutboundHTTPTimeout},
+	}
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           s.routes(),
