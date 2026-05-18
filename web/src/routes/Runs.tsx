@@ -24,6 +24,9 @@ const columns: Array<{ key: RunSort; label: string; align?: "right" }> = [
   { key: "completed_at", label: "Completed" },
 ];
 
+const activePollMs = 7000;
+const idlePollMs = 20000;
+
 export default function Runs() {
   const [runs, setRuns] = useState<RunListItem[] | null>(null);
   const [balance, setBalance] = useState<number | null>(null);
@@ -35,10 +38,10 @@ export default function Runs() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async (quiet = false) => {
-    if (quiet) {
+  const refresh = useCallback(async (quiet = false, showRefreshing = true) => {
+    if (quiet && showRefreshing) {
       setRefreshing(true);
-    } else {
+    } else if (!quiet) {
       setLoading(true);
     }
     setError(null);
@@ -81,14 +84,16 @@ export default function Runs() {
     () => runs?.some((run) => isActiveRun(run.status)) ?? false,
     [runs]
   );
+  const hasLoadedRuns = runs !== null;
 
   useEffect(() => {
-    if (!hasActiveRuns) return;
+    if (!hasLoadedRuns) return;
+    const intervalMs = hasActiveRuns ? activePollMs : idlePollMs;
     const id = window.setInterval(() => {
-      void refresh(true);
-    }, 7000);
+      void refresh(true, false);
+    }, intervalMs);
     return () => window.clearInterval(id);
-  }, [hasActiveRuns, refresh]);
+  }, [hasActiveRuns, hasLoadedRuns, refresh]);
 
   const handleSort = (next: RunSort) => {
     if (next === sort) {
