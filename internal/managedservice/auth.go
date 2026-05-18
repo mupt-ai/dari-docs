@@ -49,6 +49,7 @@ var (
 	defaultAutomationScopes = []string{
 		scopeManagedRead,
 		scopeManagedCheck,
+		scopeManagedOptimize,
 	}
 )
 
