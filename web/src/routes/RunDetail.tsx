@@ -224,9 +224,13 @@ function TaskPanel({
   collapsed: boolean;
   onToggle: () => void;
 }) {
+  const headerClassName = `flex min-h-12 flex-wrap items-center justify-between gap-2 px-3 py-2 ${
+    collapsed ? "" : "border-b border-border"
+  }`;
+
   return (
     <div className="border border-border bg-background text-sm">
-      <div className="flex min-h-12 flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
+      <div className={headerClassName}>
         <button
           type="button"
           onClick={onToggle}
@@ -237,7 +241,7 @@ function TaskPanel({
           <span className="uppercase tracking-widest">Task {index + 1}</span>
           <SessionModel session={session} />
         </button>
-        <SessionStatus status={sessionStatus(session, fallbackStatus)} />
+        <SessionMeta session={session} fallbackStatus={fallbackStatus} />
       </div>
       {!collapsed && (
         <div className="p-3">
@@ -271,7 +275,7 @@ function SessionHeader({
         <span>{label}</span>
         <SessionModel session={session} />
       </div>
-      <SessionStatus status={sessionStatus(session, fallbackStatus)} />
+      <SessionMeta session={session} fallbackStatus={fallbackStatus} />
     </div>
   );
 }
@@ -284,6 +288,23 @@ function SessionModel({ session }: { session?: RunSession }) {
 
 function sessionStatus(session: RunSession | undefined, fallbackStatus: string): string {
   return session?.status ?? fallbackStatus;
+}
+
+function SessionMeta({
+  session,
+  fallbackStatus,
+}: {
+  session?: RunSession;
+  fallbackStatus: string;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
+      {session?.completed_at && (
+        <span className="text-muted-foreground">completed {formatDate(session.completed_at)}</span>
+      )}
+      <SessionStatus status={sessionStatus(session, fallbackStatus)} />
+    </div>
+  );
 }
 
 function SessionStatus({ status }: { status: string }) {
