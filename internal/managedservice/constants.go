@@ -10,8 +10,9 @@ const (
 	managedEditorReserveCents int64 = 150
 	managedServiceFeeCents    int64 = 0
 
-	stripeCheckoutMinCents int64 = 500
-	stripeCheckoutMaxCents int64 = 50000
+	stripeCheckoutMinCents     int64 = 500
+	stripeCheckoutDefaultCents int64 = 500
+	stripeCheckoutMaxCents     int64 = 50000
 
 	managedMaxBundleBytes             int64 = 25 * 1024 * 1024
 	managedBundleMaxUncompressedBytes int64 = 100 * 1024 * 1024

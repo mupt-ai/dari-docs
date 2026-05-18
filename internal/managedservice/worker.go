@@ -34,6 +34,7 @@ type runSessionRecord struct {
 	Kind            string
 	TaskIndex       int
 	Status          string
+	LLMID           string
 	CreatedAt       time.Time
 	LastPollErrorAt *time.Time
 	LastPollError   string
@@ -182,7 +183,7 @@ func (s *Server) startSingleSessionBatch(ctx context.Context, run queuedRun, nex
 	if err != nil {
 		return err
 	}
-	if err := store.InsertStartedRunSession(ctx, item.SessionID, run.ID, next.Kind, next.TaskIndex, versionID); err != nil {
+	if err := store.InsertStartedRunSession(ctx, item.SessionID, run.ID, next.Kind, next.TaskIndex, versionID, item.LLMID); err != nil {
 		return err
 	}
 	if isFinalSecretBearingSession(run, next) {
@@ -269,7 +270,7 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun) error {
 		if versionID == "" {
 			versionID = run.TesterVersionID
 		}
-		if err := store.InsertStartedRunSession(ctx, item.SessionID, run.ID, "tester", item.Index+1, versionID); err != nil {
+		if err := store.InsertStartedRunSession(ctx, item.SessionID, run.ID, "tester", item.Index+1, versionID, item.LLMID); err != nil {
 			return err
 		}
 	}
@@ -407,12 +408,12 @@ func (s *Server) reconcileSession(ctx context.Context, session runSessionRecord)
 	}
 	switch lastStatus {
 	case "completed":
-		if err := store.MarkSessionCompleted(ctx, session.ID); err != nil {
+		if err := store.MarkSessionCompleted(ctx, session.ID, sessionLLMID(session.LLMID, remote)); err != nil {
 			return err
 		}
 		return s.reconcileRunProgress(ctx, session.RunID)
 	case "failed":
-		if err := store.MarkSessionFailed(ctx, session.ID, persistedErrSessionFailed); err != nil {
+		if err := store.MarkSessionFailed(ctx, session.ID, persistedErrSessionFailed, sessionLLMID(session.LLMID, remote)); err != nil {
 			return err
 		}
 		return s.reconcileRunProgress(ctx, session.RunID)
@@ -420,8 +421,15 @@ func (s *Server) reconcileSession(ctx context.Context, session runSessionRecord)
 		if s.cfg.SessionStaleAfter > 0 && time.Since(session.CreatedAt) > s.cfg.SessionStaleAfter {
 			return s.failRunSession(ctx, session, persistedErrSessionStale)
 		}
-		return store.MarkSessionPollSucceeded(ctx, session.ID)
+		return store.MarkSessionPollSucceeded(ctx, session.ID, sessionLLMID(session.LLMID, remote))
 	}
+}
+
+func sessionLLMID(current string, remote dari.Session) string {
+	if remote.LLMID != nil {
+		return *remote.LLMID
+	}
+	return current
 }
 
 func (s *Server) recordSessionPollError(ctx context.Context, session runSessionRecord, _ error) (bool, error) {

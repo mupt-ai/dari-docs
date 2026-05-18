@@ -94,12 +94,13 @@ func (store *managedRunStore) InsertStartedRunSession(
 	kind string,
 	taskIndex int,
 	versionID string,
+	llmID string,
 ) error {
 	_, err := store.db.Exec(ctx, `
-INSERT INTO run_sessions (session_id, run_id, kind, task_index, status, version_id)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO run_sessions (session_id, run_id, kind, task_index, status, version_id, llm_id)
+VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''))
 ON CONFLICT (session_id) DO NOTHING
-`, sessionID, runID, kind, taskIndex, statusRunning, versionID)
+`, sessionID, runID, kind, taskIndex, statusRunning, versionID, llmID)
 	return err
 }
 
@@ -172,6 +173,7 @@ SELECT session_id,
        kind,
        task_index,
        status,
+       COALESCE(llm_id, ''),
        created_at,
        last_poll_error_at,
        COALESCE(last_poll_error, '')
@@ -187,43 +189,46 @@ LIMIT $2
 	return scanRunSessionRecords(rows)
 }
 
-func (store *managedRunStore) MarkSessionCompleted(ctx context.Context, sessionID string) error {
+func (store *managedRunStore) MarkSessionCompleted(ctx context.Context, sessionID string, llmID string) error {
 	_, err := store.db.Exec(ctx, `
 UPDATE run_sessions
 SET status=$1,
     completed_at=now(),
     last_polled_at=now(),
     last_poll_error_at=NULL,
-    last_poll_error=NULL
-WHERE session_id=$2
-  AND status=$3
-`, statusCompleted, sessionID, statusRunning)
-	return err
-}
-
-func (store *managedRunStore) MarkSessionFailed(ctx context.Context, sessionID string, code persistedErrorCode) error {
-	_, err := store.db.Exec(ctx, `
-UPDATE run_sessions
-SET status=$1,
-    completed_at=now(),
-    last_polled_at=now(),
-    last_poll_error_at=NULL,
-    last_poll_error=$2
+    last_poll_error=NULL,
+    llm_id=COALESCE(NULLIF($2, ''), llm_id)
 WHERE session_id=$3
   AND status=$4
-`, statusFailed, persistedErrorString(code), sessionID, statusRunning)
+`, statusCompleted, llmID, sessionID, statusRunning)
 	return err
 }
 
-func (store *managedRunStore) MarkSessionPollSucceeded(ctx context.Context, sessionID string) error {
+func (store *managedRunStore) MarkSessionFailed(ctx context.Context, sessionID string, code persistedErrorCode, llmID string) error {
+	_, err := store.db.Exec(ctx, `
+UPDATE run_sessions
+SET status=$1,
+    completed_at=now(),
+    last_polled_at=now(),
+    last_poll_error_at=NULL,
+    last_poll_error=$2,
+    llm_id=COALESCE(NULLIF($3, ''), llm_id)
+WHERE session_id=$4
+  AND status=$5
+`, statusFailed, persistedErrorString(code), llmID, sessionID, statusRunning)
+	return err
+}
+
+func (store *managedRunStore) MarkSessionPollSucceeded(ctx context.Context, sessionID string, llmID string) error {
 	_, err := store.db.Exec(ctx, `
 UPDATE run_sessions
 SET last_polled_at=now(),
     last_poll_error_at=NULL,
-    last_poll_error=NULL
-WHERE session_id=$1
-  AND status=$2
-`, sessionID, statusRunning)
+    last_poll_error=NULL,
+    llm_id=COALESCE(NULLIF($1, ''), llm_id)
+WHERE session_id=$2
+  AND status=$3
+`, llmID, sessionID, statusRunning)
 	return err
 }
 
@@ -385,6 +390,7 @@ SELECT session_id,
        kind,
        task_index,
        status,
+       COALESCE(llm_id, ''),
        created_at,
        last_poll_error_at,
        COALESCE(last_poll_error, '')
@@ -513,6 +519,7 @@ func scanRunSessionRecords(rows pgx.Rows) ([]runSessionRecord, error) {
 			&record.Kind,
 			&record.TaskIndex,
 			&record.Status,
+			&record.LLMID,
 			&record.CreatedAt,
 			&lastPollErrorAt,
 			&record.LastPollError,

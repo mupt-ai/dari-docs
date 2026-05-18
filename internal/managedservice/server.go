@@ -12,6 +12,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -81,21 +83,24 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/readyz", s.handleReady)
+	mux.HandleFunc("/v1/auth/config", s.handleAuthConfig)
 	mux.HandleFunc("/v1/auth/dari/exchange", s.handleDariAuthExchange)
 	mux.HandleFunc("/v1/auth/logout", s.withAuth(s.handleLogout))
-	mux.HandleFunc("/v1/auth/logout-all", s.withAuth(s.handleLogoutAll))
-	mux.HandleFunc("/v1/auth/tokens", s.withAuth(s.handleAuthTokens))
-	mux.HandleFunc("/v1/auth/tokens/", s.withAuth(s.handleAuthTokenByID))
-	mux.HandleFunc("/v1/me", s.withAuth(s.handleMe))
-	mux.HandleFunc("/v1/billing/balance", s.withAuth(s.handleBalance))
-	mux.HandleFunc("/v1/billing/checkout", s.withAuth(s.handleCheckout))
+	mux.HandleFunc("/v1/auth/logout-all", s.withUserAuth(s.handleLogoutAll))
+	mux.HandleFunc("/v1/auth/tokens", s.withUserAuth(s.handleAuthTokens))
+	mux.HandleFunc("/v1/auth/tokens/", s.withUserAuth(s.handleAuthTokenByID))
+	mux.HandleFunc("/v1/me", s.withUserAuth(s.handleMe))
+	mux.HandleFunc("/v1/billing/balance", s.withUserAuth(s.handleBalance))
+	mux.HandleFunc("/v1/billing/config", s.withUserAuth(s.handleBillingConfig))
+	mux.HandleFunc("/v1/billing/checkout", s.withUserAuth(s.handleCheckout))
 	mux.HandleFunc("/v1/admin/managed-agent-release", s.handleManagedAgentRelease)
-	mux.HandleFunc("/v1/runs/config", s.withAuth(s.handleRunConfig))
+	mux.HandleFunc("/v1/runs/config", s.withUserAuth(s.handleRunConfig))
 	mux.HandleFunc("/v1/stripe/webhook", s.handleStripeWebhook)
 	mux.HandleFunc("/billing/success", s.handleBillingSuccess)
 	mux.HandleFunc("/billing/cancel", s.handleBillingCancel)
-	mux.HandleFunc("/v1/runs", s.withAuth(s.handleRuns))
-	mux.HandleFunc("/v1/runs/", s.withAuth(s.handleRunByID))
+	mux.HandleFunc("/v1/runs", s.withUserAuth(s.handleRuns))
+	mux.HandleFunc("/v1/runs/", s.withUserAuth(s.handleRunByID))
+	mux.HandleFunc("/", s.handleFrontend)
 	return mux
 }
 
@@ -123,6 +128,37 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+}
+
+func (s *Server) handleFrontend(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if r.URL.Path == "/v1" || strings.HasPrefix(r.URL.Path, "/v1/") {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	dist := filepath.Join("web", "dist")
+	requestPath := filepath.Clean(strings.TrimPrefix(r.URL.Path, "/"))
+	if requestPath == "." {
+		requestPath = "index.html"
+	}
+	candidate := filepath.Join(dist, requestPath)
+	if !strings.HasPrefix(candidate, dist+string(os.PathSeparator)) && candidate != filepath.Join(dist, "index.html") {
+		writeError(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+		http.ServeFile(w, r, candidate)
+		return
+	}
+	index := filepath.Join(dist, "index.html")
+	if _, err := os.Stat(index); err != nil {
+		writeError(w, http.StatusNotFound, "frontend is not built")
+		return
+	}
+	http.ServeFile(w, r, index)
 }
 
 var defaultOutboundHTTPClient = &http.Client{Timeout: 30 * time.Second}

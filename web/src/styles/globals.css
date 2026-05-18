@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root,
+.dark {
+  /* Warm off-black base (hue ~30 = warm neutral) — softer than pure #000
+     on LCDs while still reading as "black" at a glance. */
+  --background: 30 6% 4%;
+  --foreground: 30 8% 93%;
+
+  --card: 30 5% 6%;
+  --card-foreground: 30 8% 93%;
+
+  --muted: 30 5% 8%;
+  --muted-foreground: 30 5% 60%;
+
+  --border: 30 5% 14%;
+  --input: 30 5% 14%;
+
+  /* Amber brand accent. Use `text-brand` / `bg-brand` / `border-brand`
+     in Tailwind. Reserved for interactive / branded surfaces —
+     active nav, focused controls, avatar glyphs, link underlines.
+     The ring token is aliased to brand so focus-visible states match. */
+  --brand: 38 95% 55%;
+  --brand-dark: 32 70% 38%;
+  --ring: var(--brand);
+
+  --primary: 0 0% 100%;
+  --primary-foreground: 0 0% 0%;
+
+  --secondary: 30 5% 10%;
+  --secondary-foreground: 30 8% 93%;
+
+  --accent: 30 5% 13%;
+  --accent-foreground: 30 8% 93%;
+
+  --destructive: 0 72% 45%;
+  --destructive-foreground: 0 0% 98%;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
+}
+
+
+
+:root,
+.dark {
+  --sidebar-background: var(--background);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--accent-foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+}

@@ -56,10 +56,10 @@ func TestManagedRunStoreExecOnlyMethodsPassSQLAndArgumentsInOrder(t *testing.T) 
 		{
 			name: "insert started run session",
 			run: func(ctx context.Context, store *managedRunStore) error {
-				return store.InsertStartedRunSession(ctx, "sess_test", "run_test", "tester", 2, "ver_test")
+				return store.InsertStartedRunSession(ctx, "sess_test", "run_test", "tester", 2, "ver_test", "llm_test")
 			},
 			wantSQLContains: "INSERT INTO run_sessions",
-			wantArgs:        []any{"sess_test", "run_test", "tester", 2, statusRunning, "ver_test"},
+			wantArgs:        []any{"sess_test", "run_test", "tester", 2, statusRunning, "ver_test", "llm_test"},
 		},
 		{
 			name: "mark run running from starting",
@@ -80,26 +80,26 @@ func TestManagedRunStoreExecOnlyMethodsPassSQLAndArgumentsInOrder(t *testing.T) 
 		{
 			name: "mark session completed",
 			run: func(ctx context.Context, store *managedRunStore) error {
-				return store.MarkSessionCompleted(ctx, "sess_test")
+				return store.MarkSessionCompleted(ctx, "sess_test", "llm_test")
 			},
-			wantSQLContains: "WHERE session_id=$2",
-			wantArgs:        []any{statusCompleted, "sess_test", statusRunning},
+			wantSQLContains: "WHERE session_id=$3",
+			wantArgs:        []any{statusCompleted, "llm_test", "sess_test", statusRunning},
 		},
 		{
 			name: "mark session failed",
 			run: func(ctx context.Context, store *managedRunStore) error {
-				return store.MarkSessionFailed(ctx, "sess_test", persistedErrSessionFailed)
+				return store.MarkSessionFailed(ctx, "sess_test", persistedErrSessionFailed, "llm_test")
 			},
-			wantSQLContains: "WHERE session_id=$3",
-			wantArgs:        []any{statusFailed, persistedErrorString(persistedErrSessionFailed), "sess_test", statusRunning},
+			wantSQLContains: "WHERE session_id=$4",
+			wantArgs:        []any{statusFailed, persistedErrorString(persistedErrSessionFailed), "llm_test", "sess_test", statusRunning},
 		},
 		{
 			name: "mark session poll succeeded",
 			run: func(ctx context.Context, store *managedRunStore) error {
-				return store.MarkSessionPollSucceeded(ctx, "sess_test")
+				return store.MarkSessionPollSucceeded(ctx, "sess_test", "llm_test")
 			},
-			wantSQLContains: "WHERE session_id=$1",
-			wantArgs:        []any{"sess_test", statusRunning},
+			wantSQLContains: "WHERE session_id=$2",
+			wantArgs:        []any{"llm_test", "sess_test", statusRunning},
 		},
 		{
 			name: "fail run session",

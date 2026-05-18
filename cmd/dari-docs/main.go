@@ -432,6 +432,23 @@ func runAuthLogin(args []string) error {
 		return err
 	}
 	ctx := context.Background()
+	if token, err := managed.LoadToken(managed.DefaultBaseURL); err != nil {
+		return err
+	} else if strings.TrimSpace(token) != "" {
+		client := managed.NewWithAuthToken(managed.DefaultBaseURL, managed.AuthToken{Token: token, Source: managed.AuthSourceLocal})
+		me, err := client.Me(ctx)
+		if err == nil {
+			fmt.Printf("Already logged in to %s as %s\n", managed.DefaultBaseURL, me.Email)
+			return nil
+		}
+		var httpErr *managed.HTTPError
+		if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusUnauthorized {
+			return err
+		}
+		if err := managed.DeleteToken(managed.DefaultBaseURL); err != nil {
+			return err
+		}
+	}
 	verified, err := exchangeManagedBrowserLogin(ctx)
 	if err != nil {
 		return err

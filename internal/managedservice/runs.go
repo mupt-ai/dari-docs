@@ -3,6 +3,7 @@ package managedservice
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,7 +51,12 @@ func (e *insufficientCreditsError) Error() string {
 }
 
 func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
-	if r.Method != http.MethodPost {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleListRuns(w, r, u)
+		return
+	case http.MethodPost:
+	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
@@ -260,6 +267,213 @@ UPDATE runs SET status=$2, bundle_file_id=$3, updated_at=now() WHERE id=$1
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": runID, "status": statusQueued})
+}
+
+type runListResponse struct {
+	Runs       []runListItem `json:"runs"`
+	NextCursor string        `json:"next_cursor,omitempty"`
+}
+
+type runListItem struct {
+	ID                   string          `json:"id"`
+	Mode                 string          `json:"mode"`
+	Status               string          `json:"status"`
+	Tasks                []string        `json:"tasks"`
+	TaskCount            int             `json:"task_count"`
+	CreatedAt            time.Time       `json:"created_at"`
+	CompletedAt          *time.Time      `json:"completed_at,omitempty"`
+	ReservedCents        int64           `json:"reserved_cents"`
+	ChargedCents         int64           `json:"charged_cents"`
+	Estimated            bool            `json:"estimated"`
+	Error                string          `json:"error,omitempty"`
+	LLMs                 []runLLMSummary `json:"llms"`
+	UpdatedDocsAvailable bool            `json:"updated_docs_available"`
+}
+
+type runLLMSummary struct {
+	Role  string `json:"role"`
+	LLMID string `json:"llm_id"`
+	Count int    `json:"count"`
+}
+
+type runListParams struct {
+	Limit     int
+	Offset    int
+	Sort      string
+	Direction string
+}
+
+func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request, u user) {
+	if !requireScope(w, u, scopeManagedRead) {
+		return
+	}
+	params, err := parseRunListParams(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	orderExpr, ok := runListOrderExpr(params.Sort)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "unsupported sort")
+		return
+	}
+	direction := "DESC"
+	if params.Direction == "asc" {
+		direction = "ASC"
+	}
+	query := fmt.Sprintf(`
+SELECT id, mode, status, tasks, created_at, completed_at, reserved_cents, charged_cents,
+       coalesce(cost_status,''), coalesce(error,''), coalesce(editor_session_id,'')
+FROM runs
+WHERE user_id=$1
+ORDER BY %s %s, id %s
+LIMIT $2 OFFSET $3
+`, orderExpr, direction, direction)
+	rows, err := s.db.Query(r.Context(), query, u.ID, params.Limit+1, params.Offset)
+	if err != nil {
+		writeLoggedError(w, http.StatusInternalServerError, "could not list runs", err)
+		return
+	}
+	defer rows.Close()
+	runs := make([]runListItem, 0, params.Limit)
+	runIDs := make([]string, 0, params.Limit)
+	for rows.Next() {
+		var item runListItem
+		var tasksJSON []byte
+		var costStatus, editorSessionID string
+		if err := rows.Scan(&item.ID, &item.Mode, &item.Status, &tasksJSON, &item.CreatedAt, &item.CompletedAt, &item.ReservedCents, &item.ChargedCents, &costStatus, &item.Error, &editorSessionID); err != nil {
+			writeLoggedError(w, http.StatusInternalServerError, "could not list runs", err)
+			return
+		}
+		_ = json.Unmarshal(tasksJSON, &item.Tasks)
+		item.TaskCount = len(item.Tasks)
+		item.Estimated = costStatus == "estimated"
+		item.UpdatedDocsAvailable = item.Status == statusCompleted && editorSessionID != ""
+		runs = append(runs, item)
+		runIDs = append(runIDs, item.ID)
+	}
+	if rows.Err() != nil {
+		writeLoggedError(w, http.StatusInternalServerError, "could not list runs", rows.Err())
+		return
+	}
+	nextCursor := ""
+	if len(runs) > params.Limit {
+		runs = runs[:params.Limit]
+		runIDs = runIDs[:params.Limit]
+		nextCursor = encodeRunListCursor(params.Offset + params.Limit)
+	}
+	llms, err := s.loadRunLLMSummaries(r.Context(), u.ID, runIDs)
+	if err != nil {
+		writeLoggedError(w, http.StatusInternalServerError, "could not list run llms", err)
+		return
+	}
+	for i := range runs {
+		runs[i].LLMs = llms[runs[i].ID]
+		if runs[i].LLMs == nil {
+			runs[i].LLMs = []runLLMSummary{}
+		}
+	}
+	writeJSON(w, http.StatusOK, runListResponse{Runs: runs, NextCursor: nextCursor})
+}
+
+func parseRunListParams(r *http.Request) (runListParams, error) {
+	q := r.URL.Query()
+	limit := 50
+	if raw := strings.TrimSpace(q.Get("limit")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			return runListParams{}, errors.New("limit must be a positive integer")
+		}
+		limit = n
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	offset := 0
+	if raw := strings.TrimSpace(q.Get("cursor")); raw != "" {
+		n, err := decodeRunListCursor(raw)
+		if err != nil {
+			return runListParams{}, errors.New("invalid cursor")
+		}
+		offset = n
+	}
+	sort := strings.TrimSpace(q.Get("sort"))
+	if sort == "" {
+		sort = "created_at"
+	}
+	direction := strings.ToLower(strings.TrimSpace(q.Get("direction")))
+	if direction == "" {
+		direction = "desc"
+	}
+	if direction != "asc" && direction != "desc" {
+		return runListParams{}, errors.New("direction must be asc or desc")
+	}
+	return runListParams{Limit: limit, Offset: offset, Sort: sort, Direction: direction}, nil
+}
+
+func runListOrderExpr(sort string) (string, bool) {
+	switch sort {
+	case "status":
+		return "status", true
+	case "type", "mode":
+		return "mode", true
+	case "task":
+		return "tasks::text", true
+	case "cost", "charged_cents":
+		return "charged_cents", true
+	case "created", "created_at":
+		return "created_at", true
+	case "completed", "completed_at":
+		return "coalesce(completed_at, '0001-01-01'::timestamptz)", true
+	case "llms":
+		return `(SELECT string_agg(coalesce(nullif(rs.llm_id,''), 'default'), ',' ORDER BY rs.kind, rs.task_index) FROM run_sessions rs WHERE rs.run_id = runs.id)`, true
+	default:
+		return "", false
+	}
+}
+
+func encodeRunListCursor(offset int) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(strconv.Itoa(offset)))
+}
+
+func decodeRunListCursor(raw string) (int, error) {
+	data, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return 0, err
+	}
+	offset, err := strconv.Atoi(string(data))
+	if err != nil || offset < 0 {
+		return 0, errors.New("invalid offset")
+	}
+	return offset, nil
+}
+
+func (s *Server) loadRunLLMSummaries(ctx context.Context, userID string, runIDs []string) (map[string][]runLLMSummary, error) {
+	out := make(map[string][]runLLMSummary, len(runIDs))
+	if len(runIDs) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.Query(ctx, `
+SELECT rs.run_id, rs.kind, coalesce(nullif(rs.llm_id,''), 'default') AS llm_id, count(*)
+FROM run_sessions rs
+JOIN runs r ON r.id = rs.run_id
+WHERE r.user_id=$1 AND rs.run_id = ANY($2)
+GROUP BY rs.run_id, rs.kind, coalesce(nullif(rs.llm_id,''), 'default')
+ORDER BY rs.run_id, rs.kind, llm_id
+`, userID, runIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var runID string
+		var item runLLMSummary
+		if err := rows.Scan(&runID, &item.Role, &item.LLMID, &item.Count); err != nil {
+			return nil, err
+		}
+		out[runID] = append(out[runID], item)
+	}
+	return out, rows.Err()
 }
 
 func (s *Server) stageManagedBundle(part *multipart.Part) (string, bundle.Result, error) {
@@ -475,28 +689,46 @@ func (s *Server) handleUpdatedZip(w http.ResponseWriter, r *http.Request, u user
 }
 
 type runStatusResponse struct {
-	ID                   string   `json:"id"`
-	Mode                 string   `json:"mode"`
-	Status               string   `json:"status"`
-	Error                string   `json:"error,omitempty"`
-	FeedbackReports      []string `json:"feedback_reports,omitempty"`
-	AggregateFeedback    string   `json:"aggregate_feedback,omitempty"`
-	UpdatedDocsAvailable bool     `json:"updated_docs_available"`
-	ReservedCents        int64    `json:"reserved_cents"`
-	ChargedCents         int64    `json:"charged_cents"`
+	ID                   string          `json:"id"`
+	Mode                 string          `json:"mode"`
+	Status               string          `json:"status"`
+	Error                string          `json:"error,omitempty"`
+	Tasks                []string        `json:"tasks,omitempty"`
+	CreatedAt            time.Time       `json:"created_at"`
+	CompletedAt          *time.Time      `json:"completed_at,omitempty"`
+	LLMs                 []runLLMSummary `json:"llms"`
+	FeedbackReports      []string        `json:"feedback_reports,omitempty"`
+	AggregateFeedback    string          `json:"aggregate_feedback,omitempty"`
+	UpdatedDocsAvailable bool            `json:"updated_docs_available"`
+	ReservedCents        int64           `json:"reserved_cents"`
+	ChargedCents         int64           `json:"charged_cents"`
+	Estimated            bool            `json:"estimated"`
 }
 
 func (s *Server) loadRunStatus(ctx context.Context, userID, runID string) (runStatusResponse, error) {
 	var rs runStatusResponse
 	var editorSessionID string
+	var tasksJSON []byte
+	var costStatus string
 	err := s.db.QueryRow(ctx, `
-SELECT id, mode, status, coalesce(error,''), coalesce(editor_session_id,''), reserved_cents, charged_cents
+SELECT id, mode, status, tasks, coalesce(error,''), coalesce(editor_session_id,''), reserved_cents, charged_cents,
+       coalesce(cost_status,''), created_at, completed_at
 FROM runs WHERE id=$1 AND user_id=$2
-`, runID, userID).Scan(&rs.ID, &rs.Mode, &rs.Status, &rs.Error, &editorSessionID, &rs.ReservedCents, &rs.ChargedCents)
+`, runID, userID).Scan(&rs.ID, &rs.Mode, &rs.Status, &tasksJSON, &rs.Error, &editorSessionID, &rs.ReservedCents, &rs.ChargedCents, &costStatus, &rs.CreatedAt, &rs.CompletedAt)
 	if err != nil {
 		return rs, err
 	}
+	_ = json.Unmarshal(tasksJSON, &rs.Tasks)
 	rs.UpdatedDocsAvailable = rs.Status == statusCompleted && editorSessionID != ""
+	rs.Estimated = costStatus == "estimated"
+	llms, err := s.loadRunLLMSummaries(ctx, userID, []string{runID})
+	if err != nil {
+		return rs, err
+	}
+	rs.LLMs = llms[runID]
+	if rs.LLMs == nil {
+		rs.LLMs = []runLLMSummary{}
+	}
 	if rs.Status == statusCompleted || rs.Status == statusFailed {
 		reports, err := s.completedTesterReports(ctx, runID)
 		if err != nil {
