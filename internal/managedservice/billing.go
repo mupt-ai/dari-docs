@@ -19,6 +19,21 @@ func (s *Server) handleBalance(w http.ResponseWriter, r *http.Request, u user) {
 	s.handleMe(w, r, u)
 }
 
+func (s *Server) handleBillingConfig(w http.ResponseWriter, r *http.Request, u user) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !requireScope(w, u, scopeManagedRead) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"min_checkout_cents":     stripeCheckoutMinCents,
+		"default_checkout_cents": stripeCheckoutDefaultCents,
+		"max_checkout_cents":     stripeCheckoutMaxCents,
+	})
+}
+
 func (s *Server) handleRunConfig(w http.ResponseWriter, r *http.Request, u user) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")

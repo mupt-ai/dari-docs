@@ -4,7 +4,7 @@ services:
     runtime: go
     plan: starter
     region: oregon
-    buildCommand: go build -o ./bin/dari-docs-service ./cmd/dari-docs-service
+    buildCommand: cd web && npm ci && npm run build && cd .. && go build -o ./bin/dari-docs-service ./cmd/dari-docs-service
     startCommand: ./bin/dari-docs-service
     healthCheckPath: /readyz
     maxShutdownDelaySeconds: 120

@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/mupt-ai/dari-docs/internal/platformauth"
 )
 
 type user struct {
@@ -26,8 +27,9 @@ type user struct {
 }
 
 const (
-	tokenKindInteractive = "interactive"
-	tokenKindAutomation  = "automation"
+	tokenKindInteractive    = "interactive"
+	tokenKindAutomation     = "automation"
+	tokenKindBrowserSession = "browser_session"
 
 	scopeManagedRead         = "managed:read"
 	scopeManagedCheck        = "managed:check"
@@ -49,6 +51,7 @@ var (
 	defaultAutomationScopes = []string{
 		scopeManagedRead,
 		scopeManagedCheck,
+		scopeManagedOptimize,
 	}
 )
 
@@ -63,15 +66,50 @@ func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, user)) h
 	}
 }
 
+func (s *Server) withUserAuth(next func(http.ResponseWriter, *http.Request, user)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		u, err := s.authenticateUser(r.Context(), r.Header.Get("Authorization"))
+		if err != nil {
+			var upstreamErr *upstreamHTTPError
+			if errors.As(err, &upstreamErr) && upstreamErr.Status != http.StatusUnauthorized && upstreamErr.Status != http.StatusForbidden {
+				writeLoggedError(w, http.StatusBadGateway, "could not verify Dari user session", err)
+				return
+			}
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		next(w, r, u)
+	}
+}
+
 func (s *Server) authenticate(ctx context.Context, header string) (user, error) {
 	token, err := bearerToken(header)
 	if err != nil {
 		return user{}, err
 	}
+	return s.authenticateManagedToken(ctx, token)
+}
+
+func (s *Server) authenticateUser(ctx context.Context, header string) (user, error) {
+	token, err := bearerToken(header)
+	if err != nil {
+		return user{}, err
+	}
+	u, err := s.authenticateManagedToken(ctx, token)
+	if err == nil {
+		return u, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) || !looksLikeJWT(token) {
+		return user{}, err
+	}
+	return s.authenticateDariSession(ctx, token)
+}
+
+func (s *Server) authenticateManagedToken(ctx context.Context, token string) (user, error) {
 	hash := sha256Hex(token)
 	var u user
 	var scopesJSON string
-	err = s.db.QueryRow(ctx, `
+	err := s.db.QueryRow(ctx, `
 SELECT users.id, users.email, api_tokens.id, api_tokens.token_hash,
        coalesce(api_tokens.kind, 'interactive'), coalesce(api_tokens.name, ''),
        coalesce(api_tokens.token_prefix, ''), coalesce(api_tokens.scopes, '[]'::jsonb)::text
@@ -90,6 +128,33 @@ WHERE id=$1 AND (last_used_at IS NULL OR last_used_at < now() - interval '10 min
 	return u, nil
 }
 
+func (s *Server) authenticateDariSession(ctx context.Context, accessToken string) (user, error) {
+	info, err := s.fetchDariUserInfo(ctx, accessToken)
+	if err != nil {
+		return user{}, err
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return user{}, err
+	}
+	defer tx.Rollback(ctx)
+	userID, err := upsertUserForDariIdentity(ctx, tx, info)
+	if err != nil {
+		return user{}, err
+	}
+	if err := s.ensureFreeGrant(ctx, tx, userID); err != nil {
+		return user{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return user{}, err
+	}
+	return user{
+		ID:        userID,
+		Email:     info.Email,
+		TokenKind: tokenKindBrowserSession,
+	}, nil
+}
+
 func bearerToken(header string) (string, error) {
 	const prefix = "Bearer "
 	if !strings.HasPrefix(header, prefix) {
@@ -100,6 +165,10 @@ func bearerToken(header string) (string, error) {
 		return "", errors.New("missing bearer token")
 	}
 	return token, nil
+}
+
+func looksLikeJWT(token string) bool {
+	return strings.Count(token, ".") == 2
 }
 
 func parseScopesJSON(raw string) []string {
@@ -134,7 +203,8 @@ func validScope(scope string) bool {
 }
 
 func (u user) hasScope(scope string) bool {
-	if effectiveTokenKind(u.TokenKind) == tokenKindInteractive {
+	switch effectiveTokenKind(u.TokenKind) {
+	case tokenKindInteractive, tokenKindBrowserSession:
 		return true
 	}
 	for _, s := range u.TokenScopes {
@@ -151,6 +221,19 @@ func requireScope(w http.ResponseWriter, u user, scope string) bool {
 	}
 	writeError(w, http.StatusForbidden, fmt.Sprintf("token missing required scope %s", scope))
 	return false
+}
+
+func (s *Server) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	cfg, err := platformauth.FetchConfig(r.Context(), s.cfg.DariAPIBaseURL)
+	if err != nil {
+		writeLoggedError(w, http.StatusBadGateway, "could not load auth config", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, cfg)
 }
 
 func (s *Server) handleDariAuthExchange(w http.ResponseWriter, r *http.Request) {
@@ -225,7 +308,7 @@ func (s *Server) handleLogoutAll(w http.ResponseWriter, r *http.Request, u user)
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if u.TokenKind != tokenKindInteractive && !u.hasScope(scopeManagedTokens) {
+	if effectiveTokenKind(u.TokenKind) != tokenKindInteractive && !u.hasScope(scopeManagedTokens) {
 		writeError(w, http.StatusForbidden, fmt.Sprintf("token missing required scope %s", scopeManagedTokens))
 		return
 	}
@@ -538,6 +621,9 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u user) {
 }
 
 func effectiveTokenKind(kind string) string {
+	if kind == tokenKindBrowserSession {
+		return tokenKindBrowserSession
+	}
 	if kind == tokenKindAutomation {
 		return tokenKindAutomation
 	}
@@ -545,7 +631,8 @@ func effectiveTokenKind(kind string) string {
 }
 
 func effectiveScopes(u user) []string {
-	if effectiveTokenKind(u.TokenKind) == tokenKindInteractive {
+	switch effectiveTokenKind(u.TokenKind) {
+	case tokenKindInteractive, tokenKindBrowserSession:
 		return append([]string{}, allManagedScopes...)
 	}
 	return append([]string{}, u.TokenScopes...)

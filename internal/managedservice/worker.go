@@ -38,6 +38,7 @@ type runSessionRecord struct {
 	Kind            string
 	TaskIndex       int
 	Status          string
+	LLMID           string
 	CreatedAt       time.Time
 	LastPollErrorAt *time.Time
 	LastPollError   string
@@ -178,10 +179,14 @@ func (s *Server) startNextSession(ctx context.Context, run queuedRun) error {
 	if err != nil {
 		return s.failStartedRun(ctx, run, persistedErrSessionCreateFailed, fmt.Errorf("create %s session: %w", next.Kind, err))
 	}
+	llmID := ""
+	if session.LLMID != nil {
+		llmID = *session.LLMID
+	}
 	_, err = s.db.Exec(ctx, `
-INSERT INTO run_sessions (session_id, run_id, kind, task_index, status, version_id)
-VALUES ($1, $2, $3, $4, $5, $6)
-`, session.ID, run.ID, next.Kind, next.TaskIndex, statusStarting, next.VersionID)
+INSERT INTO run_sessions (session_id, run_id, kind, task_index, status, version_id, llm_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+`, session.ID, run.ID, next.Kind, next.TaskIndex, statusStarting, next.VersionID, llmID)
 	if err != nil {
 		return err
 	}
@@ -288,7 +293,7 @@ func (s *Server) recoverStaleStartingSessions(ctx context.Context) error {
 		return nil
 	}
 	rows, err := s.db.Query(ctx, `
-SELECT session_id, run_id, kind, task_index, status, created_at, last_poll_error_at, coalesce(last_poll_error,'')
+SELECT session_id, run_id, kind, task_index, status, coalesce(llm_id,''), created_at, last_poll_error_at, coalesce(last_poll_error,'')
 FROM run_sessions
 WHERE status=$1 AND created_at < $2
 ORDER BY created_at
@@ -301,7 +306,7 @@ LIMIT 50
 	var sessions []runSessionRecord
 	for rows.Next() {
 		var session runSessionRecord
-		if err := rows.Scan(&session.ID, &session.RunID, &session.Kind, &session.TaskIndex, &session.Status, &session.CreatedAt, &session.LastPollErrorAt, &session.LastPollError); err != nil {
+		if err := rows.Scan(&session.ID, &session.RunID, &session.Kind, &session.TaskIndex, &session.Status, &session.LLMID, &session.CreatedAt, &session.LastPollErrorAt, &session.LastPollError); err != nil {
 			return err
 		}
 		sessions = append(sessions, session)
@@ -330,11 +335,15 @@ func (s *Server) recoverStartingSession(ctx context.Context, session runSessionR
 		return s.failRunSession(ctx, session, persistedErrSessionPollStale)
 	}
 	if sessionHasMessageActivity(remote) {
+		llmID := session.LLMID
+		if remote.LLMID != nil {
+			llmID = *remote.LLMID
+		}
 		tag, err := s.db.Exec(ctx, `
 UPDATE run_sessions
-SET status=$2, last_polled_at=now(), last_poll_error_at=NULL, last_poll_error=NULL
+SET status=$2, last_polled_at=now(), last_poll_error_at=NULL, last_poll_error=NULL, llm_id=NULLIF($4, '')
 WHERE session_id=$1 AND status=$3
-`, session.ID, statusRunning, statusStarting)
+`, session.ID, statusRunning, statusStarting, llmID)
 		if err != nil {
 			return err
 		}
@@ -375,7 +384,7 @@ RETURNING id, reserved_cents
 
 func (s *Server) reconcileRunningSessions(ctx context.Context) error {
 	rows, err := s.db.Query(ctx, `
-SELECT session_id, run_id, kind, task_index, status, created_at, last_poll_error_at
+SELECT session_id, run_id, kind, task_index, status, coalesce(llm_id,''), created_at, last_poll_error_at
 FROM run_sessions
 WHERE status=$1
 ORDER BY created_at
@@ -388,7 +397,7 @@ LIMIT 50
 	var sessions []runSessionRecord
 	for rows.Next() {
 		var session runSessionRecord
-		if err := rows.Scan(&session.ID, &session.RunID, &session.Kind, &session.TaskIndex, &session.Status, &session.CreatedAt, &session.LastPollErrorAt); err != nil {
+		if err := rows.Scan(&session.ID, &session.RunID, &session.Kind, &session.TaskIndex, &session.Status, &session.LLMID, &session.CreatedAt, &session.LastPollErrorAt); err != nil {
 			return err
 		}
 		sessions = append(sessions, session)
@@ -422,21 +431,29 @@ func (s *Server) reconcileSession(ctx context.Context, session runSessionRecord)
 	}
 	switch lastStatus {
 	case "completed":
+		llmID := session.LLMID
+		if remote.LLMID != nil {
+			llmID = *remote.LLMID
+		}
 		_, err = s.db.Exec(ctx, `
 UPDATE run_sessions
-SET status=$2, completed_at=now(), last_polled_at=now(), last_poll_error_at=NULL, last_poll_error=NULL
+SET status=$2, completed_at=now(), last_polled_at=now(), last_poll_error_at=NULL, last_poll_error=NULL, llm_id=NULLIF($4, '')
 WHERE session_id=$1 AND status=$3
-`, session.ID, statusCompleted, statusRunning)
+`, session.ID, statusCompleted, statusRunning, llmID)
 		if err != nil {
 			return err
 		}
 		return s.reconcileRunProgress(ctx, session.RunID)
 	case "failed":
+		llmID := session.LLMID
+		if remote.LLMID != nil {
+			llmID = *remote.LLMID
+		}
 		_, err = s.db.Exec(ctx, `
 UPDATE run_sessions
-SET status=$2, completed_at=now(), last_polled_at=now(), last_poll_error_at=NULL, last_poll_error=$4
+SET status=$2, completed_at=now(), last_polled_at=now(), last_poll_error_at=NULL, last_poll_error=$4, llm_id=NULLIF($5, '')
 WHERE session_id=$1 AND status=$3
-`, session.ID, statusFailed, statusRunning, persistedErrorString(persistedErrSessionFailed))
+`, session.ID, statusFailed, statusRunning, persistedErrorString(persistedErrSessionFailed), llmID)
 		if err != nil {
 			return err
 		}
@@ -646,7 +663,7 @@ func (s *Server) settleUnsettledRuns(ctx context.Context) error {
 
 func (s *Server) loadRunSessions(ctx context.Context, runID string) ([]runSessionRecord, error) {
 	rows, err := s.db.Query(ctx, `
-SELECT session_id, run_id, kind, task_index, status, created_at, last_poll_error_at, coalesce(last_poll_error,'')
+SELECT session_id, run_id, kind, task_index, status, coalesce(llm_id,''), created_at, last_poll_error_at, coalesce(last_poll_error,'')
 FROM run_sessions
 WHERE run_id=$1
 ORDER BY created_at
@@ -658,7 +675,7 @@ ORDER BY created_at
 	var sessions []runSessionRecord
 	for rows.Next() {
 		var session runSessionRecord
-		if err := rows.Scan(&session.ID, &session.RunID, &session.Kind, &session.TaskIndex, &session.Status, &session.CreatedAt, &session.LastPollErrorAt, &session.LastPollError); err != nil {
+		if err := rows.Scan(&session.ID, &session.RunID, &session.Kind, &session.TaskIndex, &session.Status, &session.LLMID, &session.CreatedAt, &session.LastPollErrorAt, &session.LastPollError); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, session)
