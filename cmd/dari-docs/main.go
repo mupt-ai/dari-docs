@@ -628,7 +628,7 @@ func runAuthTokenCreate(args []string) error {
 	var scopes repeated
 	var expiresIn string
 	fs.StringVar(&name, "name", "", "automation token name, for example github-actions")
-	fs.Var(&scopes, "scope", "token scope; repeatable (default: managed:read and managed:check)")
+	fs.Var(&scopes, "scope", "token scope; repeatable (default: managed:read, managed:check, and managed:optimize)")
 	fs.StringVar(&expiresIn, "expires-in", "", "optional expiration such as 90d or 24h")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -641,9 +641,13 @@ func runAuthTokenCreate(args []string) error {
 	if err != nil {
 		return err
 	}
+	tokenScopes := expandCSVList(scopes)
+	if len(tokenScopes) == 0 {
+		tokenScopes = []string{"managed:read", "managed:check", "managed:optimize"}
+	}
 	resp, err := client.CreateAuthToken(context.Background(), managed.TokenCreateRequest{
 		Name:      name,
-		Scopes:    expandCSVList(scopes),
+		Scopes:    tokenScopes,
 		ExpiresAt: expiresAt,
 	})
 	if err != nil {

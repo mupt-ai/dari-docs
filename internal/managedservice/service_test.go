@@ -1187,6 +1187,26 @@ func TestCreateAuthTokenDefaultScopesMustBeGrantableByCaller(t *testing.T) {
 	}
 }
 
+func TestCreateAuthTokenDefaultScopesIncludeOptimize(t *testing.T) {
+	body := strings.NewReader(`{"name":"github-actions"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/auth/tokens", body)
+	rec := httptest.NewRecorder()
+
+	s := &Server{}
+	s.handleCreateAuthToken(rec, req, user{
+		ID:          "usr_test",
+		TokenKind:   tokenKindAutomation,
+		TokenScopes: []string{scopeManagedRead, scopeManagedCheck, scopeManagedTokens},
+	})
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "token cannot grant scope managed:optimize") {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
 func TestLogoutAllRevokesOnlyCurrentUserTokens(t *testing.T) {
 	dsn := os.Getenv("MANAGEDSERVICE_TEST_DATABASE_URL")
 	if dsn == "" {
