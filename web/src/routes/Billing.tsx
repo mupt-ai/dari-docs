@@ -67,7 +67,7 @@ export default function Billing() {
     amountCents < billingConfig.min_checkout_cents || amountCents > billingConfig.max_checkout_cents;
   const freeCreditCents = config?.free_credit_cents ?? 500;
   const balanceCents = balance ?? 0;
-  const exhausted = !loading && balanceCents <= 0;
+  const exhausted = !loading && !error && balanceCents <= 0;
 
   const startCheckout = async () => {
     if (invalid) {
