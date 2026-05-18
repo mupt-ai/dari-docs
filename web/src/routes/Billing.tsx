@@ -132,7 +132,7 @@ export default function Billing() {
                     setBuyOpen(true);
                   }}
                 >
-                  Buy credits
+                  Buy Credits
                 </Button>
               </div>
               {exhausted && (
