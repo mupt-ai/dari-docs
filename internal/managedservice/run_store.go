@@ -180,7 +180,7 @@ LIMIT $2
 }
 
 func (store *managedRunStore) MarkSessionCompleted(ctx context.Context, sessionID string) error {
-	return store.updateRunningSession(ctx, sessionID, `
+	return store.updateRunningSession(ctx, `
 UPDATE run_sessions
 SET status=$1,
     completed_at=now(),
@@ -193,7 +193,7 @@ WHERE session_id=$2
 }
 
 func (store *managedRunStore) MarkSessionFailed(ctx context.Context, sessionID string, code persistedErrorCode) error {
-	return store.updateRunningSession(ctx, sessionID, `
+	return store.updateRunningSession(ctx, `
 UPDATE run_sessions
 SET status=$1,
     completed_at=now(),
@@ -206,7 +206,7 @@ WHERE session_id=$3
 }
 
 func (store *managedRunStore) MarkSessionPollSucceeded(ctx context.Context, sessionID string) error {
-	return store.updateRunningSession(ctx, sessionID, `
+	return store.updateRunningSession(ctx, `
 UPDATE run_sessions
 SET last_polled_at=now(),
     last_poll_error_at=NULL,
