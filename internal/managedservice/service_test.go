@@ -59,6 +59,9 @@ func TestConfigFromEnvUsesManagedConstants(t *testing.T) {
 	if cfg.DariAPIBaseURL != defaultDariAPIBaseURL {
 		t.Fatalf("DariAPIBaseURL = %q, want %q", cfg.DariAPIBaseURL, defaultDariAPIBaseURL)
 	}
+	if cfg.SupabaseURL != "https://supabase.example.test" || cfg.SupabasePublishableKey != "publishable" {
+		t.Fatalf("supabase config = %q/%q", cfg.SupabaseURL, cfg.SupabasePublishableKey)
+	}
 	if cfg.ManagedTesterAgentID != "agt_tester" || cfg.ManagedEditorAgentID != "agt_editor" || cfg.ReleaseAdminToken != "release-admin-token" {
 		t.Fatalf("managed agent config = %q/%q %q/%q", cfg.ManagedTesterAgentID, cfg.ManagedTesterVersionID, cfg.ManagedEditorAgentID, cfg.ManagedEditorVersionID)
 	}
@@ -102,6 +105,8 @@ func TestConfigFromEnvKeepsDeploymentOverridesAndIgnoresManagedEnvKnobs(t *testi
 	t.Setenv("PORT", "9090")
 	t.Setenv("PUBLIC_BASE_URL", "https://docs.example.test")
 	t.Setenv("DARI_API_BASE_URL", "https://api.example.test")
+	t.Setenv("SUPABASE_URL", "https://supabase.override.test/")
+	t.Setenv("SUPABASE_PUBLISHABLE_KEY", "publishable_override")
 
 	t.Setenv("FREE_CREDIT_CENTS", "1234")
 	t.Setenv("MAX_TASKS_PER_RUN", "9")
@@ -121,6 +126,9 @@ func TestConfigFromEnvKeepsDeploymentOverridesAndIgnoresManagedEnvKnobs(t *testi
 	if cfg.DariAPIBaseURL != "https://api.example.test" {
 		t.Fatalf("DariAPIBaseURL = %q, want https://api.example.test", cfg.DariAPIBaseURL)
 	}
+	if cfg.SupabaseURL != "https://supabase.override.test" || cfg.SupabasePublishableKey != "publishable_override" {
+		t.Fatalf("supabase config = %q/%q", cfg.SupabaseURL, cfg.SupabasePublishableKey)
+	}
 	if cfg.FreeGrantCents != managedFreeGrantCents {
 		t.Fatalf("FreeGrantCents = %d, want %d", cfg.FreeGrantCents, managedFreeGrantCents)
 	}
@@ -139,9 +147,30 @@ func TestConfigFromEnvRequiresRuntimeSecretEncryptionKey(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/dari_docs")
 	t.Setenv("DARI_API_KEY", "dari_test")
 	t.Setenv("DARI_DOCS_RELEASE_ADMIN_TOKEN", "release-admin-token")
+	setRequiredSupabaseEnv(t)
 	setRequiredManagedAgentEnv(t)
 	_, err := ConfigFromEnv()
 	if err == nil || !strings.Contains(err.Error(), "DARI_DOCS_SECRET_ENCRYPTION_KEY is required") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestConfigFromEnvRequiresSupabaseConfig(t *testing.T) {
+	t.Setenv("SUPABASE_URL", "")
+	t.Setenv("SUPABASE_PUBLISHABLE_KEY", "")
+	t.Setenv("DATABASE_URL", "postgres://example.invalid/dari_docs")
+	t.Setenv("DARI_API_KEY", "dari_test")
+	t.Setenv("DARI_DOCS_SECRET_ENCRYPTION_KEY", testManagedSecretEncryptionKey())
+	t.Setenv("DARI_DOCS_RELEASE_ADMIN_TOKEN", "release-admin-token")
+	setRequiredManagedAgentEnv(t)
+	_, err := ConfigFromEnv()
+	if err == nil || !strings.Contains(err.Error(), "SUPABASE_URL is required") {
+		t.Fatalf("error = %v", err)
+	}
+
+	t.Setenv("SUPABASE_URL", "https://supabase.example.test")
+	_, err = ConfigFromEnv()
+	if err == nil || !strings.Contains(err.Error(), "SUPABASE_PUBLISHABLE_KEY is required") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -151,6 +180,7 @@ func TestConfigFromEnvRequiresManagedHostedAgents(t *testing.T) {
 	t.Setenv("DARI_API_KEY", "dari_test")
 	t.Setenv("DARI_DOCS_SECRET_ENCRYPTION_KEY", testManagedSecretEncryptionKey())
 	t.Setenv("DARI_DOCS_RELEASE_ADMIN_TOKEN", "release-admin-token")
+	setRequiredSupabaseEnv(t)
 	_, err := ConfigFromEnv()
 	if err == nil || !strings.Contains(err.Error(), "MANAGED_TESTER_AGENT_ID is required") {
 		t.Fatalf("error = %v", err)
@@ -161,6 +191,7 @@ func TestConfigFromEnvRequiresReleaseAdminToken(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/dari_docs")
 	t.Setenv("DARI_API_KEY", "dari_test")
 	t.Setenv("DARI_DOCS_SECRET_ENCRYPTION_KEY", testManagedSecretEncryptionKey())
+	setRequiredSupabaseEnv(t)
 	setRequiredManagedAgentEnv(t)
 	_, err := ConfigFromEnv()
 	if err == nil || !strings.Contains(err.Error(), "DARI_DOCS_RELEASE_ADMIN_TOKEN is required") {
@@ -1346,22 +1377,10 @@ func TestUserAuthRejectsInvalidNonJWTWithoutCallingUserinfo(t *testing.T) {
 	}
 }
 
-func TestHandleAuthConfigProxiesDariAuthConfig(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/v1/auth/config" {
-			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"supabase_url":             "https://supabase.example.test/",
-			"supabase_publishable_key": "publishable",
-			"providers":                []string{"google"},
-		})
-	}))
-	defer upstream.Close()
-
+func TestHandleAuthConfigReturnsConfiguredSupabaseAuthConfig(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/auth/config", nil)
 	rec := httptest.NewRecorder()
-	(&Server{cfg: Config{DariAPIBaseURL: upstream.URL}}).handleAuthConfig(rec, req)
+	(&Server{cfg: Config{SupabaseURL: "https://supabase.example.test", SupabasePublishableKey: "publishable"}}).handleAuthConfig(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
@@ -1814,6 +1833,7 @@ func setRequiredManagedConfigEnv(t *testing.T) {
 	t.Setenv("DARI_API_KEY", "dari_test")
 	t.Setenv("DARI_DOCS_RELEASE_ADMIN_TOKEN", "release-admin-token")
 	t.Setenv("DARI_DOCS_SECRET_ENCRYPTION_KEY", testManagedSecretEncryptionKey())
+	setRequiredSupabaseEnv(t)
 	setRequiredManagedAgentEnv(t)
 }
 
@@ -1821,6 +1841,12 @@ func setRequiredManagedAgentEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("MANAGED_TESTER_AGENT_ID", "agt_tester")
 	t.Setenv("MANAGED_EDITOR_AGENT_ID", "agt_editor")
+}
+
+func setRequiredSupabaseEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("SUPABASE_URL", "https://supabase.example.test")
+	t.Setenv("SUPABASE_PUBLISHABLE_KEY", "publishable")
 }
 
 func testManagedHostedAgentConfig() Config {

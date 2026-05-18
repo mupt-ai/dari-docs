@@ -258,12 +258,11 @@ func (s *Server) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	cfg, err := platformauth.FetchConfig(r.Context(), s.cfg.DariAPIBaseURL)
-	if err != nil {
-		writeLoggedError(w, http.StatusBadGateway, "could not load auth config", err)
-		return
-	}
-	writeJSON(w, http.StatusOK, cfg)
+	writeJSON(w, http.StatusOK, platformauth.Config{
+		SupabaseURL:            s.cfg.SupabaseURL,
+		SupabasePublishableKey: s.cfg.SupabasePublishableKey,
+		Providers:              []string{"google"},
+	})
 }
 
 func (s *Server) handleDariAuthExchange(w http.ResponseWriter, r *http.Request) {
