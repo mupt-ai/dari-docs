@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
-import { Download, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { downloadUpdatedDocs, formatLLMID, getRun, isActiveRun, type RunSession, type RunStatus } from "@/lib/runs";
@@ -16,6 +16,7 @@ export default function RunDetail() {
   const [error, setError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const [collapsedTasks, setCollapsedTasks] = useState<Record<number, boolean>>({});
 
   const refresh = useCallback(async (quiet = false) => {
     if (!runId) return;
@@ -63,6 +64,10 @@ export default function RunDetail() {
     } finally {
       setDownloading(false);
     }
+  };
+
+  const toggleTask = (index: number) => {
+    setCollapsedTasks((current) => ({ ...current, [index]: !current[index] }));
   };
 
   return (
@@ -144,32 +149,32 @@ export default function RunDetail() {
           <section className="border border-border bg-card p-4">
             <div className="mb-3 text-sm font-medium">Tasks</div>
             <div className="flex flex-col gap-3">
-              {run.tasks?.map((task, index) => (
-                <div key={`${index}:${task}`} className="border border-border bg-background p-3 text-sm">
-                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-xs uppercase tracking-widest text-muted-foreground">
-                      Task {index + 1}
-                    </div>
-                    <SessionSummary session={sessionForTask(run.sessions, index + 1)} fallbackStatus={run.status} />
-                  </div>
-                  <div className="whitespace-pre-wrap">{task}</div>
-                  {run.feedback_reports?.[index] && (
-                    <div className="mt-4 border-t border-border pt-4">
-                      <div className="mb-2 text-xs uppercase tracking-widest text-muted-foreground">
-                        Feedback
-                      </div>
-                      <Markdown text={run.feedback_reports[index]} />
-                    </div>
-                  )}
-                </div>
-              ))}
+              {run.tasks?.map((task, index) => {
+                const session = sessionForTask(run.sessions, index + 1);
+                const collapsed = collapsedTasks[index] === true;
+                return (
+                  <TaskPanel
+                    key={`${index}:${task}`}
+                    index={index}
+                    task={task}
+                    session={session}
+                    fallbackStatus={run.status}
+                    feedback={run.feedback_reports?.[index]}
+                    collapsed={collapsed}
+                    onToggle={() => toggleTask(index)}
+                  />
+                );
+              })}
             </div>
           </section>
 
           {run.mode === "optimize" && (
             <section className="border border-border bg-card p-4">
-              <div className="mb-3 text-sm font-medium">Editor session</div>
-              <SessionSummary session={editorSession(run.sessions)} fallbackStatus={editorFallbackStatus(run)} />
+              <SessionHeader
+                label="Editor session"
+                session={editorSession(run.sessions)}
+                fallbackStatus={editorFallbackStatus(run)}
+              />
             </section>
           )}
 
@@ -202,24 +207,83 @@ function editorFallbackStatus(run: RunStatus): string {
   return "queued";
 }
 
-function SessionSummary({
+function TaskPanel({
+  index,
+  task,
   session,
   fallbackStatus,
+  feedback,
+  collapsed,
+  onToggle,
 }: {
+  index: number;
+  task: string;
   session?: RunSession;
   fallbackStatus: string;
+  feedback?: string;
+  collapsed: boolean;
+  onToggle: () => void;
 }) {
-  const status = session?.status ?? fallbackStatus;
-  const llmID = formatLLMID(session?.llm_id);
   return (
-    <div className="flex flex-wrap items-center gap-2 text-xs">
-      <SessionStatus status={status} />
-      {llmID !== "-" && <span className="text-muted-foreground">{llmID}</span>}
-      {session?.completed_at && (
-        <span className="text-muted-foreground">completed {formatDate(session.completed_at)}</span>
+    <div className="border border-border bg-background text-sm">
+      <div className="flex min-h-12 flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="inline-flex min-w-0 items-center gap-2 text-left text-xs text-muted-foreground hover:text-foreground"
+          aria-expanded={!collapsed}
+        >
+          {collapsed ? <ChevronRight className="h-3.5 w-3.5 shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0" />}
+          <span className="uppercase tracking-widest">Task {index + 1}</span>
+          <SessionModel session={session} />
+        </button>
+        <SessionStatus status={sessionStatus(session, fallbackStatus)} />
+      </div>
+      {!collapsed && (
+        <div className="p-3">
+          <div className="whitespace-pre-wrap">{task}</div>
+          {feedback && (
+            <div className="mt-4 border-t border-border pt-4">
+              <div className="mb-2 text-xs uppercase tracking-widest text-muted-foreground">
+                Feedback
+              </div>
+              <Markdown text={feedback} />
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
+}
+
+function SessionHeader({
+  label,
+  session,
+  fallbackStatus,
+}: {
+  label: string;
+  session?: RunSession;
+  fallbackStatus: string;
+}) {
+  return (
+    <div className="flex min-h-8 flex-wrap items-center justify-between gap-2">
+      <div className="inline-flex min-w-0 items-center gap-2 text-sm font-medium">
+        <span>{label}</span>
+        <SessionModel session={session} />
+      </div>
+      <SessionStatus status={sessionStatus(session, fallbackStatus)} />
+    </div>
+  );
+}
+
+function SessionModel({ session }: { session?: RunSession }) {
+  const llmID = formatLLMID(session?.llm_id);
+  if (llmID === "-") return null;
+  return <span className="min-w-0 truncate text-muted-foreground">- {llmID}</span>;
+}
+
+function sessionStatus(session: RunSession | undefined, fallbackStatus: string): string {
+  return session?.status ?? fallbackStatus;
 }
 
 function SessionStatus({ status }: { status: string }) {
