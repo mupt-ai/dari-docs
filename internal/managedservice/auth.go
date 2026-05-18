@@ -476,29 +476,12 @@ func (s *Server) fetchDariUserInfo(ctx context.Context, accessToken string) (dar
 func upsertUserForDariIdentity(ctx context.Context, tx pgx.Tx, info dariUserInfo) (string, error) {
 	userID := "usr_" + randomToken(18)
 	err := tx.QueryRow(ctx, `
-WITH by_subject AS (
-  UPDATE users
-  SET email=$2, display_name=$3
-  WHERE auth_subject=$1
-  RETURNING id
-), by_email AS (
-  UPDATE users
-  SET auth_subject=$1, display_name=$3
-  WHERE email=$2 AND auth_subject IS NULL AND NOT EXISTS (SELECT 1 FROM by_subject)
-  RETURNING id
-), inserted AS (
-  INSERT INTO users (id, auth_subject, email, display_name)
-  SELECT $4, $1, $2, $3
-  WHERE NOT EXISTS (SELECT 1 FROM by_subject) AND NOT EXISTS (SELECT 1 FROM by_email)
-  ON CONFLICT (email) DO UPDATE
-  SET auth_subject=EXCLUDED.auth_subject, display_name=EXCLUDED.display_name
-  WHERE users.auth_subject IS NULL OR users.auth_subject=EXCLUDED.auth_subject
-  RETURNING id
-)
-SELECT id FROM by_subject
-UNION ALL SELECT id FROM by_email
-UNION ALL SELECT id FROM inserted
-LIMIT 1
+INSERT INTO users (id, auth_subject, email, display_name)
+VALUES ($4, $1, $2, $3)
+ON CONFLICT (auth_subject) DO UPDATE
+SET email=EXCLUDED.email,
+    display_name=EXCLUDED.display_name
+RETURNING id
 `, info.AuthSubject, info.Email, nullableString(info.DisplayName), userID).Scan(&userID)
 	return userID, err
 }
