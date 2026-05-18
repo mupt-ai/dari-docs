@@ -17,9 +17,19 @@ func TestNormalizeManagedLLMIDsDefaultsToClaudeMatrix(t *testing.T) {
 	}
 }
 
-func TestNormalizeManagedLLMIDsRejectsGPT(t *testing.T) {
-	if _, err := normalizeManagedLLMIDs([]string{"smart-gpt"}); err == nil {
-		t.Fatal("expected GPT model rejection")
+func TestNormalizeManagedLLMIDsAllowsGPT(t *testing.T) {
+	got, err := normalizeManagedLLMIDs([]string{"smart-gpt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, ",") != "smart-gpt" {
+		t.Fatalf("managed LLM IDs = %#v", got)
+	}
+}
+
+func TestNormalizeManagedLLMIDsRejectsUnknownModel(t *testing.T) {
+	if _, err := normalizeManagedLLMIDs([]string{"unknown-model"}); err == nil {
+		t.Fatal("expected unknown model rejection")
 	}
 }
 

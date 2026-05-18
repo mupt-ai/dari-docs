@@ -61,11 +61,14 @@ Managed runs currently support up to three tasks per run and three active runs p
 
 ## Model selection
 
-Managed mode supports the hosted Claude LLM options:
+Managed mode supports the hosted Claude and GPT LLM options:
 
 - `dumb-claude`
 - `medium-claude`
 - `smart-claude`
+- `dumb-gpt`
+- `medium-gpt`
+- `smart-gpt`
 
 By default, managed tester sessions run each task across all three Claude options. The editor uses `medium-claude`.
 
@@ -88,7 +91,20 @@ dari-docs optimize . \
   --task "Install the SDK and make a first API call"
 ```
 
-The GPT options are available only in self-managed mode.
+For tester sessions, `--feedback-llm` also accepts groups:
+
+- `claude` expands to `dumb-claude`, `medium-claude`, and `smart-claude`
+- `gpt` expands to `dumb-gpt`, `medium-gpt`, and `smart-gpt`
+- `all` expands to all six hosted options
+
+You can mix groups and explicit IDs:
+
+```bash
+dari-docs check . \
+  --managed \
+  --feedback-llm claude,medium-gpt \
+  --task "Install the SDK and make a first API call"
+```
 
 ## Log out
 

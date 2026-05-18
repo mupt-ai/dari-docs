@@ -96,8 +96,9 @@ func TestManagedRunTimeoutScalesByPhase(t *testing.T) {
 
 func TestManagedLLMSelectionDefaultsToAllowedClaudeMatrix(t *testing.T) {
 	cfg := managed.RunConfig{
-		DefaultLLMID:  "medium-claude",
-		AllowedLLMIDs: []string{"dumb-claude", "medium-claude", "smart-claude"},
+		DefaultLLMID:          "medium-claude",
+		DefaultFeedbackLLMIDs: []string{"dumb-claude", "medium-claude", "smart-claude"},
+		AllowedLLMIDs:         []string{"dumb-claude", "medium-claude", "smart-claude", "dumb-gpt", "medium-gpt", "smart-gpt"},
 	}
 	feedback, editor, err := managedLLMSelection(nil, "", cfg)
 	if err != nil {
@@ -111,13 +112,18 @@ func TestManagedLLMSelectionDefaultsToAllowedClaudeMatrix(t *testing.T) {
 	}
 }
 
-func TestManagedLLMSelectionRejectsGPT(t *testing.T) {
+func TestManagedLLMSelectionAllowsGPT(t *testing.T) {
 	cfg := managed.RunConfig{
-		DefaultLLMID:  "medium-claude",
-		AllowedLLMIDs: []string{"dumb-claude", "medium-claude", "smart-claude"},
+		DefaultLLMID:          "medium-claude",
+		DefaultFeedbackLLMIDs: []string{"dumb-claude", "medium-claude", "smart-claude"},
+		AllowedLLMIDs:         []string{"dumb-claude", "medium-claude", "smart-claude", "dumb-gpt", "medium-gpt", "smart-gpt"},
 	}
-	if _, _, err := managedLLMSelection([]string{"smart-gpt"}, "", cfg); err == nil {
-		t.Fatal("expected managed GPT rejection")
+	feedback, editor, err := managedLLMSelection([]string{"smart-gpt"}, "medium-gpt", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(feedback, ",") != "smart-gpt" || editor != "medium-gpt" {
+		t.Fatalf("feedback/editor = %#v/%q", feedback, editor)
 	}
 }
 
@@ -134,6 +140,14 @@ func TestExpandCSVListTrimsDeduplicatesAndSplits(t *testing.T) {
 	want := []string{"dumb-claude", "medium-claude", "smart-gpt"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("expandCSVList = %#v, want %#v", got, want)
+	}
+}
+
+func TestExpandFeedbackLLMListSupportsGroups(t *testing.T) {
+	got := expandFeedbackLLMList([]string{"claude, medium-gpt", "gpt", "smart-claude"})
+	want := []string{"dumb-claude", "medium-claude", "smart-claude", "medium-gpt", "dumb-gpt", "smart-gpt"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("expandFeedbackLLMList = %#v, want %#v", got, want)
 	}
 }
 

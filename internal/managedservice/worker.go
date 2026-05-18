@@ -597,7 +597,7 @@ type testerBatchItem struct {
 func testerBatchItems(run queuedRun) []testerBatchItem {
 	llmIDs := run.TesterLLMIDs
 	if len(llmIDs) == 0 {
-		llmIDs = allowedManagedLLMIDs()
+		llmIDs = defaultManagedTesterLLMIDs()
 	}
 	items := make([]testerBatchItem, 0, len(run.Tasks)*len(llmIDs))
 	for taskIndex, task := range run.Tasks {

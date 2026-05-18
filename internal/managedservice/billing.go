@@ -54,6 +54,7 @@ func (s *Server) handleRunConfig(w http.ResponseWriter, r *http.Request, u user)
 		"bundle_max_uncompressed_bytes": s.cfg.BundleMaxUncompressedBytes,
 		"bundle_max_file_bytes":         s.cfg.BundleMaxFileBytes,
 		"default_llm_id":                managedDefaultLLMID,
+		"default_feedback_llm_ids":      defaultManagedTesterLLMIDs(),
 		"allowed_llm_ids":               allowedManagedLLMIDs(),
 	})
 }

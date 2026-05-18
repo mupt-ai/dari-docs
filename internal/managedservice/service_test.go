@@ -519,6 +519,7 @@ func TestHandleRunConfigReturnsLaunchPricingAndLimits(t *testing.T) {
 		BundleMaxUncompressedBytes int64    `json:"bundle_max_uncompressed_bytes"`
 		BundleMaxFileBytes         int64    `json:"bundle_max_file_bytes"`
 		DefaultLLMID               string   `json:"default_llm_id"`
+		DefaultFeedbackLLMIDs      []string `json:"default_feedback_llm_ids"`
 		AllowedLLMIDs              []string `json:"allowed_llm_ids"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
@@ -555,7 +556,10 @@ func TestHandleRunConfigReturnsLaunchPricingAndLimits(t *testing.T) {
 	if got.DefaultLLMID != managedDefaultLLMID {
 		t.Fatalf("default_llm_id = %q, want %q", got.DefaultLLMID, managedDefaultLLMID)
 	}
-	if strings.Join(got.AllowedLLMIDs, ",") != "dumb-claude,medium-claude,smart-claude" {
+	if strings.Join(got.DefaultFeedbackLLMIDs, ",") != "dumb-claude,medium-claude,smart-claude" {
+		t.Fatalf("default_feedback_llm_ids = %#v", got.DefaultFeedbackLLMIDs)
+	}
+	if strings.Join(got.AllowedLLMIDs, ",") != "dumb-claude,medium-claude,smart-claude,dumb-gpt,medium-gpt,smart-gpt" {
 		t.Fatalf("allowed_llm_ids = %#v", got.AllowedLLMIDs)
 	}
 }
@@ -1773,7 +1777,7 @@ func TestHandleRunsRejectsOversizedTaskText(t *testing.T) {
 	}
 }
 
-func TestHandleRunsRejectsNonClaudeManagedLLM(t *testing.T) {
+func TestHandleRunsRejectsUnknownManagedLLM(t *testing.T) {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	if err := mw.WriteField("mode", "check"); err != nil {
@@ -1782,7 +1786,7 @@ func TestHandleRunsRejectsNonClaudeManagedLLM(t *testing.T) {
 	if err := mw.WriteField("tasks_json", `["check the docs"]`); err != nil {
 		t.Fatal(err)
 	}
-	if err := mw.WriteField("feedback_llm_ids_json", `["smart-gpt"]`); err != nil {
+	if err := mw.WriteField("feedback_llm_ids_json", `["unknown-model"]`); err != nil {
 		t.Fatal(err)
 	}
 	if err := mw.Close(); err != nil {
@@ -1796,7 +1800,7 @@ func TestHandleRunsRejectsNonClaudeManagedLLM(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "managed mode supports only Claude LLM IDs") {
+	if !strings.Contains(rec.Body.String(), "managed mode supports only these LLM IDs") {
 		t.Fatalf("body = %s", rec.Body.String())
 	}
 }

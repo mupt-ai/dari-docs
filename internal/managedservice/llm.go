@@ -6,7 +6,10 @@ import (
 	"strings"
 )
 
-var managedAllowedLLMIDs = []string{"dumb-claude", "medium-claude", "smart-claude"}
+var (
+	managedDefaultTesterLLMIDs = []string{"dumb-claude", "medium-claude", "smart-claude"}
+	managedAllowedLLMIDs       = []string{"dumb-claude", "medium-claude", "smart-claude", "dumb-gpt", "medium-gpt", "smart-gpt"}
+)
 
 func managedLLMIDOrDefault(llmID string) string {
 	if llmID == "" {
@@ -19,6 +22,10 @@ func allowedManagedLLMIDs() []string {
 	return append([]string{}, managedAllowedLLMIDs...)
 }
 
+func defaultManagedTesterLLMIDs() []string {
+	return append([]string{}, managedDefaultTesterLLMIDs...)
+}
+
 func normalizeManagedLLMID(llmID string) (string, error) {
 	llmID = strings.TrimSpace(llmID)
 	if llmID == "" {
@@ -29,12 +36,12 @@ func normalizeManagedLLMID(llmID string) (string, error) {
 			return llmID, nil
 		}
 	}
-	return "", fmt.Errorf("managed mode supports only Claude LLM IDs: %s", strings.Join(managedAllowedLLMIDs, ", "))
+	return "", fmt.Errorf("managed mode supports only these LLM IDs: %s", strings.Join(managedAllowedLLMIDs, ", "))
 }
 
 func normalizeManagedLLMIDs(llmIDs []string) ([]string, error) {
 	if len(llmIDs) == 0 {
-		return allowedManagedLLMIDs(), nil
+		return defaultManagedTesterLLMIDs(), nil
 	}
 	out := make([]string, 0, len(llmIDs))
 	seen := map[string]bool{}
@@ -50,7 +57,7 @@ func normalizeManagedLLMIDs(llmIDs []string) ([]string, error) {
 		out = append(out, llmID)
 	}
 	if len(out) == 0 {
-		return allowedManagedLLMIDs(), nil
+		return defaultManagedTesterLLMIDs(), nil
 	}
 	return out, nil
 }

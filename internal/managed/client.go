@@ -164,6 +164,7 @@ type RunConfig struct {
 	BundleMaxUncompressedBytes int64    `json:"bundle_max_uncompressed_bytes"`
 	BundleMaxFileBytes         int64    `json:"bundle_max_file_bytes"`
 	DefaultLLMID               string   `json:"default_llm_id"`
+	DefaultFeedbackLLMIDs      []string `json:"default_feedback_llm_ids"`
 	AllowedLLMIDs              []string `json:"allowed_llm_ids"`
 }
 

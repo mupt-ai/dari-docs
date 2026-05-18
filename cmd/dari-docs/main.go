@@ -39,6 +39,14 @@ func defaultFeedbackLLMIDs() []string {
 	return runner.DefaultFeedbackLLMIDs()
 }
 
+func defaultClaudeFeedbackLLMIDs() []string {
+	return []string{"dumb-claude", "medium-claude", "smart-claude"}
+}
+
+func defaultGPTFeedbackLLMIDs() []string {
+	return []string{"dumb-gpt", "medium-gpt", "smart-gpt"}
+}
+
 var version = "dev"
 
 func main() {
@@ -113,7 +121,7 @@ func runCheckOrOptimize(cmd string, args []string) error {
 	fs.StringVar(&feedbackAgent, "feedback-agent", "", "Dari docs user-test agent ID (defaults to .dari-docs/config.json)")
 	fs.StringVar(&editorAgent, "editor-agent", "", "Dari docs editor agent ID (defaults to .dari-docs/config.json)")
 	fs.StringVar(&llmID, "llm", "", "manifest LLM option ID to use for all sessions")
-	fs.Var(&feedbackLLMIDs, "feedback-llm", "manifest LLM option ID for feedback/tester sessions; repeat or comma-separate (overrides --llm)")
+	fs.Var(&feedbackLLMIDs, "feedback-llm", "manifest LLM option ID or group for feedback/tester sessions; repeat or comma-separate (groups: all, claude, gpt; overrides --llm)")
 	fs.StringVar(&editorLLMID, "editor-llm", "", "manifest LLM option ID for the editor session (overrides --llm)")
 	fs.StringVar(&outDir, "out", "", "output directory (default: <repo>/.dari-docs)")
 	fs.IntVar(&parallel, "parallel", 4, "number of feedback sessions per self-managed batch")
@@ -168,7 +176,7 @@ func runCheckOrOptimize(cmd string, args []string) error {
 	if len(secretEnvs) > 0 && !liveVerify {
 		return fmt.Errorf("--secret-env requires --live-verify")
 	}
-	feedbackLLMList := expandCSVList(feedbackLLMIDs)
+	feedbackLLMList := expandFeedbackLLMList(feedbackLLMIDs)
 	if editorLLMID == "" {
 		editorLLMID = llmID
 	}
@@ -434,7 +442,10 @@ func managedLLMSelection(feedbackLLMIDs []string, editorLLMID string, cfg manage
 		defaultLLM = allowed[0]
 	}
 	if len(feedbackLLMIDs) == 0 {
-		feedbackLLMIDs = append([]string{}, allowed...)
+		feedbackLLMIDs = append([]string{}, cfg.DefaultFeedbackLLMIDs...)
+		if len(feedbackLLMIDs) == 0 {
+			feedbackLLMIDs = append([]string{}, allowed...)
+		}
 	}
 	feedback, err := validateManagedLLMIDs(feedbackLLMIDs, allowed)
 	if err != nil {
@@ -1355,6 +1366,41 @@ func expandCSVList(values []string) []string {
 	return out
 }
 
+func expandFeedbackLLMList(values []string) []string {
+	parts := expandCSVList(values)
+	if len(parts) == 0 {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	add := func(llmID string) {
+		if llmID == "" || seen[llmID] {
+			return
+		}
+		seen[llmID] = true
+		out = append(out, llmID)
+	}
+	for _, part := range parts {
+		switch strings.ToLower(part) {
+		case "all":
+			for _, llmID := range defaultFeedbackLLMIDs() {
+				add(llmID)
+			}
+		case "claude":
+			for _, llmID := range defaultClaudeFeedbackLLMIDs() {
+				add(llmID)
+			}
+		case "gpt":
+			for _, llmID := range defaultGPTFeedbackLLMIDs() {
+				add(llmID)
+			}
+		default:
+			add(part)
+		}
+	}
+	return out
+}
+
 func readTasksFile(path string) ([]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -1418,7 +1464,7 @@ Important flags:
   --api-base-url URL          Dari API base URL; self-managed only
   --parallel N                tester sessions per batch; self-managed only
   --llm ID                    select an LLM option for all sessions
-  --feedback-llm ID           select tester LLM option(s); repeat or comma-separate
+  --feedback-llm ID           select tester LLM option(s); repeat or comma-separate; supports all, claude, gpt
   --editor-llm ID             select a manifest LLM option for the editor session
   --anthropic-api-key-secret  stored Dari credential name for Anthropic BYOK deploys
   --openai-api-key-secret     stored Dari credential name for OpenAI BYOK deploys

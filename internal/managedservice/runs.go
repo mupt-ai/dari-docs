@@ -184,7 +184,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 				}
 			}
 			if len(testerLLMIDs) == 0 {
-				testerLLMIDs = allowedManagedLLMIDs()
+				testerLLMIDs = defaultManagedTesterLLMIDs()
 			}
 			if editorLLMID == "" {
 				editorLLMID = managedDefaultLLMID
