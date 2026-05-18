@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	DefaultBaseURL = "https://dari-docs.dari.dev"
+	DefaultBaseURL = "https://optimize.dari.dev"
 	EnvTokenName   = "DARI_DOCS_TOKEN"
 )
 

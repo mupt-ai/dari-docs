@@ -35,7 +35,7 @@ jobs:
       DARI_API_KEY: ${{ secrets.DARI_API_KEY }}
       DARI_API_URL: https://api.dari.dev
       DARI_DOCS_RELEASE_ADMIN_TOKEN: ${{ secrets.DARI_DOCS_RELEASE_ADMIN_TOKEN }}
-      DARI_DOCS_SERVICE_URL: ${{ vars.DARI_DOCS_SERVICE_URL || 'https://dari-docs.dari.dev' }}
+      DARI_DOCS_SERVICE_URL: ${{ vars.DARI_DOCS_SERVICE_URL || 'https://optimize.dari.dev' }}
       MANAGED_TESTER_AGENT_ID: ${{ vars.MANAGED_TESTER_AGENT_ID }}
       MANAGED_EDITOR_AGENT_ID: ${{ vars.MANAGED_EDITOR_AGENT_ID }}
     steps:
