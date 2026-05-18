@@ -1,0 +1,83 @@
+# GoReleaser config for dari-docs.
+# Docs: https://goreleaser.com
+
+version: 2
+
+project_name: dari-docs
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: dari-docs
+    main: ./cmd/dari-docs
+    binary: dari-docs
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: default
+    # Default .tar.gz on Unix is fine for Homebrew.
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- if eq .Os "darwin" }}macOS{{ else }}{{ .Os }}{{ end }}_
+      {{- if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}
+    files:
+      - README*
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+# Publish a Homebrew formula to mupt-ai/homebrew-tap on every tag.
+# Requires HOMEBREW_TAP_GITHUB_TOKEN (a PAT or GitHub App token with
+# contents:write on the tap repo) added as a repository secret/token.
+brews:
+  - name: dari-docs
+    repository:
+      owner: mupt-ai
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/mupt-ai/dari-docs
+    description: "Test and optimize documentation with simulated developer agents."
+    license: "LicenseRef-Proprietary"
+    commit_author:
+      name: dari-releases
+      email: releases@mupt.ai
+    test: |
+      system "#{bin}/dari-docs", "--version"
+    install: |
+      bin.install "dari-docs"
+
+release:
+  github:
+    owner: mupt-ai
+    name: dari-docs
+  extra_files:
+    - glob: ./install.sh
+  draft: false
+  prerelease: auto
