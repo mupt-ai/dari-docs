@@ -1,6 +1,13 @@
 import { useOutletContext } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { logoutManaged } from "@/lib/auth";
 import type { AppContext } from "@/routes/AppLayout";
 
@@ -16,25 +23,48 @@ export default function Settings() {
         </p>
       </div>
 
-      <section className="max-w-xl border border-border bg-card p-6">
-        <div className="text-sm font-medium">Account</div>
-        <dl className="mt-4 flex flex-col gap-3 text-sm">
-          <div className="flex items-center justify-between gap-4 border-t border-border pt-3">
-            <dt className="text-muted-foreground">Email</dt>
-            <dd className="min-w-0 truncate">{profile.email}</dd>
-          </div>
-        </dl>
-        <Button
-          type="button"
-          variant="outline"
-          className="mt-6"
-          onClick={() => {
-            void logoutManaged();
-          }}
-        >
-          Log out
-        </Button>
-      </section>
+      <div className="flex flex-col gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Account</CardTitle>
+            <CardDescription>
+              The Dari Docs account you're currently signed in to.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2 text-xs text-muted-foreground">
+            <div>
+              <span className="uppercase tracking-widest">email</span>{" "}
+              <span className="text-foreground">{profile.email}</span>
+            </div>
+            {profile.displayName && (
+              <div>
+                <span className="uppercase tracking-widest">name</span>{" "}
+                <span className="text-foreground">{profile.displayName}</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Session</CardTitle>
+            <CardDescription>
+              Sign out of Dari Docs on this browser.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                void logoutManaged();
+              }}
+            >
+              Log Out
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
