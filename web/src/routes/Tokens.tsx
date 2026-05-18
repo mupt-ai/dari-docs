@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Check, ChevronDown, ChevronRight, Copy, MoreVertical, X } from "lucide-react";
+import { Check, Copy, MoreVertical, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   DropdownMenu,
@@ -33,7 +34,6 @@ export default function Tokens() {
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<string[]>(defaultScopes);
-  const [scopesOpen, setScopesOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [issued, setIssued] = useState<AuthTokenInfo | null>(null);
@@ -70,7 +70,6 @@ export default function Tokens() {
       });
       setName("");
       setScopes(defaultScopes);
-      setScopesOpen(false);
     } catch (e) {
       setCreateError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -126,7 +125,7 @@ export default function Tokens() {
         </div>
       )}
 
-      <section className="mb-6 border border-border bg-card p-6">
+      <section className="mb-6">
         <div className="mb-4">
           <div className="text-sm font-medium">Create token</div>
           <div className="mt-1 text-sm text-muted-foreground">
@@ -142,41 +141,34 @@ export default function Tokens() {
             className="max-w-md"
             disabled={creating}
           />
-          <div className="border border-border bg-background">
-            <button
-              type="button"
-              onClick={() => setScopesOpen((value) => !value)}
-              className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-accent"
-            >
-              <span className="flex items-center gap-2">
-                {scopesOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                Token scopes
-              </span>
-              <span className="text-xs text-muted-foreground">
-                {scopes.length} selected
-              </span>
-            </button>
-            {scopesOpen && (
-              <div className="grid gap-2 border-t border-border p-3 md:grid-cols-2">
-                {scopeOptions.map(([scope, description]) => (
+          <div>
+            <div className="text-xs uppercase tracking-widest text-muted-foreground">
+              Token scopes
+            </div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              {scopeOptions.map(([scope, description]) => {
+                const selected = scopes.includes(scope);
+                return (
                   <label
                     key={scope}
-                    className="flex cursor-pointer gap-3 border border-border bg-card p-3 text-sm hover:bg-accent"
+                    className="flex cursor-pointer gap-2 rounded-md border border-border p-3 text-sm"
                   >
-                    <input
-                      type="checkbox"
-                      checked={scopes.includes(scope)}
+                    <Checkbox
+                      checked={selected}
                       onChange={() => toggleScope(scope)}
-                      className="mt-1"
+                      className="mt-0.5"
+                      disabled={creating}
                     />
                     <span>
-                      <span className="block font-mono text-xs">{scope}</span>
-                      <span className="mt-1 block text-xs text-muted-foreground">{description}</span>
+                      <span className="block text-foreground">{scope}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {description}
+                      </span>
                     </span>
                   </label>
-                ))}
-              </div>
-            )}
+                );
+              })}
+            </div>
           </div>
           {createError && (
             <div className="border border-destructive/50 bg-destructive/10 p-3 text-xs text-destructive-foreground">
