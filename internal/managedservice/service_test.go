@@ -1452,10 +1452,10 @@ func TestBrowserSessionHasAllScopes(t *testing.T) {
 func TestAutomationTokenRequiresExplicitScope(t *testing.T) {
 	u := user{TokenKind: tokenKindAutomation, TokenScopes: []string{scopeManagedRead}}
 	if !u.hasScope(scopeManagedRead) {
-		t.Fatal("automation token should have explicit read scope")
+		t.Fatal("API key should have explicit read scope")
 	}
 	if u.hasScope(scopeManagedBilling) {
-		t.Fatal("automation token should not inherit billing scope")
+		t.Fatal("API key should not inherit billing scope")
 	}
 }
 
@@ -1486,7 +1486,7 @@ func TestCreateAuthTokenCannotGrantScopesCallerDoesNotHave(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "token cannot grant scope managed:billing") {
+	if !strings.Contains(rec.Body.String(), "API key cannot grant scope managed:billing") {
 		t.Fatalf("body = %s", rec.Body.String())
 	}
 }
@@ -1506,7 +1506,7 @@ func TestCreateAuthTokenDefaultScopesMustBeGrantableByCaller(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "token cannot grant scope managed:check") {
+	if !strings.Contains(rec.Body.String(), "API key cannot grant scope managed:check") {
 		t.Fatalf("body = %s", rec.Body.String())
 	}
 }
@@ -1613,7 +1613,7 @@ func TestCreateAuthTokenDefaultScopesIncludeOptimize(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "token cannot grant scope managed:optimize") {
+	if !strings.Contains(rec.Body.String(), "API key cannot grant scope managed:optimize") {
 		t.Fatalf("body = %s", rec.Body.String())
 	}
 }

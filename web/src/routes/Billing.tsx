@@ -65,7 +65,6 @@ export default function Billing() {
   }, [amount]);
   const invalid =
     amountCents < billingConfig.min_checkout_cents || amountCents > billingConfig.max_checkout_cents;
-  const freeCreditCents = config?.free_credit_cents ?? 500;
   const balanceCents = balance ?? 0;
   const exhausted = !loading && !error && balanceCents <= 0;
 
@@ -109,9 +108,6 @@ export default function Billing() {
           <Card className={exhausted ? "border-destructive/50" : ""}>
             <CardHeader>
               <CardTitle>Credit Balance</CardTitle>
-              <CardDescription>
-                New accounts start with {formatCents(freeCreditCents)} in credits.
-              </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">

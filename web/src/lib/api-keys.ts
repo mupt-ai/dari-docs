@@ -1,6 +1,6 @@
 import { apiFetch } from "@/lib/api";
 
-export type AuthTokenInfo = {
+export type APIKeyInfo = {
   id: string;
   name?: string;
   kind: string;
@@ -13,26 +13,26 @@ export type AuthTokenInfo = {
   revoked_at?: string | null;
 };
 
-type TokenListResponse = {
-  tokens: AuthTokenInfo[];
+type APIKeyListResponse = {
+  tokens: APIKeyInfo[];
 };
 
-export async function listTokens(): Promise<AuthTokenInfo[]> {
-  const resp = await apiFetch<TokenListResponse>("/v1/auth/tokens");
+export async function listAPIKeys(): Promise<APIKeyInfo[]> {
+  const resp = await apiFetch<APIKeyListResponse>("/v1/auth/tokens");
   return resp.tokens;
 }
 
-export async function createToken(
+export async function createAPIKey(
   name: string,
   scopes: string[]
-): Promise<AuthTokenInfo> {
-  return apiFetch<AuthTokenInfo>("/v1/auth/tokens", {
+): Promise<APIKeyInfo> {
+  return apiFetch<APIKeyInfo>("/v1/auth/tokens", {
     method: "POST",
     body: { name, scopes },
   });
 }
 
-export async function revokeToken(id: string): Promise<{ revoked: boolean }> {
+export async function revokeAPIKey(id: string): Promise<{ revoked: boolean }> {
   return apiFetch<{ revoked: boolean }>(`/v1/auth/tokens/${id}/revoke`, {
     method: "POST",
   });

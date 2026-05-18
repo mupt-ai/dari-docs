@@ -31,7 +31,7 @@ export default function Login() {
           </div>
           <h1 className="mt-2 text-2xl font-medium">Sign in</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Sign in with Google to view managed docs runs, billing, and automation tokens.
+            Sign in with Google to view managed docs runs, billing, and API keys.
           </p>
         </div>
         <Button className="w-full" onClick={handleSignIn} disabled={busy}>

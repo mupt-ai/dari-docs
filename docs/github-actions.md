@@ -1,27 +1,27 @@
 # GitHub Actions
 
-Managed checks can run in CI with a named automation token. The CLI waits until the managed run finishes, so the Actions job status reflects the docs check result.
+Managed checks can run in CI with a named API key. The CLI waits until the managed run finishes, so the Actions job status reflects the docs check result.
 
-## Create an automation token
+## Create an API key
 
-Create the token locally after logging in:
+Create the API key locally after logging in:
 
 ```bash
 dari-docs auth login
-dari-docs auth token create --name github-actions
+dari-docs auth api-key create --name github-actions
 ```
 
-Add the token to your repository or environment secrets as `DARI_DOCS_TOKEN`.
+Add the API key to your repository or environment secrets as `DARI_DOCS_API_KEY`.
 
-By default, automation tokens can read managed account and run state and create managed checks. Add scopes explicitly for broader workflows, for example `--scope managed:read --scope managed:optimize` if CI should generate proposed revisions.
+By default, API keys can read managed account and run state and create managed checks. Add scopes explicitly for broader workflows, for example `--scope managed:read --scope managed:optimize` if CI should generate proposed revisions.
 
-Automation tokens do not expire by default. To set an expiration, pass `--expires-in 90d` or `--expires-in 24h`.
+API keys do not expire by default. To set an expiration, pass `--expires-in 90d` or `--expires-in 24h`.
 
-## Manage automation tokens
+## Manage API keys
 
-List and revoke tokens with:
+List and revoke API keys with:
 
 ```bash
-dari-docs auth token list
-dari-docs auth token revoke tok_...
+dari-docs auth api-key list
+dari-docs auth api-key revoke tok_...
 ```

@@ -1,6 +1,5 @@
 import { useOutletContext } from "react-router-dom";
 
-import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -8,7 +7,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { logoutManaged } from "@/lib/auth";
 import type { AppContext } from "@/routes/AppLayout";
 
 export default function Settings() {
@@ -42,26 +40,6 @@ export default function Settings() {
                 <span className="text-foreground">{profile.displayName}</span>
               </div>
             )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Session</CardTitle>
-            <CardDescription>
-              Sign out of Dari Docs on this browser.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                void logoutManaged();
-              }}
-            >
-              Log Out
-            </Button>
           </CardContent>
         </Card>
       </div>
