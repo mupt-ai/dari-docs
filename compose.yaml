@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: dari_docs
       POSTGRES_DB: dari_docs_local
     ports:
-      - "5433:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-}:5432"
     volumes:
       - dari_docs_postgres:/var/lib/postgresql/data
     healthcheck:
@@ -21,9 +21,11 @@ services:
     command: go run ./cmd/dari-docs-service
     environment:
       ADDR: 0.0.0.0:8080
-      PUBLIC_BASE_URL: http://localhost:8080
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       DARI_API_BASE_URL: ${DARI_API_BASE_URL:-https://api.dari.dev}
       DATABASE_URL: postgres://dari_docs:dari_docs@postgres:5432/dari_docs_local?sslmode=disable
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:-}
       DARI_API_KEY: ${DARI_API_KEY:-local-dev-placeholder}
       MANAGED_TESTER_AGENT_ID: ${MANAGED_TESTER_AGENT_ID:-local-dev-tester}
       MANAGED_TESTER_VERSION_ID: ${MANAGED_TESTER_VERSION_ID:-}
@@ -34,7 +36,7 @@ services:
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
     ports:
-      - "8080:8080"
+      - "127.0.0.1:${API_HOST_PORT:-}:8080"
     volumes:
       - .:/app
       - go_mod_cache:/go/pkg/mod
@@ -55,7 +57,7 @@ services:
     environment:
       VITE_API_PROXY_TARGET: http://backend:8080
     ports:
-      - "5174:5173"
+      - "127.0.0.1:${WEB_HOST_PORT:-}:5173"
     volumes:
       - .:/app
       - web_node_modules:/app/web/node_modules

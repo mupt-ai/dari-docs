@@ -13,10 +13,12 @@ services:
         fromDatabase:
           name: dari-docs-service-db
           property: connectionString
-      - key: PUBLIC_BASE_URL
-        value: https://optimize.dari.dev
       - key: DARI_API_BASE_URL
         value: https://api.dari.dev
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
       - key: DARI_API_KEY
         sync: false
       - key: MANAGED_TESTER_AGENT_ID
