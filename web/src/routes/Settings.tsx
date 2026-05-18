@@ -60,7 +60,7 @@ export default function Settings() {
                 void logoutManaged();
               }}
             >
-              Log out
+              Log Out
             </Button>
           </CardContent>
         </Card>

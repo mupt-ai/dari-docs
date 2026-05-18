@@ -146,7 +146,7 @@ export default function Tokens() {
 
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle>Create token</CardTitle>
+          <CardTitle>Create Token</CardTitle>
           <CardDescription>
             The full token is shown once. Store it in your CI secret store.
           </CardDescription>
@@ -173,7 +173,7 @@ export default function Tokens() {
                   ) : (
                     <ChevronRight className="h-4 w-4" />
                   )}
-                  Token scopes
+                  Token Scopes
                 </span>
                 <span className="text-xs text-muted-foreground">
                   {scopes.length} selected
@@ -211,7 +211,7 @@ export default function Tokens() {
                 type="submit"
                 disabled={creating || !name.trim() || scopes.length === 0}
               >
-                {creating ? "Creating…" : "Create token"}
+                {creating ? "Creating…" : "Create Token"}
               </Button>
             </div>
           </form>
@@ -222,7 +222,7 @@ export default function Tokens() {
         <Card className="mb-6 border-brand/60">
           <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0">
             <div className="flex flex-col gap-1.5">
-              <CardTitle>Copy your token now</CardTitle>
+              <CardTitle>Copy Your Token Now</CardTitle>
               <CardDescription>
                 This is the only time the full value will be shown. Store it
                 somewhere safe — you won't be able to retrieve it again.
@@ -287,8 +287,8 @@ export default function Tokens() {
         onOpenChange={handleRevokeDialogOpenChange}
         title={
           pendingRevoke
-            ? `Revoke token "${pendingRevoke.name ?? pendingRevoke.id}"?`
-            : "Revoke token?"
+            ? `Revoke Token "${pendingRevoke.name ?? pendingRevoke.id}"?`
+            : "Revoke Token?"
         }
         description="Any CI job or script using this token will fail immediately. This cannot be undone."
         confirmLabel="Revoke"

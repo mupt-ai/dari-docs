@@ -108,7 +108,7 @@ export default function Billing() {
         <div className="flex flex-col gap-6">
           <Card className={exhausted ? "border-destructive/50" : ""}>
             <CardHeader>
-              <CardTitle>Credit balance</CardTitle>
+              <CardTitle>Credit Balance</CardTitle>
               <CardDescription>
                 New accounts start with {formatCents(freeCreditCents)} in credits.
               </CardDescription>
@@ -146,7 +146,7 @@ export default function Billing() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Managed limits</CardTitle>
+              <CardTitle>Managed Limits</CardTitle>
               <CardDescription>
                 Per-account guardrails applied to managed runs.
               </CardDescription>
@@ -176,7 +176,7 @@ export default function Billing() {
       <ConfirmDialog
         open={buyOpen}
         onOpenChange={setBuyOpen}
-        title="Buy Dari Docs credits"
+        title="Buy Dari Docs Credits"
         confirmLabel="Checkout"
         confirming={checkingOut}
         onConfirm={startCheckout}
@@ -186,7 +186,7 @@ export default function Billing() {
             <span>Credits are added after Stripe confirms payment.</span>
             <span className="flex flex-col gap-2">
               <label className="text-xs uppercase tracking-widest text-muted-foreground">
-                Credits to buy
+                Credits to Buy
               </label>
               <Input
                 type="number"
