@@ -296,6 +296,15 @@ type runLLMSummary struct {
 	Count int    `json:"count"`
 }
 
+type runSessionSummary struct {
+	Kind        string     `json:"kind"`
+	TaskIndex   int        `json:"task_index"`
+	Status      string     `json:"status"`
+	LLMID       string     `json:"llm_id"`
+	CreatedAt   time.Time  `json:"created_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+}
+
 type runListParams struct {
 	Limit     int
 	Offset    int
@@ -312,7 +321,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request, u user) 
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	orderExpr, ok := runListOrderExpr(params.Sort)
+	order, ok := runListOrderExpr(params.Sort)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "unsupported sort")
 		return
@@ -328,8 +337,10 @@ FROM runs
 WHERE user_id=$1
 ORDER BY %s %s, id %s
 LIMIT $2 OFFSET $3
-`, orderExpr, direction, direction)
-	rows, err := s.db.Query(r.Context(), query, u.ID, params.Limit+1, params.Offset)
+`, order.Expr, direction, direction)
+	args := []any{u.ID, params.Limit + 1, params.Offset}
+	args = append(args, order.Args...)
+	rows, err := s.db.Query(r.Context(), query, args...)
 	if err != nil {
 		writeLoggedError(w, http.StatusInternalServerError, "could not list runs", err)
 		return
@@ -411,24 +422,32 @@ func parseRunListParams(r *http.Request) (runListParams, error) {
 	return runListParams{Limit: limit, Offset: offset, Sort: sort, Direction: direction}, nil
 }
 
-func runListOrderExpr(sort string) (string, bool) {
+type runListOrder struct {
+	Expr string
+	Args []any
+}
+
+func runListOrderExpr(sort string) (runListOrder, bool) {
 	switch sort {
 	case "status":
-		return "status", true
+		return runListOrder{Expr: "status"}, true
 	case "type", "mode":
-		return "mode", true
+		return runListOrder{Expr: "mode"}, true
 	case "task":
-		return "tasks::text", true
+		return runListOrder{Expr: "tasks::text"}, true
 	case "cost", "charged_cents":
-		return "charged_cents", true
+		return runListOrder{Expr: "charged_cents"}, true
 	case "created", "created_at":
-		return "created_at", true
+		return runListOrder{Expr: "created_at"}, true
 	case "completed", "completed_at":
-		return "coalesce(completed_at, '0001-01-01'::timestamptz)", true
+		return runListOrder{Expr: "coalesce(completed_at, '0001-01-01'::timestamptz)"}, true
 	case "llms":
-		return `(SELECT string_agg(coalesce(nullif(rs.llm_id,''), 'default'), ',' ORDER BY rs.kind, rs.task_index) FROM run_sessions rs WHERE rs.run_id = runs.id)`, true
+		return runListOrder{
+			Expr: `(SELECT string_agg(coalesce(nullif(rs.llm_id,''), $4), ',' ORDER BY CASE rs.kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, rs.task_index) FROM run_sessions rs WHERE rs.run_id = runs.id)`,
+			Args: []any{managedDefaultLLMID},
+		}, true
 	default:
-		return "", false
+		return runListOrder{}, false
 	}
 }
 
@@ -454,13 +473,13 @@ func (s *Server) loadRunLLMSummaries(ctx context.Context, userID string, runIDs 
 		return out, nil
 	}
 	rows, err := s.db.Query(ctx, `
-SELECT rs.run_id, rs.kind, coalesce(nullif(rs.llm_id,''), 'default') AS llm_id, count(*)
+SELECT rs.run_id, rs.kind, coalesce(nullif(rs.llm_id,''), $3) AS llm_id, count(*)
 FROM run_sessions rs
 JOIN runs r ON r.id = rs.run_id
 WHERE r.user_id=$1 AND rs.run_id = ANY($2)
-GROUP BY rs.run_id, rs.kind, coalesce(nullif(rs.llm_id,''), 'default')
-ORDER BY rs.run_id, rs.kind, llm_id
-`, userID, runIDs)
+GROUP BY rs.run_id, rs.kind, coalesce(nullif(rs.llm_id,''), $3)
+ORDER BY rs.run_id, CASE rs.kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, llm_id
+`, userID, runIDs, managedDefaultLLMID)
 	if err != nil {
 		return nil, err
 	}
@@ -689,20 +708,22 @@ func (s *Server) handleUpdatedZip(w http.ResponseWriter, r *http.Request, u user
 }
 
 type runStatusResponse struct {
-	ID                   string          `json:"id"`
-	Mode                 string          `json:"mode"`
-	Status               string          `json:"status"`
-	Error                string          `json:"error,omitempty"`
-	Tasks                []string        `json:"tasks,omitempty"`
-	CreatedAt            time.Time       `json:"created_at"`
-	CompletedAt          *time.Time      `json:"completed_at,omitempty"`
-	LLMs                 []runLLMSummary `json:"llms"`
-	FeedbackReports      []string        `json:"feedback_reports,omitempty"`
-	AggregateFeedback    string          `json:"aggregate_feedback,omitempty"`
-	UpdatedDocsAvailable bool            `json:"updated_docs_available"`
-	ReservedCents        int64           `json:"reserved_cents"`
-	ChargedCents         int64           `json:"charged_cents"`
-	Estimated            bool            `json:"estimated"`
+	ID                   string              `json:"id"`
+	Mode                 string              `json:"mode"`
+	Status               string              `json:"status"`
+	Error                string              `json:"error,omitempty"`
+	Tasks                []string            `json:"tasks,omitempty"`
+	TaskCount            int                 `json:"task_count"`
+	CreatedAt            time.Time           `json:"created_at"`
+	CompletedAt          *time.Time          `json:"completed_at,omitempty"`
+	LLMs                 []runLLMSummary     `json:"llms"`
+	Sessions             []runSessionSummary `json:"sessions"`
+	FeedbackReports      []string            `json:"feedback_reports,omitempty"`
+	AggregateFeedback    string              `json:"aggregate_feedback,omitempty"`
+	UpdatedDocsAvailable bool                `json:"updated_docs_available"`
+	ReservedCents        int64               `json:"reserved_cents"`
+	ChargedCents         int64               `json:"charged_cents"`
+	Estimated            bool                `json:"estimated"`
 }
 
 func (s *Server) loadRunStatus(ctx context.Context, userID, runID string) (runStatusResponse, error) {
@@ -719,6 +740,7 @@ FROM runs WHERE id=$1 AND user_id=$2
 		return rs, err
 	}
 	_ = json.Unmarshal(tasksJSON, &rs.Tasks)
+	rs.TaskCount = len(rs.Tasks)
 	rs.UpdatedDocsAvailable = rs.Status == statusCompleted && editorSessionID != ""
 	rs.Estimated = costStatus == "estimated"
 	llms, err := s.loadRunLLMSummaries(ctx, userID, []string{runID})
@@ -728,6 +750,14 @@ FROM runs WHERE id=$1 AND user_id=$2
 	rs.LLMs = llms[runID]
 	if rs.LLMs == nil {
 		rs.LLMs = []runLLMSummary{}
+	}
+	sessions, err := s.loadRunSessionSummaries(ctx, userID, runID)
+	if err != nil {
+		return rs, err
+	}
+	rs.Sessions = sessions
+	if rs.Sessions == nil {
+		rs.Sessions = []runSessionSummary{}
 	}
 	if rs.Status == statusCompleted || rs.Status == statusFailed {
 		reports, err := s.completedTesterReports(ctx, runID)
@@ -740,6 +770,42 @@ FROM runs WHERE id=$1 AND user_id=$2
 		}
 	}
 	return rs, nil
+}
+
+func (s *Server) loadRunSessionSummaries(ctx context.Context, userID, runID string) ([]runSessionSummary, error) {
+	rows, err := s.db.Query(ctx, `
+SELECT rs.kind,
+       rs.task_index,
+       rs.status,
+       coalesce(nullif(rs.llm_id,''), $3),
+       rs.created_at,
+       rs.completed_at
+FROM run_sessions rs
+JOIN runs r ON r.id = rs.run_id
+WHERE r.id=$1 AND r.user_id=$2
+ORDER BY CASE rs.kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, rs.task_index, rs.created_at
+`, runID, userID, managedDefaultLLMID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	sessions := []runSessionSummary{}
+	for rows.Next() {
+		var session runSessionSummary
+		if err := rows.Scan(
+			&session.Kind,
+			&session.TaskIndex,
+			&session.Status,
+			&session.LLMID,
+			&session.CreatedAt,
+			&session.CompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+	return sessions, rows.Err()
 }
 
 func (s *Server) completedTesterReports(ctx context.Context, runID string) ([]string, error) {

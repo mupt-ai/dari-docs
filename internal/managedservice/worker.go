@@ -156,6 +156,7 @@ func (s *Server) startSingleSessionBatch(ctx context.Context, run queuedRun, nex
 		Items: []dari.CreateSessionBatchItem{{
 			AgentID:   next.AgentID,
 			VersionID: next.VersionID,
+			LLMID:     managedDefaultLLMID,
 			Metadata:  managedSessionMetadata(run, next),
 			Secrets:   secrets,
 			Message: dari.CreateSessionBatchMessage{Content: []dari.ContentBlock{
@@ -179,11 +180,12 @@ func (s *Server) startSingleSessionBatch(ctx context.Context, run queuedRun, nex
 	if versionID == "" {
 		versionID = next.VersionID
 	}
+	llmID := managedLLMIDOrDefault(item.LLMID)
 	store, err := s.runs()
 	if err != nil {
 		return err
 	}
-	if err := store.InsertStartedRunSession(ctx, item.SessionID, run.ID, next.Kind, next.TaskIndex, versionID, item.LLMID); err != nil {
+	if err := store.InsertStartedRunSession(ctx, item.SessionID, run.ID, next.Kind, next.TaskIndex, versionID, llmID); err != nil {
 		return err
 	}
 	if isFinalSecretBearingSession(run, next) {
@@ -239,6 +241,7 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun) error {
 		batchReq.Items = append(batchReq.Items, dari.CreateSessionBatchItem{
 			AgentID:   run.TesterAgentID,
 			VersionID: run.TesterVersionID,
+			LLMID:     managedDefaultLLMID,
 			Metadata:  metadata,
 			Secrets:   secrets,
 			Message: dari.CreateSessionBatchMessage{Content: []dari.ContentBlock{
@@ -270,7 +273,8 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun) error {
 		if versionID == "" {
 			versionID = run.TesterVersionID
 		}
-		if err := store.InsertStartedRunSession(ctx, item.SessionID, run.ID, "tester", item.Index+1, versionID, item.LLMID); err != nil {
+		llmID := managedLLMIDOrDefault(item.LLMID)
+		if err := store.InsertStartedRunSession(ctx, item.SessionID, run.ID, "tester", item.Index+1, versionID, llmID); err != nil {
 			return err
 		}
 	}

@@ -1535,6 +1535,10 @@ func TestRunListOrderExprWhitelistsSorts(t *testing.T) {
 			t.Fatalf("sort %q was not accepted", sort)
 		}
 	}
+	order, ok := runListOrderExpr("llms")
+	if !ok || !strings.Contains(order.Expr, "$4") || len(order.Args) != 1 || order.Args[0] != managedDefaultLLMID {
+		t.Fatalf("llms sort order = %#v ok=%v", order, ok)
+	}
 	if _, ok := runListOrderExpr("created_at; drop table runs"); ok {
 		t.Fatal("unsafe sort should not be accepted")
 	}
@@ -1555,8 +1559,12 @@ func TestRunListResponseSerializesEmptyLLMsAsArray(t *testing.T) {
 	}
 }
 
-func TestRunStatusResponseSerializesEmptyLLMsAsArray(t *testing.T) {
-	body, err := json.Marshal(runStatusResponse{ID: "run_test", LLMs: []runLLMSummary{}})
+func TestRunStatusResponseSerializesEmptyLLMsAndSessionsAsArrays(t *testing.T) {
+	body, err := json.Marshal(runStatusResponse{
+		ID:       "run_test",
+		LLMs:     []runLLMSummary{},
+		Sessions: []runSessionSummary{},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1565,6 +1573,15 @@ func TestRunStatusResponseSerializesEmptyLLMsAsArray(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `"llms":[]`) {
 		t.Fatalf("body = %s, want empty llms array", body)
+	}
+	if !strings.Contains(string(body), `"task_count":0`) {
+		t.Fatalf("body = %s, want task_count", body)
+	}
+	if strings.Contains(string(body), `"sessions":null`) {
+		t.Fatalf("body = %s, sessions should not be null", body)
+	}
+	if !strings.Contains(string(body), `"sessions":[]`) {
+		t.Fatalf("body = %s, want empty sessions array", body)
 	}
 }
 

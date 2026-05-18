@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { getBalance } from "@/lib/billing";
 import { firstLine, formatCents, formatDate } from "@/lib/utils";
 import {
+  formatLLMID,
   isActiveRun,
   listRuns,
   type RunListItem,
@@ -16,7 +17,7 @@ import {
 const columns: Array<{ key: RunSort; label: string; align?: "right" }> = [
   { key: "status", label: "Status" },
   { key: "mode", label: "Type" },
-  { key: "task", label: "Task" },
+  { key: "task", label: "Tasks" },
   { key: "cost", label: "Cost", align: "right" },
   { key: "llms", label: "LLMs" },
   { key: "created_at", label: "Created" },
@@ -172,14 +173,7 @@ export default function Runs() {
                       </td>
                       <td className="px-3 py-3 capitalize">{run.mode}</td>
                       <td className="max-w-[360px] px-3 py-3">
-                        <Link to={`/runs/${run.id}`} className="block truncate text-foreground hover:text-brand">
-                          {firstLine(run.tasks[0] ?? "") || run.id}
-                        </Link>
-                        {run.task_count > 1 && (
-                          <div className="mt-1 text-xs text-muted-foreground">
-                            {run.task_count} tasks
-                          </div>
-                        )}
+                        <RunWorkload run={run} />
                       </td>
                       <td className="px-3 py-3 text-right">
                         {formatCents(run.charged_cents)}
@@ -278,10 +272,35 @@ export function LLMSummary({ llms }: { llms: Array<{ role: string; llm_id: strin
     <span className="flex flex-col gap-1">
       {llms.map((item) => (
         <span key={`${item.role}:${item.llm_id}`}>
-          {item.role}: {item.llm_id}
+          {formatRole(item.role)}: {formatLLMID(item.llm_id)}
           {item.count > 1 ? ` x${item.count}` : ""}
         </span>
       ))}
     </span>
   );
+}
+
+function RunWorkload({ run }: { run: RunListItem }) {
+  const headline = firstLine(run.tasks[0] ?? "") || run.id;
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <Link to={`/runs/${run.id}`} className="block truncate text-foreground hover:text-brand">
+        {headline}
+      </Link>
+      <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+        <span className="border border-border bg-muted/30 px-1.5 py-0.5">
+          {run.task_count > 1 ? `${run.task_count}-task batch` : "1 task"}
+        </span>
+        <span>
+          {run.mode === "optimize" ? "tester sessions + editor" : "tester sessions"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function formatRole(role: string): string {
+  if (role === "tester") return "Tester";
+  if (role === "editor") return "Editor";
+  return role;
 }

@@ -6,6 +6,15 @@ export type RunLLM = {
   count: number;
 };
 
+export type RunSession = {
+  kind: "tester" | "editor" | string;
+  task_index: number;
+  status: "uploading" | "queued" | "starting" | "running" | "completed" | "failed" | string;
+  llm_id: string;
+  created_at: string;
+  completed_at?: string | null;
+};
+
 export type RunListItem = {
   id: string;
   mode: "check" | "optimize";
@@ -28,6 +37,7 @@ export type RunListResponse = {
 };
 
 export type RunStatus = RunListItem & {
+  sessions: RunSession[];
   feedback_reports?: string[];
   aggregate_feedback?: string;
 };
@@ -60,4 +70,10 @@ export async function downloadUpdatedDocs(id: string): Promise<Blob> {
 
 export function isActiveRun(status: string): boolean {
   return status === "uploading" || status === "queued" || status === "starting" || status === "running";
+}
+
+export function formatLLMID(llmID?: string | null): string {
+  const normalized = llmID?.trim();
+  if (!normalized || normalized === "default") return "-";
+  return normalized;
 }
