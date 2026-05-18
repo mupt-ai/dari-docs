@@ -67,6 +67,7 @@ export default function Billing() {
     amountCents < billingConfig.min_checkout_cents || amountCents > billingConfig.max_checkout_cents;
   const freeCreditCents = config?.free_credit_cents ?? 500;
   const balanceCents = balance ?? 0;
+  const exhausted = !loading && !error && balanceCents <= 0;
 
   const startCheckout = async () => {
     if (invalid) {
@@ -102,12 +103,12 @@ export default function Billing() {
       )}
 
       {loading ? (
-        <div className="text-sm text-muted-foreground">loading billing...</div>
+        <div className="text-sm text-muted-foreground">loading…</div>
       ) : (
-        <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
-          <Card>
+        <div className="flex flex-col gap-6">
+          <Card className={exhausted ? "border-destructive/50" : ""}>
             <CardHeader>
-              <CardTitle>Credit balance</CardTitle>
+              <CardTitle>Credit Balance</CardTitle>
               <CardDescription>
                 New accounts start with {formatCents(freeCreditCents)} in credits.
               </CardDescription>
@@ -118,7 +119,9 @@ export default function Billing() {
                   <div className="text-3xl font-medium tracking-tight">
                     {formatCents(balanceCents)}
                   </div>
-                  <div className="mt-1 text-xs text-muted-foreground">available for managed runs</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    available for managed runs
+                  </div>
                 </div>
                 <Button
                   type="button"
@@ -129,28 +132,51 @@ export default function Billing() {
                     setBuyOpen(true);
                   }}
                 >
-                  Purchase credits
+                  Buy Credits
                 </Button>
               </div>
+              {exhausted && (
+                <div className="border border-destructive/50 bg-destructive/10 p-3 text-xs text-destructive-foreground">
+                  Your account is out of credit. New managed runs will be
+                  rejected until more credit is added.
+                </div>
+              )}
             </CardContent>
           </Card>
 
-          <section className="border border-border bg-card p-6">
-            <div className="text-sm font-medium">Managed limits</div>
-            <dl className="mt-4 flex flex-col gap-3 text-sm">
-              <Row label="Active runs" value={`${config?.max_active_runs_per_user ?? "-"} per account`} />
-              <Row label="Tasks per run" value={`${config?.max_tasks_per_run ?? "-"} max`} />
-              <Row label="Tester reserve" value={formatCents(config?.tester_session_reserve_cents ?? 0)} />
-              <Row label="Editor reserve" value={formatCents(config?.editor_session_reserve_cents ?? 0)} />
-            </dl>
-          </section>
+          <Card>
+            <CardHeader>
+              <CardTitle>Managed Limits</CardTitle>
+              <CardDescription>
+                Per-account guardrails applied to managed runs.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-2 text-xs text-muted-foreground">
+              <Row
+                label="active runs"
+                value={`${config?.max_active_runs_per_user ?? "—"} per account`}
+              />
+              <Row
+                label="tasks per run"
+                value={`${config?.max_tasks_per_run ?? "—"} max`}
+              />
+              <Row
+                label="tester reserve"
+                value={formatCents(config?.tester_session_reserve_cents ?? 0)}
+              />
+              <Row
+                label="editor reserve"
+                value={formatCents(config?.editor_session_reserve_cents ?? 0)}
+              />
+            </CardContent>
+          </Card>
         </div>
       )}
 
       <ConfirmDialog
         open={buyOpen}
         onOpenChange={setBuyOpen}
-        title="Buy Dari Docs credits"
+        title="Buy Dari Docs Credits"
         confirmLabel="Checkout"
         confirming={checkingOut}
         onConfirm={startCheckout}
@@ -160,7 +186,7 @@ export default function Billing() {
             <span>Credits are added after Stripe confirms payment.</span>
             <span className="flex flex-col gap-2">
               <label className="text-xs uppercase tracking-widest text-muted-foreground">
-                Credits to buy
+                Credits to Buy
               </label>
               <Input
                 type="number"
@@ -171,7 +197,8 @@ export default function Billing() {
                 onChange={(event) => setAmount(event.target.value)}
               />
               <span className="text-xs">
-                Minimum {formatCents(billingConfig.min_checkout_cents)}.
+                Choose between {formatCents(billingConfig.min_checkout_cents)} and{" "}
+                {formatCents(billingConfig.max_checkout_cents)}.
               </span>
             </span>
           </span>
@@ -187,9 +214,9 @@ function centsToDollars(cents: number): string {
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-t border-border pt-3">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd>{value}</dd>
+    <div className="flex items-center justify-between">
+      <span className="uppercase tracking-widest">{label}</span>
+      <span className="text-foreground">{value}</span>
     </div>
   );
 }
