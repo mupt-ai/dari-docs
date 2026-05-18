@@ -28,7 +28,6 @@ builds:
 
 archives:
   - id: default
-    # Default .tar.gz on Unix is fine for Homebrew.
     name_template: >-
       {{ .ProjectName }}_
       {{- .Version }}_
@@ -52,26 +51,6 @@ changelog:
       - "^docs:"
       - "^test:"
       - "^chore:"
-
-# Publish a Homebrew formula to mupt-ai/homebrew-tap on every tag.
-# Requires HOMEBREW_TAP_GITHUB_TOKEN (a PAT or GitHub App token with
-# contents:write on the tap repo) added as a repository secret/token.
-brews:
-  - name: dari-docs
-    repository:
-      owner: mupt-ai
-      name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    homepage: https://github.com/mupt-ai/dari-docs
-    description: "Test and optimize documentation with simulated developer agents."
-    license: "LicenseRef-Proprietary"
-    commit_author:
-      name: dari-releases
-      email: releases@mupt.ai
-    test: |
-      system "#{bin}/dari-docs", "--version"
-    install: |
-      bin.install "dari-docs"
 
 release:
   github:

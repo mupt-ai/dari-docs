@@ -21,14 +21,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - uses: actions/create-github-app-token@v2
-        id: tap-token
-        with:
-          app-id: ${{ secrets.MIRROR_APP_ID }}
-          private-key: ${{ secrets.MIRROR_APP_PRIVATE_KEY }}
-          owner: mupt-ai
-          repositories: homebrew-tap
-
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
@@ -36,4 +28,3 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ steps.tap-token.outputs.token }}

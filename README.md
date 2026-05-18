@@ -37,13 +37,6 @@ To choose a destination, set `DARI_DOCS_INSTALL_DIR`:
 curl -fsSL https://raw.githubusercontent.com/mupt-ai/dari-docs/main/install.sh | DARI_DOCS_INSTALL_DIR="$HOME/bin" bash
 ```
 
-Homebrew is also supported:
-
-```bash
-brew install mupt-ai/tap/dari-docs
-dari-docs --help
-```
-
 Install with Go:
 
 ```bash
