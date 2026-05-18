@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
-import { ChevronDown, ChevronRight, Download, RefreshCw } from "lucide-react";
+import { Download, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { downloadUpdatedDocs, formatLLMID, getRun, isActiveRun, type RunSession, type RunStatus } from "@/lib/runs";
 import { formatCents, formatDate } from "@/lib/utils";
-import { LLMSummary, StatusBadge } from "@/routes/Runs";
+import { StatusBadge } from "@/routes/Runs";
 
 export default function RunDetail() {
   const { runId } = useParams();
@@ -16,7 +16,8 @@ export default function RunDetail() {
   const [error, setError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
-  const [collapsedTasks, setCollapsedTasks] = useState<Record<number, boolean>>({});
+  const [selectedTaskIndex, setSelectedTaskIndex] = useState(1);
+  const [selectedResultKey, setSelectedResultKey] = useState("");
 
   const refresh = useCallback(async (quiet = false) => {
     if (!runId) return;
@@ -66,9 +67,18 @@ export default function RunDetail() {
     }
   };
 
-  const toggleTask = (index: number) => {
-    setCollapsedTasks((current) => ({ ...current, [index]: !current[index] }));
-  };
+  useEffect(() => {
+    if (!run) return;
+    const groups = taskGroups(run);
+    const selectedGroup = groups.find((group) => group.taskIndex === selectedTaskIndex) ?? groups[0];
+    if (!selectedGroup) return;
+    if (selectedGroup.taskIndex !== selectedTaskIndex) {
+      setSelectedTaskIndex(selectedGroup.taskIndex);
+    }
+    if (selectedGroup.results.length > 0 && !selectedGroup.results.some((result) => result.key === selectedResultKey)) {
+      setSelectedResultKey(selectedGroup.results[0].key);
+    }
+  }, [run, selectedTaskIndex, selectedResultKey]);
 
   return (
     <div className="px-6 py-6">
@@ -121,52 +131,23 @@ export default function RunDetail() {
             <Summary label="Completed" value={<span>{formatDate(run.completed_at)}</span>} />
           </div>
 
-          <section className="border border-border bg-card p-4">
-            <div className="mb-3 text-sm font-medium">Run context</div>
-            <div className="grid gap-4 text-sm md:grid-cols-3">
-              <div>
-                <div className="text-xs uppercase tracking-widest text-muted-foreground">Created</div>
-                <div className="mt-1">{formatDate(run.created_at)}</div>
-              </div>
-              <div>
-                <div className="text-xs uppercase tracking-widest text-muted-foreground">Reserved</div>
-                <div className="mt-1">{formatCents(run.reserved_cents)}</div>
-              </div>
-              <div>
-                <div className="text-xs uppercase tracking-widest text-muted-foreground">LLMs</div>
-                <div className="mt-1 text-muted-foreground">
-                  <LLMSummary llms={run.llms} />
-                </div>
-              </div>
-            </div>
-            {run.error && (
-              <div className="mt-4 border border-destructive/50 bg-destructive/10 p-3 text-xs text-destructive-foreground">
-                {run.error}
-              </div>
-            )}
-          </section>
+          {run.error && (
+            <section className="border border-destructive/50 bg-destructive/10 p-3 text-xs text-destructive-foreground">
+              {run.error}
+            </section>
+          )}
 
-          <section className="border border-border bg-card p-4">
-            <div className="mb-3 text-sm font-medium">Tasks</div>
-            <div className="flex flex-col gap-3">
-              {run.tasks?.map((task, index) => {
-                const session = sessionForTask(run.sessions, index + 1);
-                const collapsed = collapsedTasks[index] === true;
-                return (
-                  <TaskPanel
-                    key={`${index}:${task}`}
-                    index={index}
-                    task={task}
-                    session={session}
-                    fallbackStatus={run.status}
-                    feedback={run.feedback_reports?.[index]}
-                    collapsed={collapsed}
-                    onToggle={() => toggleTask(index)}
-                  />
-                );
-              })}
-            </div>
-          </section>
+          <TaskResults
+            run={run}
+            selectedTaskIndex={selectedTaskIndex}
+            selectedResultKey={selectedResultKey}
+            onSelectTask={(taskIndex) => {
+              const group = taskGroups(run).find((item) => item.taskIndex === taskIndex);
+              setSelectedTaskIndex(taskIndex);
+              setSelectedResultKey(group?.results[0]?.key ?? "");
+            }}
+            onSelectResult={setSelectedResultKey}
+          />
 
           {run.mode === "optimize" && (
             <section className="border border-border bg-card p-4">
@@ -178,20 +159,139 @@ export default function RunDetail() {
             </section>
           )}
 
-          {run.aggregate_feedback && (
-            <section className="border border-border bg-card p-4">
-              <div className="mb-3 text-sm font-medium">Aggregate feedback</div>
-              <Markdown text={run.aggregate_feedback} />
-            </section>
-          )}
         </div>
       ) : null}
     </div>
   );
 }
 
-function sessionForTask(sessions: RunSession[] | undefined, taskIndex: number): RunSession | undefined {
-  return sessions?.find((session) => session.kind === "tester" && session.task_index === taskIndex);
+type TaskResult = {
+  key: string;
+  session?: RunSession;
+  feedback?: string;
+};
+
+type TaskGroup = {
+  taskIndex: number;
+  task: string;
+  results: TaskResult[];
+};
+
+function taskGroups(run: RunStatus): TaskGroup[] {
+  const tasks = run.tasks ?? [];
+  const groups = new Map<number, TaskGroup>();
+
+  tasks.forEach((task, index) => {
+    const taskIndex = index + 1;
+    groups.set(taskIndex, { taskIndex, task, results: [] });
+  });
+
+  const testerSessions = (run.sessions ?? []).filter((session) => session.kind === "tester");
+  testerSessions.forEach((session, index) => {
+    const taskIndex = Math.max(1, session.task_index || 1);
+    const group = groups.get(taskIndex) ?? {
+      taskIndex,
+      task: tasks[taskIndex - 1] ?? `Task ${taskIndex}`,
+      results: [],
+    };
+    group.results.push({
+      key: `tester:${taskIndex}:${index}:${session.llm_id}`,
+      session,
+      feedback: run.feedback_reports?.[index],
+    });
+    groups.set(taskIndex, group);
+  });
+
+  return Array.from(groups.values()).sort((a, b) => a.taskIndex - b.taskIndex);
+}
+
+function TaskResults({
+  run,
+  selectedTaskIndex,
+  selectedResultKey,
+  onSelectTask,
+  onSelectResult,
+}: {
+  run: RunStatus;
+  selectedTaskIndex: number;
+  selectedResultKey: string;
+  onSelectTask: (taskIndex: number) => void;
+  onSelectResult: (key: string) => void;
+}) {
+  const groups = taskGroups(run);
+  const selectedGroup = groups.find((group) => group.taskIndex === selectedTaskIndex) ?? groups[0];
+  const selectedResult = selectedGroup?.results.find((result) => result.key === selectedResultKey) ?? selectedGroup?.results[0];
+
+  if (!selectedGroup) return null;
+
+  return (
+    <section className="border border-border bg-card p-4">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0 flex-1">
+          <label htmlFor="task-select" className="text-xs uppercase tracking-widest text-muted-foreground">
+            Task
+          </label>
+          <select
+            id="task-select"
+            value={selectedGroup.taskIndex}
+            onChange={(event) => onSelectTask(Number(event.target.value))}
+            className="mt-2 w-full border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors hover:border-muted-foreground/60 focus:border-brand"
+          >
+            {groups.map((group) => (
+              <option key={group.taskIndex} value={group.taskIndex}>
+                Task {group.taskIndex}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="mb-4 border border-border bg-background p-3 text-sm">
+        <div className="mb-2 text-xs uppercase tracking-widest text-muted-foreground">Prompt</div>
+        <div className="whitespace-pre-wrap">{selectedGroup.task}</div>
+      </div>
+
+      {selectedGroup.results.length > 0 ? (
+        <>
+          <div className="mb-4 flex gap-6 overflow-x-auto border-b border-border">
+            {selectedGroup.results.map((result) => {
+              const active = result.key === (selectedResult?.key ?? "");
+              return (
+                <button
+                  key={result.key}
+                  type="button"
+                  onClick={() => onSelectResult(result.key)}
+                  className={`-mb-px whitespace-nowrap border-b-2 px-1 pb-2 text-sm transition-colors ${
+                    active
+                      ? "border-brand text-foreground"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {formatLLMID(result.session?.llm_id)}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="border border-border bg-background p-3 text-sm">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="font-medium">{formatLLMID(selectedResult?.session?.llm_id)}</div>
+              <SessionMeta session={selectedResult?.session} fallbackStatus={run.status} />
+            </div>
+            {selectedResult?.feedback ? (
+              <Markdown text={selectedResult.feedback} />
+            ) : (
+              <div className="text-muted-foreground">No feedback available.</div>
+            )}
+          </div>
+        </>
+      ) : (
+        <div className="border border-border bg-background p-4 text-sm text-muted-foreground">
+          No model results for this task yet.
+        </div>
+      )}
+    </section>
+  );
 }
 
 function editorSession(sessions: RunSession[] | undefined): RunSession | undefined {
@@ -205,59 +305,6 @@ function editorFallbackStatus(run: RunStatus): string {
   if (taskCount === 0 || testers.length < taskCount) return "waiting";
   if (testers.some((session) => session.status !== "completed")) return "waiting";
   return "queued";
-}
-
-function TaskPanel({
-  index,
-  task,
-  session,
-  fallbackStatus,
-  feedback,
-  collapsed,
-  onToggle,
-}: {
-  index: number;
-  task: string;
-  session?: RunSession;
-  fallbackStatus: string;
-  feedback?: string;
-  collapsed: boolean;
-  onToggle: () => void;
-}) {
-  const headerClassName = `flex min-h-12 flex-wrap items-center justify-between gap-2 px-3 py-2 ${
-    collapsed ? "" : "border-b border-border"
-  }`;
-
-  return (
-    <div className="border border-border bg-background text-sm">
-      <div className={headerClassName}>
-        <button
-          type="button"
-          onClick={onToggle}
-          className="inline-flex min-w-0 items-center gap-2 text-left text-xs text-muted-foreground hover:text-foreground"
-          aria-expanded={!collapsed}
-        >
-          {collapsed ? <ChevronRight className="h-3.5 w-3.5 shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0" />}
-          <span className="uppercase tracking-widest">Task {index + 1}</span>
-          <SessionModel session={session} />
-        </button>
-        <SessionMeta session={session} fallbackStatus={fallbackStatus} />
-      </div>
-      {!collapsed && (
-        <div className="p-3">
-          <div className="whitespace-pre-wrap">{task}</div>
-          {feedback && (
-            <div className="mt-4 border-t border-border pt-4">
-              <div className="mb-2 text-xs uppercase tracking-widest text-muted-foreground">
-                Feedback
-              </div>
-              <Markdown text={feedback} />
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
 }
 
 function SessionHeader({
