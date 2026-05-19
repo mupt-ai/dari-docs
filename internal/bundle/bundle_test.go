@@ -79,6 +79,33 @@ func TestCreateWithOptionsReportsSkipsAndAppliesGlobs(t *testing.T) {
 	}
 }
 
+func TestCreateWithOptionsDoubleStarIncludeMatchesRootFiles(t *testing.T) {
+	repo := t.TempDir()
+	writeFileForTest(t, repo, "demo.py", "print('root')\n")
+	writeFileForTest(t, repo, "examples/demo.py", "print('nested')\n")
+	writeFileForTest(t, repo, "notes.unsupported", "skip\n")
+
+	out := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	created, err := CreateWithOptions(repo, out, CreateOptions{
+		Include: []string{"**/*.py"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var paths []string
+	for _, rec := range created.Manifest.Files {
+		paths = append(paths, rec.Path)
+	}
+	wantPaths := []string{"demo.py", "examples/demo.py"}
+	if strings.Join(paths, ",") != strings.Join(wantPaths, ",") {
+		t.Fatalf("paths = %v, want %v", paths, wantPaths)
+	}
+	if created.Skipped.UnsupportedFiles != 1 {
+		t.Fatalf("unsupported files = %d, want 1", created.Skipped.UnsupportedFiles)
+	}
+}
+
 func TestCreateSkipsSymlinks(t *testing.T) {
 	repo := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "secret.md")

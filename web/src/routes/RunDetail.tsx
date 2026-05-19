@@ -124,9 +124,10 @@ export default function RunDetail() {
         <div className="text-sm text-muted-foreground">Loading Run...</div>
       ) : run ? (
         <div className="flex flex-col gap-6">
-          <div className="grid gap-4 md:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-5">
             <Summary label="Status" value={<StatusBadge status={run.status} />} />
             <Summary label="Type" value={<span>{toTitleCase(run.mode)}</span>} />
+            <Summary label="Source" value={<span>{toTitleCase(run.source ?? "cli")}</span>} />
             <Summary label="Cost" value={<span>{formatCents(run.charged_cents)}{run.estimated ? " Est." : ""}</span>} />
             <Summary label="Completed" value={<span>{formatDate(run.completed_at)}</span>} />
           </div>
