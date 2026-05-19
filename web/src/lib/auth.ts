@@ -10,6 +10,7 @@ const LEGACY_MANAGED_PROFILE_KEY = "dariDocs.managedProfile";
 export type ManagedProfile = {
   email: string;
   displayName: string | null;
+  isAdmin: boolean;
 };
 
 export type AuthState =
@@ -62,7 +63,30 @@ function profileFromUser(user: User): ManagedProfile {
       stringMetadata(metadata.full_name) ??
       stringMetadata(metadata.name) ??
       stringMetadata(metadata.display_name),
+    isAdmin: false,
   };
+}
+
+type ManagedAccountResponse = {
+  email?: string;
+  is_admin?: boolean;
+};
+
+async function fetchManagedAccount(
+  accessToken: string
+): Promise<ManagedAccountResponse | null> {
+  try {
+    const resp = await fetch(`${API_URL}/v1/me`, {
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+    if (!resp.ok) return null;
+    return (await resp.json()) as ManagedAccountResponse;
+  } catch {
+    return null;
+  }
 }
 
 function stringMetadata(value: unknown): string | null {
@@ -98,10 +122,30 @@ export function useAuthState(): AuthState {
         return;
       }
       if (!cancelled) {
+        const baseProfile = profileFromUser(session.user);
         setState({
           status: "signed_in",
           session,
-          profile: profileFromUser(session.user),
+          profile: baseProfile,
+        });
+        void fetchManagedAccount(session.access_token).then((account) => {
+          if (cancelled || !account) return;
+          setState((prev) => {
+            if (
+              prev.status !== "signed_in" ||
+              prev.session.access_token !== session.access_token
+            ) {
+              return prev;
+            }
+            return {
+              ...prev,
+              profile: {
+                ...prev.profile,
+                email: account.email ?? prev.profile.email,
+                isAdmin: account.is_admin === true,
+              },
+            };
+          });
         });
       }
     }

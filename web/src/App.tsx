@@ -4,6 +4,7 @@ import { useAuthState } from "@/lib/auth";
 import AppLayout from "@/routes/AppLayout";
 import AuthCallback from "@/routes/AuthCallback";
 import Usage from "@/routes/Usage";
+import Admin from "@/routes/Admin";
 import Login from "@/routes/Login";
 import NewRun from "@/routes/NewRun";
 import RunDetail from "@/routes/RunDetail";
@@ -38,6 +39,7 @@ export default function App() {
           <Route path="/runs/:runId" element={<RunDetail />} />
           <Route path="/usage" element={<Usage />} />
           <Route path="/billing" element={<Navigate to="/usage" replace />} />
+          <Route path="/admin" element={<Admin />} />
           <Route path="/api-keys" element={<ApiKeys />} />
           <Route path="/tokens" element={<Navigate to="/api-keys" replace />} />
           <Route path="/settings" element={<Settings />} />
