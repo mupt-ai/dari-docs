@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -954,17 +955,17 @@ func TestReserveRunStoresConfiguredHostedAgents(t *testing.T) {
 			{Path: "README.md", SizeBytes: 12, SHA256: "file_sha"},
 		}},
 	}
-	if err := s.reserveRun(ctx, userID, runID, "check", []byte(`["task"]`), []byte(`["dumb-claude","smart-claude"]`), "smart-claude", result, 150, false, []byte(`[]`), nil, nil); err != nil {
+	if err := s.reserveRun(ctx, userID, runID, "check", []byte(`["task"]`), []byte(`["dumb-claude","smart-claude"]`), "smart-claude", runSourceCLI, result, 150, false, []byte(`[]`), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
-	var testerAgentID, testerVersionID, editorAgentID, editorVersionID string
+	var testerAgentID, testerVersionID, editorAgentID, editorVersionID, source string
 	var testerLLMIDsJSON []byte
 	var editorLLMID string
 	if err := db.QueryRow(ctx, `
-SELECT tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, tester_llm_ids, editor_llm_id
+SELECT tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, tester_llm_ids, editor_llm_id, source
 FROM runs WHERE id=$1
-`, runID).Scan(&testerAgentID, &testerVersionID, &editorAgentID, &editorVersionID, &testerLLMIDsJSON, &editorLLMID); err != nil {
+`, runID).Scan(&testerAgentID, &testerVersionID, &editorAgentID, &editorVersionID, &testerLLMIDsJSON, &editorLLMID, &source); err != nil {
 		t.Fatal(err)
 	}
 	if testerAgentID != "agt_tester" ||
@@ -982,6 +983,89 @@ FROM runs WHERE id=$1
 	}
 	if editorLLMID != "smart-claude" {
 		t.Fatalf("editor_llm_id = %q", editorLLMID)
+	}
+	if source != runSourceCLI {
+		t.Fatalf("source = %q, want %q", source, runSourceCLI)
+	}
+}
+
+func TestStageManagedSourceBundleUsesBundlerRules(t *testing.T) {
+	root := t.TempDir()
+	s := &Server{cfg: Config{
+		MaxBundleBytes:             1024 * 1024,
+		BundleMaxUncompressedBytes: 1024 * 1024,
+		BundleMaxFileBytes:         1024,
+	}}
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	partWriter, err := mw.CreateFormFile("source_file", "README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := partWriter.Write([]byte("# Docs\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	mr := multipart.NewReader(&body, mw.Boundary())
+	part, err := mr.NextPart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var totalBytes int64
+	if err := s.stageManagedSourceFile(part, root, "README.md", &totalBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "examples"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "examples", "demo.py"), []byte("print('ok')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "node_modules", "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "node_modules", "pkg", "index.md"), []byte("skip\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "drafts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "drafts", "skip.md"), []byte("skip\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tmpPath, result, err := s.stageManagedSourceBundle(root, bundle.CreateOptions{
+		Include:      []string{"examples/*.py"},
+		Exclude:      []string{"drafts/**"},
+		MaxFileBytes: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpPath)
+
+	var got []string
+	for _, file := range result.Manifest.Files {
+		got = append(got, file.Path)
+	}
+	if strings.Join(got, ",") != "README.md,examples/demo.py" {
+		t.Fatalf("bundled paths = %v", got)
+	}
+}
+
+func TestParseManagedSourceManifestRejectsUnsafePaths(t *testing.T) {
+	for _, raw := range []string{
+		`{"files":[{"path":"../secret.txt"}]}`,
+		`{"files":[{"path":"/etc/passwd"}]}`,
+		`{"files":[{"path":"docs\\secret.md"}]}`,
+		`{"files":[{"path":"README.md"},{"path":"README.md"}]}`,
+	} {
+		if _, err := parseManagedSourceManifest(raw); err == nil {
+			t.Fatalf("parseManagedSourceManifest(%s) succeeded, want error", raw)
+		}
 	}
 }
 
@@ -1651,7 +1735,7 @@ func TestHandleRunsReturns413ForOversizedMultipartBody(t *testing.T) {
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusRequestEntityTooLarge, rec.Body.String())
 	}
-	if got := rec.Body.String(); !strings.Contains(got, "bundle exceeds managed size limit") || strings.Contains(got, "http: request body too large") {
+	if got := rec.Body.String(); !strings.Contains(got, "upload exceeds managed size limit") || strings.Contains(got, "http: request body too large") {
 		t.Fatalf("body = %s", got)
 	}
 }
@@ -1659,14 +1743,14 @@ func TestHandleRunsReturns413ForOversizedMultipartBody(t *testing.T) {
 func TestHandleRunsReadsFieldsAfterBundle(t *testing.T) {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
+	if err := mw.WriteField("mode", "check"); err != nil {
+		t.Fatal(err)
+	}
 	part, err := mw.CreateFormFile("bundle", "input-docs-bundle.tar.gz")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := writeManagedServiceTestBundle(part); err != nil {
-		t.Fatal(err)
-	}
-	if err := mw.WriteField("mode", "check"); err != nil {
 		t.Fatal(err)
 	}
 	if err := mw.WriteField("tasks_json", `["check the docs"]`); err != nil {
@@ -1778,8 +1862,6 @@ func clearManagedConfigOptionalEnv(t *testing.T) {
 		"PORT",
 		"PUBLIC_BASE_URL",
 		"DARI_API_BASE_URL",
-		"MANAGED_TESTER_VERSION_ID",
-		"MANAGED_EDITOR_VERSION_ID",
 		"STRIPE_SECRET_KEY",
 		"STRIPE_WEBHOOK_SECRET",
 	} {

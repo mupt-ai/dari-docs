@@ -5,6 +5,7 @@ import AppLayout from "@/routes/AppLayout";
 import AuthCallback from "@/routes/AuthCallback";
 import Usage from "@/routes/Usage";
 import Login from "@/routes/Login";
+import NewRun from "@/routes/NewRun";
 import RunDetail from "@/routes/RunDetail";
 import Runs from "@/routes/Runs";
 import Settings from "@/routes/Settings";
@@ -33,6 +34,7 @@ export default function App() {
         <Route element={<AppLayout profile={auth.profile} />}>
           <Route index element={<Navigate to="/runs" replace />} />
           <Route path="/runs" element={<Runs />} />
+          <Route path="/runs/new" element={<NewRun />} />
           <Route path="/runs/:runId" element={<RunDetail />} />
           <Route path="/usage" element={<Usage />} />
           <Route path="/billing" element={<Navigate to="/usage" replace />} />

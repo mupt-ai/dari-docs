@@ -18,6 +18,7 @@ export type RunSession = {
 export type RunListItem = {
   id: string;
   mode: "check" | "optimize";
+  source?: "cli" | "web";
   status: "uploading" | "queued" | "starting" | "running" | "completed" | "failed";
   tasks: string[];
   task_count: number;
@@ -45,6 +46,33 @@ export type RunStatus = RunListItem & {
 export type RunSort = "status" | "mode" | "task" | "cost" | "llms" | "created_at" | "completed_at";
 export type SortDirection = "asc" | "desc";
 
+export type BrowserSourceFile = {
+  path: string;
+  file: File;
+};
+
+export type RuntimeSecretInput = {
+  name: string;
+  value: string;
+};
+
+export type CreateManagedRunInput = {
+  mode: "check" | "optimize";
+  tasks: string[];
+  files: BrowserSourceFile[];
+  testerLLMIDs: string[];
+  editorLLMID?: string;
+  includeGlobs?: string[];
+  excludeGlobs?: string[];
+  liveVerify?: boolean;
+  runtimeSecrets?: RuntimeSecretInput[];
+};
+
+export type CreateRunResponse = {
+  run_id: string;
+  status: string;
+};
+
 export async function listRuns(params: {
   sort: RunSort;
   direction: SortDirection;
@@ -62,6 +90,46 @@ export async function listRuns(params: {
 
 export async function getRun(id: string): Promise<RunStatus> {
   return apiFetch<RunStatus>(`/v1/runs/${encodeURIComponent(id)}`);
+}
+
+export async function createRunFromFolder(input: CreateManagedRunInput): Promise<CreateRunResponse> {
+  const form = new FormData();
+  form.set("mode", input.mode);
+  form.set("tasks_json", JSON.stringify(input.tasks));
+  form.set("feedback_llm_ids_json", JSON.stringify(input.testerLLMIDs));
+  if (input.mode === "optimize" && input.editorLLMID) {
+    form.set("editor_llm_id", input.editorLLMID);
+  }
+  if (input.includeGlobs && input.includeGlobs.length > 0) {
+    form.set("bundle_include_json", JSON.stringify(input.includeGlobs));
+  }
+  if (input.excludeGlobs && input.excludeGlobs.length > 0) {
+    form.set("bundle_exclude_json", JSON.stringify(input.excludeGlobs));
+  }
+  if (input.liveVerify && input.runtimeSecrets && input.runtimeSecrets.length > 0) {
+    const secrets: Record<string, string> = {};
+    for (const secret of input.runtimeSecrets) {
+      const name = secret.name.trim();
+      if (name) {
+        secrets[name] = secret.value;
+      }
+    }
+    form.set("live_verify", "true");
+    form.set("runtime_secrets_json", JSON.stringify(secrets));
+  }
+  form.set(
+    "source_files_json",
+    JSON.stringify({
+      files: input.files.map((item) => ({ path: item.path })),
+    })
+  );
+  for (const item of input.files) {
+    form.append("source_file", item.file, item.file.name);
+  }
+  return apiFetch<CreateRunResponse>("/v1/runs", {
+    method: "POST",
+    body: form,
+  });
 }
 
 export async function downloadUpdatedDocs(id: string): Promise<Blob> {

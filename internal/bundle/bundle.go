@@ -478,6 +478,11 @@ func validateManifestPath(p string) error {
 	return nil
 }
 
+// ValidateRelativePath checks whether p is safe as a repo-relative bundle path.
+func ValidateRelativePath(p string) error {
+	return validateManifestPath(p)
+}
+
 func validateManifest(manifest Manifest, entries map[string]FileRecord, opts ReadOptions) error {
 	if manifest.SchemaVersion != 1 {
 		return fmt.Errorf("bundle manifest has unsupported schema_version %d", manifest.SchemaVersion)
