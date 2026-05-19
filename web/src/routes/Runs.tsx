@@ -3,24 +3,23 @@ import { Link } from "react-router-dom";
 import { ArrowDown, ArrowUp, Check, Copy } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { firstLine, formatCents, formatDate, toTitleCase } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { firstLine, formatCents, formatDuration, formatRelativeTime, toTitleCase } from "@/lib/utils";
 import {
-  formatLLMID,
   isActiveRun,
   listRuns,
+  type RunLLM,
   type RunListItem,
   type RunSort,
   type SortDirection,
 } from "@/lib/runs";
 
 const columns: Array<{ key: RunSort; label: string; align?: "right" }> = [
-  { key: "status", label: "Status" },
+  { key: "task", label: "Task" },
   { key: "mode", label: "Type" },
-  { key: "task", label: "Tasks" },
+  { key: "llms", label: "Models" },
   { key: "cost", label: "Cost", align: "right" },
-  { key: "llms", label: "LLMs" },
-  { key: "created_at", label: "Created" },
-  { key: "completed_at", label: "Completed" },
+  { key: "created_at", label: "When" },
 ];
 
 export default function Runs() {
@@ -85,7 +84,7 @@ export default function Runs() {
       setDirection((value) => (value === "asc" ? "desc" : "asc"));
     } else {
       setSort(next);
-      setDirection(next === "created_at" || next === "completed_at" || next === "cost" ? "desc" : "asc");
+      setDirection(next === "created_at" || next === "cost" ? "desc" : "asc");
     }
   };
 
@@ -114,7 +113,7 @@ export default function Runs() {
         <div className="flex flex-col gap-3">
           <div className="overflow-hidden border border-border">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[980px] border-collapse text-sm">
+              <table className="w-full min-w-[720px] border-collapse text-sm">
                 <thead className="bg-muted/40 text-xs uppercase tracking-widest text-muted-foreground">
                   <tr>
                     {columns.map((column) => (
@@ -137,22 +136,20 @@ export default function Runs() {
                 <tbody>
                   {runs?.map((run) => (
                     <tr key={run.id} className="border-t border-border hover:bg-accent/40">
-                      <td className="px-3 py-3">
-                        <StatusBadge status={run.status} />
+                      <td className={cn("max-w-[360px] px-3 py-3", statusBorderClass(run.status))}>
+                        <RunWorkload run={run} />
                       </td>
                       <td className="px-3 py-3">{toTitleCase(run.mode)}</td>
-                      <td className="max-w-[360px] px-3 py-3">
-                        <RunWorkload run={run} />
+                      <td className="px-3 py-3">
+                        <LLMBadges llms={run.llms} />
                       </td>
                       <td className="px-3 py-3 text-right">
                         {formatCents(run.charged_cents)}
                         {run.estimated && <span className="ml-1 text-xs text-muted-foreground">Est.</span>}
                       </td>
-                      <td className="max-w-[260px] px-3 py-3 text-xs text-muted-foreground">
-                        <LLMSummary llms={run.llms} />
+                      <td className="px-3 py-3">
+                        <RunWhen run={run} />
                       </td>
-                      <td className="px-3 py-3 text-muted-foreground">{formatDate(run.created_at)}</td>
-                      <td className="px-3 py-3 text-muted-foreground">{formatDate(run.completed_at)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -170,6 +167,12 @@ export default function Runs() {
       )}
     </div>
   );
+}
+
+function statusBorderClass(status: string): string {
+  if (isActiveRun(status)) return "border-l-[3px] border-l-brand";
+  if (status === "failed") return "border-l-[3px] border-l-destructive/80";
+  return "border-l-[3px] border-l-transparent";
 }
 
 function SortIcon({ active, direction }: { active: boolean; direction: SortDirection }) {
@@ -240,17 +243,57 @@ export function StatusBadge({ status }: { status: string }) {
   );
 }
 
-export function LLMSummary({ llms }: { llms: Array<{ role: string; llm_id: string; count: number }> }) {
-  if (!llms || llms.length === 0) return <span>-</span>;
+function abbreviateLLMID(id: string): string {
+  const s = id.replace(/^(anthropic|openai)\//, "");
+  const claude = s.match(/^claude-(opus|sonnet|haiku)-(\d+)-(\d+)/i);
+  if (claude) {
+    return `${claude[1].charAt(0).toUpperCase()}${claude[1].slice(1)} ${claude[2]}.${claude[3]}`;
+  }
+  const gpt = s.match(/^gpt-(.+)/i);
+  if (gpt) return `GPT-${gpt[1]}`;
+  return s.length > 14 ? `${s.slice(0, 13)}…` : s;
+}
+
+function LLMBadges({ llms }: { llms: RunLLM[] }) {
+  if (!llms || llms.length === 0) return <span className="text-muted-foreground">-</span>;
+  const unique = [...new Set(llms.map((l) => l.llm_id))];
+  const visible = unique.slice(0, 2);
+  const overflow = unique.length - visible.length;
   return (
-    <span className="flex flex-col gap-1">
-      {llms.map((item) => (
-        <span key={`${item.role}:${item.llm_id}`}>
-          {formatRole(item.role)}: {formatLLMID(item.llm_id)}
-          {item.count > 1 ? ` x${item.count}` : ""}
+    <div className="flex flex-wrap items-center gap-1">
+      {visible.map((id) => (
+        <span key={id} className="border border-border bg-muted/40 px-1.5 py-0.5 text-xs text-muted-foreground">
+          {abbreviateLLMID(id)}
         </span>
       ))}
-    </span>
+      {overflow > 0 && (
+        <span className="border border-border bg-muted/20 px-1.5 py-0.5 text-xs text-muted-foreground/60">
+          +{overflow}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function RunWhen({ run }: { run: RunListItem }) {
+  const relTime = formatRelativeTime(run.created_at);
+  const active = isActiveRun(run.status);
+  const failed = run.status === "failed";
+  const duration =
+    run.completed_at && !active && !failed
+      ? formatDuration(run.created_at, run.completed_at)
+      : null;
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-muted-foreground">{relTime}</span>
+      {active ? (
+        <span className="text-xs text-brand">{toTitleCase(run.status)}…</span>
+      ) : failed ? (
+        <span className="text-xs text-destructive-foreground">Failed</span>
+      ) : duration ? (
+        <span className="text-xs text-muted-foreground/60">ran {duration}</span>
+      ) : null}
+    </div>
   );
 }
 
@@ -261,20 +304,11 @@ function RunWorkload({ run }: { run: RunListItem }) {
       <Link to={`/runs/${run.id}`} className="block truncate text-foreground hover:text-brand">
         {headline}
       </Link>
-      <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-        <span className="border border-border bg-muted/30 px-1.5 py-0.5">
-          {run.task_count > 1 ? `${run.task_count}-Task Batch` : "1 Task"}
+      {run.task_count > 1 && (
+        <span className="w-fit border border-border bg-muted/30 px-1.5 py-0.5 text-xs text-muted-foreground">
+          {run.task_count}-Task Batch
         </span>
-        <span>
-          {run.mode === "optimize" ? "Tester Sessions + Editor" : "Tester Sessions"}
-        </span>
-      </div>
+      )}
     </div>
   );
-}
-
-function formatRole(role: string): string {
-  if (role === "tester") return "Tester";
-  if (role === "editor") return "Editor";
-  return toTitleCase(role);
 }
