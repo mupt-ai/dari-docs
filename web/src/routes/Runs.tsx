@@ -98,9 +98,14 @@ export default function Runs() {
             Managed documentation checks and revisions from the CLI or browser.
           </p>
         </div>
-        <Button asChild>
+        <Button
+          asChild
+          variant="outline"
+          size="sm"
+          className="shrink-0 bg-white text-black hover:bg-white/90"
+        >
           <Link to="/runs/new">
-            <Plus className="mr-1.5 h-4 w-4" />
+            <Plus className="mr-1 h-4 w-4" />
             New Run
           </Link>
         </Button>
