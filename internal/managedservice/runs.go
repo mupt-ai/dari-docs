@@ -547,7 +547,7 @@ LIMIT $2 OFFSET $3
 		runIDs = runIDs[:params.Limit]
 		nextCursor = encodeRunListCursor(params.Offset + params.Limit)
 	}
-	llms, err := s.loadRunLLMSummaries(r.Context(), u.ID, runIDs)
+	llms, err := s.loadRunLLMSummaries(r.Context(), runIDs)
 	if err != nil {
 		writeLoggedError(w, http.StatusInternalServerError, "could not list run llms", err)
 		return
@@ -640,7 +640,9 @@ func decodeRunListCursor(raw string) (int, error) {
 	return offset, nil
 }
 
-func (s *Server) loadRunLLMSummaries(ctx context.Context, userID string, runIDs []string) (map[string][]runLLMSummary, error) {
+// loadRunLLMSummaries returns LLM summaries keyed by run id. Callers must have
+// already authorized each run id; this loader trusts its input.
+func (s *Server) loadRunLLMSummaries(ctx context.Context, runIDs []string) (map[string][]runLLMSummary, error) {
 	out := make(map[string][]runLLMSummary, len(runIDs))
 	if len(runIDs) == 0 {
 		return out, nil
@@ -648,8 +650,8 @@ func (s *Server) loadRunLLMSummaries(ctx context.Context, userID string, runIDs 
 	plannedRows, err := s.db.Query(ctx, `
 SELECT id, mode, jsonb_array_length(tasks), tester_llm_ids, editor_llm_id
 FROM runs
-WHERE user_id=$1 AND id = ANY($2)
-`, userID, runIDs)
+WHERE id = ANY($1)
+`, runIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -1066,7 +1068,7 @@ func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	runID := strings.Trim(rest, "/")
-	rs, err := s.loadRunStatus(r.Context(), u.ID, runID)
+	rs, ownerID, err := s.loadRunStatus(r.Context(), runID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "run not found")
@@ -1075,6 +1077,10 @@ func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request, u user) {
 		} else {
 			writeLoggedError(w, http.StatusInternalServerError, "could not load run status", err)
 		}
+		return
+	}
+	if ownerID != u.ID && !s.isAdminBrowserSession(u) {
+		writeError(w, http.StatusNotFound, "run not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, rs)
@@ -1125,34 +1131,35 @@ type runStatusResponse struct {
 	Estimated            bool                `json:"estimated"`
 }
 
-func (s *Server) loadRunStatus(ctx context.Context, userID, runID string) (runStatusResponse, error) {
+// loadRunStatus loads a single run by id and returns the response plus the
+// run's user_id so the caller can enforce its own ownership policy.
+func (s *Server) loadRunStatus(ctx context.Context, runID string) (runStatusResponse, string, error) {
 	var rs runStatusResponse
-	var editorSessionID string
+	var ownerID, editorSessionID, costStatus string
 	var tasksJSON []byte
-	var costStatus string
 	err := s.db.QueryRow(ctx, `
-SELECT id, mode, coalesce(source, 'cli'), status, tasks, coalesce(error,''), coalesce(editor_session_id,''), reserved_cents, charged_cents,
+SELECT id, user_id, mode, coalesce(source, 'cli'), status, tasks, coalesce(error,''), coalesce(editor_session_id,''), reserved_cents, charged_cents,
        coalesce(cost_status,''), created_at, completed_at
-FROM runs WHERE id=$1 AND user_id=$2
-`, runID, userID).Scan(&rs.ID, &rs.Mode, &rs.Source, &rs.Status, &tasksJSON, &rs.Error, &editorSessionID, &rs.ReservedCents, &rs.ChargedCents, &costStatus, &rs.CreatedAt, &rs.CompletedAt)
+FROM runs WHERE id=$1
+`, runID).Scan(&rs.ID, &ownerID, &rs.Mode, &rs.Source, &rs.Status, &tasksJSON, &rs.Error, &editorSessionID, &rs.ReservedCents, &rs.ChargedCents, &costStatus, &rs.CreatedAt, &rs.CompletedAt)
 	if err != nil {
-		return rs, err
+		return rs, "", err
 	}
 	_ = json.Unmarshal(tasksJSON, &rs.Tasks)
 	rs.TaskCount = len(rs.Tasks)
 	rs.UpdatedDocsAvailable = rs.Status == statusCompleted && editorSessionID != ""
 	rs.Estimated = costStatus == "estimated"
-	llms, err := s.loadRunLLMSummaries(ctx, userID, []string{runID})
+	llms, err := s.loadRunLLMSummaries(ctx, []string{runID})
 	if err != nil {
-		return rs, err
+		return rs, ownerID, err
 	}
 	rs.LLMs = llms[runID]
 	if rs.LLMs == nil {
 		rs.LLMs = []runLLMSummary{}
 	}
-	sessions, err := s.loadRunSessionSummaries(ctx, userID, runID)
+	sessions, err := s.loadRunSessionSummaries(ctx, runID)
 	if err != nil {
-		return rs, err
+		return rs, ownerID, err
 	}
 	rs.Sessions = sessions
 	if rs.Sessions == nil {
@@ -1161,29 +1168,30 @@ FROM runs WHERE id=$1 AND user_id=$2
 	if rs.Status == statusCompleted || rs.Status == statusFailed {
 		reports, err := s.completedTesterReports(ctx, runID)
 		if err != nil {
-			return rs, err
+			return rs, ownerID, err
 		}
 		rs.FeedbackReports = reports
 		if len(reports) > 0 {
 			rs.AggregateFeedback = runner.AggregateFeedback(reports)
 		}
 	}
-	return rs, nil
+	return rs, ownerID, nil
 }
 
-func (s *Server) loadRunSessionSummaries(ctx context.Context, userID, runID string) ([]runSessionSummary, error) {
+// loadRunSessionSummaries returns the per-session breakdown for a run. Callers
+// must have already authorized runID; this loader trusts its input.
+func (s *Server) loadRunSessionSummaries(ctx context.Context, runID string) ([]runSessionSummary, error) {
 	rows, err := s.db.Query(ctx, `
 SELECT rs.kind,
        rs.task_index,
        rs.status,
-       coalesce(nullif(rs.llm_id,''), $3),
+       coalesce(nullif(rs.llm_id,''), $2),
        rs.created_at,
        rs.completed_at
 FROM run_sessions rs
-JOIN runs r ON r.id = rs.run_id
-WHERE r.id=$1 AND r.user_id=$2
+WHERE rs.run_id=$1
 ORDER BY CASE rs.kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, rs.task_index, rs.llm_id, rs.created_at
-`, runID, userID, defaultManagedEditorLLMID())
+`, runID, defaultManagedEditorLLMID())
 	if err != nil {
 		return nil, err
 	}

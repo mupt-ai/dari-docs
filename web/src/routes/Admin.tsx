@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { ArrowLeft, ListChecks, Plus, Search, UserRound } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -338,12 +339,18 @@ function UserDetail({ detail }: { detail: AdminUserDetail }) {
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="text-lg font-medium">{headline}</div>
-          <div className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
             {hasDisplayName ? (
               <Detail label="Email" value={user.email} />
             ) : null}
             <Detail label="User ID" value={user.id} mono />
             <Detail label="Created" value={formatDate(user.created_at)} />
+            <Detail
+              label="Last active"
+              value={
+                user.last_active_at ? formatDate(user.last_active_at) : "Never"
+              }
+            />
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             <Metric label="Remaining credits" value={formatCents(user.balance_cents)} />
@@ -373,36 +380,41 @@ function UserDetail({ detail }: { detail: AdminUserDetail }) {
               {detail.runs.map((run) => (
                 <li
                   key={run.id}
-                  className="flex items-center gap-6 px-4 py-3"
+                  className="transition-colors hover:bg-muted/40"
                 >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate font-medium">
-                        {toTitleCase(run.mode)}
-                      </span>
-                      <span className="shrink-0 border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-widest text-muted-foreground">
-                        {run.status}
-                      </span>
+                  <Link
+                    to={`/runs/${encodeURIComponent(run.id)}`}
+                    className="flex items-center gap-6 px-4 py-3"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate font-medium">
+                          {toTitleCase(run.mode)}
+                        </span>
+                        <span className="shrink-0 border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-widest text-muted-foreground">
+                          {run.status}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
+                        {run.id}
+                      </div>
                     </div>
-                    <div className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
-                      {run.id}
+                    <div className="hidden shrink-0 items-center gap-6 sm:flex">
+                      <RowStat
+                        label="Tasks"
+                        value={formatCount(run.task_count)}
+                      />
+                      <RowStat
+                        label="Charged"
+                        value={formatCents(run.charged_cents)}
+                      />
+                      <RowStat
+                        label="Created"
+                        value={formatDate(run.created_at)}
+                        width="w-32"
+                      />
                     </div>
-                  </div>
-                  <div className="hidden shrink-0 items-center gap-6 sm:flex">
-                    <RowStat
-                      label="Tasks"
-                      value={formatCount(run.task_count)}
-                    />
-                    <RowStat
-                      label="Charged"
-                      value={formatCents(run.charged_cents)}
-                    />
-                    <RowStat
-                      label="Created"
-                      value={formatDate(run.created_at)}
-                      width="w-32"
-                    />
-                  </div>
+                  </Link>
                 </li>
               ))}
             </ul>

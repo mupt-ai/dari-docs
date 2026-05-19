@@ -5,6 +5,7 @@ export type AdminUserSummary = {
   email: string;
   display_name: string | null;
   created_at: string;
+  last_active_at: string | null;
   balance_cents: number;
   credit_granted_cents: number;
   credit_spent_cents: number;

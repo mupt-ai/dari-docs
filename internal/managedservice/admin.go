@@ -23,15 +23,16 @@ type adminUserDetailResponse struct {
 }
 
 type adminUserSummary struct {
-	ID                 string    `json:"id"`
-	Email              string    `json:"email"`
-	DisplayName        *string   `json:"display_name"`
-	CreatedAt          time.Time `json:"created_at"`
-	BalanceCents       int64     `json:"balance_cents"`
-	CreditGrantedCents int64     `json:"credit_granted_cents"`
-	CreditSpentCents   int64     `json:"credit_spent_cents"`
-	RunCount           int64     `json:"run_count"`
-	ActiveRunCount     int64     `json:"active_run_count"`
+	ID                 string     `json:"id"`
+	Email              string     `json:"email"`
+	DisplayName        *string    `json:"display_name"`
+	CreatedAt          time.Time  `json:"created_at"`
+	LastActiveAt       *time.Time `json:"last_active_at"`
+	BalanceCents       int64      `json:"balance_cents"`
+	CreditGrantedCents int64      `json:"credit_granted_cents"`
+	CreditSpentCents   int64      `json:"credit_spent_cents"`
+	RunCount           int64      `json:"run_count"`
+	ActiveRunCount     int64      `json:"active_run_count"`
 }
 
 type adminRunSummary struct {
@@ -64,6 +65,7 @@ SELECT
 	u.email,
 	u.display_name,
 	u.created_at,
+	runs.last_active_at,
 	coalesce(credits.balance_cents, 0),
 	coalesce(credits.granted_cents, 0),
 	greatest(coalesce(credits.granted_cents, 0) - coalesce(credits.balance_cents, 0), 0),
@@ -82,7 +84,8 @@ LEFT JOIN (
 	SELECT
 		user_id,
 		count(*) AS run_count,
-		count(*) FILTER (WHERE status IN ('queued', 'uploading', 'starting', 'running')) AS active_run_count
+		count(*) FILTER (WHERE status IN ('queued', 'uploading', 'starting', 'running')) AS active_run_count,
+		max(created_at) AS last_active_at
 	FROM runs
 	GROUP BY user_id
 ) runs ON runs.user_id = u.id
@@ -96,6 +99,10 @@ var adminEmails = map[string]struct{}{
 func (s *Server) isAdminEmail(email string) bool {
 	_, ok := adminEmails[strings.ToLower(strings.TrimSpace(email))]
 	return ok
+}
+
+func (s *Server) isAdminBrowserSession(u user) bool {
+	return s.isAdminEmail(u.Email) && effectiveTokenKind(u.TokenKind) == tokenKindBrowserSession
 }
 
 func (s *Server) requireAdmin(w http.ResponseWriter, u user) bool {
@@ -281,6 +288,7 @@ func scanAdminUserSummary(row scanRow) (adminUserSummary, error) {
 		&summary.Email,
 		&displayName,
 		&summary.CreatedAt,
+		&summary.LastActiveAt,
 		&summary.BalanceCents,
 		&summary.CreditGrantedCents,
 		&summary.CreditSpentCents,

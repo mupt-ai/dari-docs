@@ -83,6 +83,31 @@ func TestEscapeAdminSearchPattern(t *testing.T) {
 	}
 }
 
+func TestIsAdminBrowserSession(t *testing.T) {
+	s := &Server{}
+	cases := []struct {
+		name  string
+		email string
+		kind  string
+		want  bool
+	}{
+		{"admin browser", "ben@mupt.ai", tokenKindBrowserSession, true},
+		{"admin email case insensitive", "BEN@MUPT.ai", tokenKindBrowserSession, true},
+		{"admin automation token", "ben@mupt.ai", tokenKindAutomation, false},
+		{"admin interactive token", "ben@mupt.ai", tokenKindInteractive, false},
+		{"non-admin browser", "stranger@example.com", tokenKindBrowserSession, false},
+		{"non-admin automation", "stranger@example.com", tokenKindAutomation, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := s.isAdminBrowserSession(user{Email: tc.email, TokenKind: tc.kind})
+			if got != tc.want {
+				t.Fatalf("isAdminBrowserSession(%q, %q) = %v, want %v", tc.email, tc.kind, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRequireAdminRequiresBrowserSession(t *testing.T) {
 	s := &Server{}
 	for _, kind := range []string{tokenKindAutomation, tokenKindInteractive} {
