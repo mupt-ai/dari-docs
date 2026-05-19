@@ -10,9 +10,13 @@ import (
 
 func managedLLMIDOrDefault(llmID string) string {
 	if llmID == "" {
-		return managedDefaultLLMID
+		return defaultManagedEditorLLMID()
 	}
 	return llmID
+}
+
+func defaultManagedEditorLLMID() string {
+	return llmoptions.ManagedDefaultEditorLLMID
 }
 
 func allowedManagedLLMIDs() []string {
@@ -26,7 +30,7 @@ func defaultManagedTesterLLMIDs() []string {
 func normalizeManagedLLMID(llmID string) (string, error) {
 	llmID = strings.TrimSpace(llmID)
 	if llmID == "" {
-		return managedDefaultLLMID, nil
+		return defaultManagedEditorLLMID(), nil
 	}
 	allowedIDs := allowedManagedLLMIDs()
 	for _, allowed := range allowedIDs {

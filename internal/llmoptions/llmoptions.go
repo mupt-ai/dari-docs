@@ -7,6 +7,8 @@ const (
 	DumbGPT      = "dumb-gpt"
 	MediumGPT    = "medium-gpt"
 	SmartGPT     = "smart-gpt"
+
+	ManagedDefaultEditorLLMID = MediumClaude
 )
 
 func ClaudeFeedbackLLMIDs() []string {

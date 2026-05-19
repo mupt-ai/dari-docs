@@ -3,6 +3,8 @@ ALTER TABLE runs
   ADD COLUMN IF NOT EXISTS tester_llm_ids JSONB,
   ADD COLUMN IF NOT EXISTS editor_llm_id TEXT;
 
+-- Historical backfill only. Runtime defaults live in Go code under internal/llmoptions,
+-- and every new run inserts explicit tester_llm_ids/editor_llm_id values.
 UPDATE runs
 SET tester_llm_ids = COALESCE(
   (

@@ -227,7 +227,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		testerLLMIDs = defaultManagedTesterLLMIDs()
 	}
 	if editorLLMID == "" {
-		editorLLMID = managedDefaultLLMID
+		editorLLMID = defaultManagedEditorLLMID()
 	}
 	reserve = reserveCentsForRun(mode, len(tasks), len(testerLLMIDs), s.cfg)
 	if err := s.preflightRun(r.Context(), u.ID, reserve); err != nil {
@@ -555,7 +555,7 @@ JOIN runs r ON r.id = rs.run_id
 WHERE r.user_id=$1 AND rs.run_id = ANY($2)
 GROUP BY rs.run_id, rs.kind, coalesce(nullif(rs.llm_id,''), $3)
 ORDER BY rs.run_id, CASE rs.kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, llm_id
-`, userID, runIDs, managedDefaultLLMID)
+`, userID, runIDs, defaultManagedEditorLLMID())
 	if err != nil {
 		return nil, err
 	}
@@ -706,7 +706,7 @@ func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, tas
 		return &insufficientCreditsError{Need: reserve, Balance: balance}
 	}
 	if editorLLMID == "" {
-		editorLLMID = managedDefaultLLMID
+		editorLLMID = defaultManagedEditorLLMID()
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO runs (id, user_id, mode, status, tasks, tester_llm_ids, editor_llm_id, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files, reserved_cents, live_verify, runtime_secret_names, runtime_secrets_nonce, runtime_secrets_ciphertext)
@@ -875,7 +875,7 @@ FROM run_sessions rs
 JOIN runs r ON r.id = rs.run_id
 WHERE r.id=$1 AND r.user_id=$2
 ORDER BY CASE rs.kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, rs.task_index, rs.llm_id, rs.created_at
-`, runID, userID, managedDefaultLLMID)
+`, runID, userID, defaultManagedEditorLLMID())
 	if err != nil {
 		return nil, err
 	}
@@ -907,7 +907,7 @@ SELECT session_id,
 FROM run_sessions
 WHERE run_id=$1 AND kind='tester' AND status=$2
 ORDER BY task_index, llm_id, created_at
-`, runID, statusCompleted, managedDefaultLLMID)
+`, runID, statusCompleted, defaultManagedEditorLLMID())
 	if err != nil {
 		return nil, err
 	}

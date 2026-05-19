@@ -556,8 +556,8 @@ func TestHandleRunConfigReturnsLaunchPricingAndLimits(t *testing.T) {
 			t.Fatalf("%s = %d, want %d; body=%s", key, values[key], want, rec.Body.String())
 		}
 	}
-	if got.DefaultLLMID != managedDefaultLLMID {
-		t.Fatalf("default_llm_id = %q, want %q", got.DefaultLLMID, managedDefaultLLMID)
+	if got.DefaultLLMID != defaultManagedEditorLLMID() {
+		t.Fatalf("default_llm_id = %q, want %q", got.DefaultLLMID, defaultManagedEditorLLMID())
 	}
 	if strings.Join(got.DefaultFeedbackLLMIDs, ",") != "dumb-claude,medium-claude,smart-claude" {
 		t.Fatalf("default_feedback_llm_ids = %#v", got.DefaultFeedbackLLMIDs)

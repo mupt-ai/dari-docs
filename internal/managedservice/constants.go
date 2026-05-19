@@ -1,7 +1,5 @@
 package managedservice
 
-import "github.com/mupt-ai/dari-docs/internal/llmoptions"
-
 const (
 	defaultPort           = "8080"
 	defaultPublicBaseURL  = "http://localhost:8080"
@@ -11,7 +9,6 @@ const (
 	managedTesterReserveCents int64 = 75
 	managedEditorReserveCents int64 = 150
 	managedServiceFeeCents    int64 = 0
-	managedDefaultLLMID             = llmoptions.MediumClaude
 
 	stripeCheckoutMinCents     int64 = 500
 	stripeCheckoutDefaultCents int64 = 500
