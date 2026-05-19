@@ -52,9 +52,9 @@ SELECT id,
        mode,
        tasks,
        tester_agent_id,
-       tester_version_id,
        editor_agent_id,
-       editor_version_id,
+       tester_llm_ids,
+       editor_llm_id,
        COALESCE(bundle_file_id, ''),
        bundle_sha256,
        bundle_files,
@@ -93,14 +93,13 @@ func (store *managedRunStore) InsertStartedRunSession(
 	runID string,
 	kind string,
 	taskIndex int,
-	versionID string,
 	llmID string,
 ) error {
 	_, err := store.db.Exec(ctx, `
 INSERT INTO run_sessions (session_id, run_id, kind, task_index, status, version_id, llm_id)
 VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''))
 ON CONFLICT (session_id) DO NOTHING
-`, sessionID, runID, kind, taskIndex, statusRunning, versionID, llmID)
+`, sessionID, runID, kind, taskIndex, statusRunning, managedAgentVersionCompatibilityValue, llmID)
 	return err
 }
 
@@ -304,9 +303,9 @@ SELECT id,
        mode,
        tasks,
        tester_agent_id,
-       tester_version_id,
        editor_agent_id,
-       editor_version_id,
+       tester_llm_ids,
+       editor_llm_id,
        COALESCE(bundle_file_id, ''),
        bundle_sha256,
        bundle_files,
@@ -396,7 +395,7 @@ SELECT session_id,
        COALESCE(last_poll_error, '')
 FROM run_sessions
 WHERE run_id=$1
-ORDER BY created_at
+ORDER BY CASE kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, task_index, llm_id, created_at
 `, runID)
 	if err != nil {
 		return nil, err
@@ -476,6 +475,7 @@ WHERE id=$3
 func scanQueuedRun(row pgx.Row) (queuedRun, error) {
 	var run queuedRun
 	var tasksJSON []byte
+	var testerLLMIDsJSON []byte
 	var secretNamesJSON []byte
 	if err := row.Scan(
 		&run.ID,
@@ -483,9 +483,9 @@ func scanQueuedRun(row pgx.Row) (queuedRun, error) {
 		&run.Mode,
 		&tasksJSON,
 		&run.TesterAgentID,
-		&run.TesterVersionID,
 		&run.EditorAgentID,
-		&run.EditorVersionID,
+		&testerLLMIDsJSON,
+		&run.EditorLLMID,
 		&run.BundleFileID,
 		&run.BundleSHA256,
 		&run.BundleFiles,
@@ -499,6 +499,20 @@ func scanQueuedRun(row pgx.Row) (queuedRun, error) {
 		if err := json.Unmarshal(tasksJSON, &run.Tasks); err != nil {
 			return queuedRun{}, fmt.Errorf("decode run tasks: %w", err)
 		}
+	}
+	if len(testerLLMIDsJSON) > 0 {
+		if err := json.Unmarshal(testerLLMIDsJSON, &run.TesterLLMIDs); err != nil {
+			return queuedRun{}, fmt.Errorf("decode tester LLM IDs: %w", err)
+		}
+	}
+	var err error
+	run.TesterLLMIDs, err = normalizeManagedLLMIDs(run.TesterLLMIDs)
+	if err != nil {
+		return queuedRun{}, fmt.Errorf("decode tester LLM IDs: %w", err)
+	}
+	run.EditorLLMID, err = normalizeManagedLLMID(run.EditorLLMID)
+	if err != nil {
+		return queuedRun{}, fmt.Errorf("decode editor LLM ID: %w", err)
 	}
 	if len(secretNamesJSON) > 0 {
 		if err := json.Unmarshal(secretNamesJSON, &run.SecretNames); err != nil {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowDown, ArrowUp, Check, Copy } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Copy, Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -94,9 +94,20 @@ export default function Runs() {
         <div>
           <h1 className="text-xl font-medium">Runs</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Managed documentation checks and revisions from the CLI.
+            Managed documentation checks and revisions from the CLI or browser.
           </p>
         </div>
+        <Button
+          asChild
+          variant="outline"
+          size="sm"
+          className="shrink-0 bg-white text-black hover:bg-white/90"
+        >
+          <Link to="/runs/new">
+            <Plus className="mr-1 h-4 w-4" />
+            New Run
+          </Link>
+        </Button>
       </div>
 
       {error && (
@@ -185,7 +196,7 @@ function EmptyRuns() {
     <div className="border border-border bg-card p-6">
       <div className="text-sm font-medium">No Managed Runs Yet</div>
       <p className="mt-2 text-sm text-muted-foreground">
-        Run a check from your docs repo. The run will appear here while it is queued, running, and completed.
+        Create a browser run or run a check from your docs repo. The run will appear here while it is queued, running, and completed.
       </p>
       <div className="mt-4 flex flex-col gap-3">
         <CopyableCommand command="curl -fsSL https://raw.githubusercontent.com/mupt-ai/dari-docs/main/install.sh | bash" />
@@ -306,7 +317,7 @@ function RunWorkload({ run }: { run: RunListItem }) {
       </Link>
       {run.task_count > 1 && (
         <span className="w-fit border border-border bg-muted/30 px-1.5 py-0.5 text-xs text-muted-foreground">
-          {run.task_count}-Task Batch
+          {run.task_count} Tasks
         </span>
       )}
     </div>

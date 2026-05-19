@@ -41,6 +41,27 @@ dari-docs optimize . \
   --apply
 ```
 
+## Recover an existing run
+
+If a managed run is still running after the original CLI command exits, use the run ID printed by the command:
+
+```bash
+dari-docs runs status run_...
+dari-docs runs wait run_...
+```
+
+`status` prints the current state without waiting. `wait` polls until the run finishes, but does not write files locally. To fetch completed run artifacts from the repo where you want them written:
+
+```bash
+dari-docs runs download run_...
+```
+
+For completed optimize runs, apply the downloaded revisions with:
+
+```bash
+dari-docs runs apply run_...
+```
+
 ## Account and billing
 
 New accounts start with five dollars worth of free credits. After logging in, check your balance with:
@@ -58,6 +79,53 @@ dari-docs billing checkout --amount 5
 Before a managed run starts, the CLI prints a bundle summary and credit estimate. Credits are reserved before the run, then reconciled to the actual session cost after completion.
 
 Managed runs currently support up to three tasks per run and three active runs per account at a time. Tester sessions are started with the Dari session-batch API; optimize runs start the editor after tester feedback is complete.
+
+## Model selection
+
+Managed mode supports the hosted Claude and GPT LLM options:
+
+- `dumb-claude`
+- `medium-claude`
+- `smart-claude`
+- `dumb-gpt`
+- `medium-gpt`
+- `smart-gpt`
+
+By default, managed tester sessions run each task across all three Claude options. The editor uses `medium-claude`.
+
+Use one model for every managed session:
+
+```bash
+dari-docs check . \
+  --managed \
+  --llm smart-claude \
+  --task "Install the SDK and make a first API call"
+```
+
+Or choose the tester and editor models separately:
+
+```bash
+dari-docs optimize . \
+  --managed \
+  --feedback-llm dumb-claude,smart-claude \
+  --editor-llm smart-claude \
+  --task "Install the SDK and make a first API call"
+```
+
+For tester sessions, `--feedback-llm` also accepts groups:
+
+- `claude` expands to `dumb-claude`, `medium-claude`, and `smart-claude`
+- `gpt` expands to `dumb-gpt`, `medium-gpt`, and `smart-gpt`
+- `all` expands to all six hosted options
+
+You can mix groups and explicit IDs:
+
+```bash
+dari-docs check . \
+  --managed \
+  --feedback-llm claude,medium-gpt \
+  --task "Install the SDK and make a first API call"
+```
 
 ## Log out
 

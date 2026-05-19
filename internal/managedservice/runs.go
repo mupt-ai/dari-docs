@@ -29,6 +29,22 @@ var (
 	errRunFeedbackLoad     = errors.New("run feedback unavailable")
 )
 
+const (
+	runSourceCLI = "cli"
+	runSourceWeb = "web"
+
+	managedMaxSourceManifestBytes = 1 << 20
+	managedMaxBundlePatternBytes  = 64 * 1024
+)
+
+type managedSourceManifest struct {
+	Files []managedSourceManifestFile `json:"files"`
+}
+
+type managedSourceManifestFile struct {
+	Path string `json:"path"`
+}
+
 type activeRunLimitError struct {
 	Limit int
 }
@@ -60,9 +76,9 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	maxMultipartBytes := s.cfg.MaxBundleBytes + 1<<20
+	maxMultipartBytes := s.maxManagedRunMultipartBytes()
 	if r.ContentLength > maxMultipartBytes {
-		writeError(w, http.StatusRequestEntityTooLarge, "bundle exceeds managed size limit")
+		writeError(w, http.StatusRequestEntityTooLarge, "upload exceeds managed size limit")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxMultipartBytes)
@@ -80,7 +96,16 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		runtimeSecretNames []string
 		runtimeNonce       []byte
 		runtimeCiphertext  []byte
+		testerLLMIDs       []string
+		editorLLMID        string
 		tmpPath            string
+		sourceRoot         string
+		sourcePaths        []string
+		sourceFilesSeen    int
+		sourceUploadBytes  int64
+		sourceInclude      []string
+		sourceExclude      []string
+		runSource          = runSourceCLI
 		b                  bundle.Result
 		bundleName         string
 		reserve            int64
@@ -92,7 +117,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		}
 		if err != nil {
 			if isRequestBodyTooLarge(err) {
-				writeError(w, http.StatusRequestEntityTooLarge, "bundle exceeds managed size limit")
+				writeError(w, http.StatusRequestEntityTooLarge, "upload exceeds managed size limit")
 				return
 			}
 			writeLoggedError(w, http.StatusBadRequest, "invalid multipart form", err)
@@ -143,35 +168,114 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
-		case "bundle":
-			if mode == "" || tasks == nil {
-				writeError(w, http.StatusBadRequest, "mode and tasks_json must be sent before bundle")
+		case "feedback_llm_ids_json":
+			v, err := readTextPart(part, 1024)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "feedback_llm_ids_json field is too large")
 				return
 			}
-			if runtimeSecretJSON != "" && !liveVerify {
-				writeError(w, http.StatusBadRequest, "runtime secrets require live_verify=true")
+			testerLLMIDs, err = parseManagedLLMIDsJSON(v)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
-			if runtimeSecretJSON != "" {
-				runtimeNonce, runtimeCiphertext, err = s.encryptRuntimeSecrets([]byte(runtimeSecretJSON))
+		case "editor_llm_id":
+			v, err := readTextPart(part, 128)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "editor_llm_id field is too large")
+				return
+			}
+			editorLLMID, err = normalizeManagedLLMID(v)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		case "bundle_include_json":
+			v, err := readTextPart(part, managedMaxBundlePatternBytes)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "bundle_include_json field is too large")
+				return
+			}
+			sourceInclude, err = parseStringListJSON(v, "bundle_include_json")
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		case "bundle_exclude_json":
+			v, err := readTextPart(part, managedMaxBundlePatternBytes)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "bundle_exclude_json field is too large")
+				return
+			}
+			sourceExclude, err = parseStringListJSON(v, "bundle_exclude_json")
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		case "source_files_json":
+			if sourceRoot != "" {
+				writeError(w, http.StatusBadRequest, "source_files_json must be sent before source_file")
+				return
+			}
+			if tmpPath != "" {
+				writeError(w, http.StatusBadRequest, "source files cannot be sent with a prebuilt bundle")
+				return
+			}
+			if sourcePaths != nil {
+				writeError(w, http.StatusBadRequest, "source_files_json field must be sent once")
+				return
+			}
+			v, err := readTextPart(part, managedMaxSourceManifestBytes)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "source_files_json field is too large")
+				return
+			}
+			sourcePaths, err = parseManagedSourceManifest(v)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		case "source_file":
+			if mode == "" {
+				writeError(w, http.StatusBadRequest, "mode must be sent before source_file")
+				return
+			}
+			if tmpPath != "" {
+				writeError(w, http.StatusBadRequest, "send either bundle or source files, not both")
+				return
+			}
+			if len(sourcePaths) == 0 {
+				writeError(w, http.StatusBadRequest, "source_files_json must be sent before source_file")
+				return
+			}
+			if sourceFilesSeen >= len(sourcePaths) {
+				writeError(w, http.StatusBadRequest, "too many source_file parts")
+				return
+			}
+			if sourceRoot == "" {
+				sourceRoot, err = os.MkdirTemp("", "dari-docs-source-*")
 				if err != nil {
-					writeLoggedError(w, http.StatusInternalServerError, "could not encrypt runtime secrets", err)
+					writeLoggedError(w, http.StatusInternalServerError, "could not stage source files", err)
 					return
 				}
+				defer os.RemoveAll(sourceRoot)
 			}
-			reserve = reserveCentsForRun(mode, len(tasks), s.cfg)
-			if err := s.preflightRun(r.Context(), u.ID, reserve); err != nil {
-				var activeErr *activeRunLimitError
-				if errors.As(err, &activeErr) {
-					writeError(w, http.StatusConflict, err.Error())
+			if err := s.stageManagedSourceFile(part, sourceRoot, sourcePaths[sourceFilesSeen], &sourceUploadBytes); err != nil {
+				if errors.Is(err, errBundleTooLarge) {
+					writeError(w, http.StatusRequestEntityTooLarge, "source upload exceeds managed size limit")
 					return
 				}
-				var creditErr *insufficientCreditsError
-				if errors.As(err, &creditErr) {
-					writeError(w, http.StatusPaymentRequired, creditErr.Error())
-					return
-				}
-				writeLoggedError(w, http.StatusInternalServerError, "could not reserve managed run", err)
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			sourceFilesSeen++
+		case "bundle":
+			if sourceRoot != "" || len(sourcePaths) > 0 || len(sourceInclude) > 0 || len(sourceExclude) > 0 {
+				writeError(w, http.StatusBadRequest, "send either bundle or source files, not both")
+				return
+			}
+			if tmpPath != "" {
+				writeError(w, http.StatusBadRequest, "bundle file must be sent once")
 				return
 			}
 			tmpPath, b, err = s.stageManagedBundle(part)
@@ -200,9 +304,6 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 			writeError(w, http.StatusBadRequest, "unexpected multipart field")
 			return
 		}
-		if tmpPath != "" {
-			break
-		}
 	}
 	if mode == "" {
 		writeError(w, http.StatusBadRequest, "mode must be check or optimize")
@@ -212,8 +313,75 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusBadRequest, "tasks_json must be a JSON string array")
 		return
 	}
+	if sourceRoot != "" || len(sourcePaths) > 0 {
+		if sourceRoot == "" {
+			writeError(w, http.StatusBadRequest, "source_file is required")
+			return
+		}
+		if sourceFilesSeen != len(sourcePaths) {
+			writeError(w, http.StatusBadRequest, "source_file parts do not match source_files_json")
+			return
+		}
+		var err error
+		tmpPath, b, err = s.stageManagedSourceBundle(sourceRoot, bundle.CreateOptions{
+			Include:      sourceInclude,
+			Exclude:      sourceExclude,
+			MaxFileBytes: s.cfg.BundleMaxFileBytes,
+		})
+		if err != nil {
+			if errors.Is(err, errBundleTooLarge) {
+				writeError(w, http.StatusRequestEntityTooLarge, "bundle exceeds managed size limit")
+				return
+			}
+			if errors.Is(err, errBundleStageInternal) {
+				writeLoggedError(w, http.StatusInternalServerError, "could not stage bundle", err)
+				return
+			}
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		defer os.Remove(tmpPath)
+		bundleName = "input-docs-bundle.tar.gz"
+		runSource = runSourceWeb
+	} else if len(sourceInclude) > 0 || len(sourceExclude) > 0 {
+		writeError(w, http.StatusBadRequest, "bundle include/exclude options require source files")
+		return
+	}
 	if tmpPath == "" {
 		writeError(w, http.StatusBadRequest, "bundle file is required")
+		return
+	}
+	// Reserve only after reading every part. Multipart clients may send scalar fields after the bundle.
+	if runtimeSecretJSON != "" && !liveVerify {
+		writeError(w, http.StatusBadRequest, "runtime secrets require live_verify=true")
+		return
+	}
+	if runtimeSecretJSON != "" {
+		runtimeNonce, runtimeCiphertext, err = s.encryptRuntimeSecrets([]byte(runtimeSecretJSON))
+		if err != nil {
+			writeLoggedError(w, http.StatusInternalServerError, "could not encrypt runtime secrets", err)
+			return
+		}
+	}
+	if len(testerLLMIDs) == 0 {
+		testerLLMIDs = defaultManagedTesterLLMIDs()
+	}
+	if editorLLMID == "" {
+		editorLLMID = defaultManagedEditorLLMID()
+	}
+	reserve = reserveCentsForRun(mode, len(tasks), len(testerLLMIDs), s.cfg)
+	if err := s.preflightRun(r.Context(), u.ID, reserve); err != nil {
+		var activeErr *activeRunLimitError
+		if errors.As(err, &activeErr) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		var creditErr *insufficientCreditsError
+		if errors.As(err, &creditErr) {
+			writeError(w, http.StatusPaymentRequired, creditErr.Error())
+			return
+		}
+		writeLoggedError(w, http.StatusInternalServerError, "could not reserve managed run", err)
 		return
 	}
 	runID := "run_" + randomToken(18)
@@ -222,13 +390,18 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		writeLoggedError(w, http.StatusInternalServerError, "could not encode managed run tasks", err)
 		return
 	}
+	testerLLMIDsJSON, err := json.Marshal(testerLLMIDs)
+	if err != nil {
+		writeLoggedError(w, http.StatusInternalServerError, "could not encode managed run LLM IDs", err)
+		return
+	}
 	secretNamesJSON, err := json.Marshal(runtimeSecretNames)
 	if err != nil {
 		writeLoggedError(w, http.StatusInternalServerError, "could not encode runtime secret names", err)
 		return
 	}
-	if err := s.reserveRun(r.Context(), u.ID, runID, mode, taskJSON, b, reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
-		if errors.Is(err, errNoActiveManagedAgentRelease) {
+	if err := s.reserveRun(r.Context(), u.ID, runID, mode, taskJSON, testerLLMIDsJSON, editorLLMID, runSource, b, reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
+		if errors.Is(err, errManagedAgentsNotConfigured) {
 			writeError(w, http.StatusServiceUnavailable, "managed agents are not configured")
 			return
 		}
@@ -277,6 +450,7 @@ type runListResponse struct {
 type runListItem struct {
 	ID                   string          `json:"id"`
 	Mode                 string          `json:"mode"`
+	Source               string          `json:"source"`
 	Status               string          `json:"status"`
 	Tasks                []string        `json:"tasks"`
 	TaskCount            int             `json:"task_count"`
@@ -331,7 +505,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request, u user) 
 		direction = "ASC"
 	}
 	query := fmt.Sprintf(`
-SELECT id, mode, status, tasks, created_at, completed_at, reserved_cents, charged_cents,
+SELECT id, mode, coalesce(source, 'cli'), status, tasks, created_at, completed_at, reserved_cents, charged_cents,
        coalesce(cost_status,''), coalesce(error,''), coalesce(editor_session_id,'')
 FROM runs
 WHERE user_id=$1
@@ -352,7 +526,7 @@ LIMIT $2 OFFSET $3
 		var item runListItem
 		var tasksJSON []byte
 		var costStatus, editorSessionID string
-		if err := rows.Scan(&item.ID, &item.Mode, &item.Status, &tasksJSON, &item.CreatedAt, &item.CompletedAt, &item.ReservedCents, &item.ChargedCents, &costStatus, &item.Error, &editorSessionID); err != nil {
+		if err := rows.Scan(&item.ID, &item.Mode, &item.Source, &item.Status, &tasksJSON, &item.CreatedAt, &item.CompletedAt, &item.ReservedCents, &item.ChargedCents, &costStatus, &item.Error, &editorSessionID); err != nil {
 			writeLoggedError(w, http.StatusInternalServerError, "could not list runs", err)
 			return
 		}
@@ -443,8 +617,7 @@ func runListOrderExpr(sort string) (runListOrder, bool) {
 		return runListOrder{Expr: "coalesce(completed_at, '0001-01-01'::timestamptz)"}, true
 	case "llms":
 		return runListOrder{
-			Expr: `(SELECT string_agg(coalesce(nullif(rs.llm_id,''), $4), ',' ORDER BY CASE rs.kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, rs.task_index) FROM run_sessions rs WHERE rs.run_id = runs.id)`,
-			Args: []any{managedDefaultLLMID},
+			Expr: `(array_to_string(ARRAY(SELECT jsonb_array_elements_text(runs.tester_llm_ids)), ',') || ',' || runs.editor_llm_id)`,
 		}, true
 	default:
 		return runListOrder{}, false
@@ -472,27 +645,50 @@ func (s *Server) loadRunLLMSummaries(ctx context.Context, userID string, runIDs 
 	if len(runIDs) == 0 {
 		return out, nil
 	}
-	rows, err := s.db.Query(ctx, `
-SELECT rs.run_id, rs.kind, coalesce(nullif(rs.llm_id,''), $3) AS llm_id, count(*)
-FROM run_sessions rs
-JOIN runs r ON r.id = rs.run_id
-WHERE r.user_id=$1 AND rs.run_id = ANY($2)
-GROUP BY rs.run_id, rs.kind, coalesce(nullif(rs.llm_id,''), $3)
-ORDER BY rs.run_id, CASE rs.kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, llm_id
-`, userID, runIDs, managedDefaultLLMID)
+	plannedRows, err := s.db.Query(ctx, `
+SELECT id, mode, jsonb_array_length(tasks), tester_llm_ids, editor_llm_id
+FROM runs
+WHERE user_id=$1 AND id = ANY($2)
+`, userID, runIDs)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var runID string
-		var item runLLMSummary
-		if err := rows.Scan(&runID, &item.Role, &item.LLMID, &item.Count); err != nil {
+	for plannedRows.Next() {
+		var runID, mode, editorLLMID string
+		var taskCount int
+		var testerLLMIDsJSON []byte
+		if err := plannedRows.Scan(&runID, &mode, &taskCount, &testerLLMIDsJSON, &editorLLMID); err != nil {
+			plannedRows.Close()
 			return nil, err
 		}
-		out[runID] = append(out[runID], item)
+		var testerLLMIDs []string
+		if err := json.Unmarshal(testerLLMIDsJSON, &testerLLMIDs); err != nil {
+			plannedRows.Close()
+			return nil, err
+		}
+		testerLLMIDs, err = normalizeManagedLLMIDs(testerLLMIDs)
+		if err != nil {
+			plannedRows.Close()
+			return nil, err
+		}
+		for _, llmID := range testerLLMIDs {
+			out[runID] = append(out[runID], runLLMSummary{Role: "tester", LLMID: llmID, Count: taskCount})
+		}
+		if mode == "optimize" {
+			editorLLMID, err = normalizeManagedLLMID(editorLLMID)
+			if err != nil {
+				plannedRows.Close()
+				return nil, err
+			}
+			out[runID] = append(out[runID], runLLMSummary{Role: "editor", LLMID: editorLLMID, Count: 1})
+		}
 	}
-	return out, rows.Err()
+	if err := plannedRows.Err(); err != nil {
+		plannedRows.Close()
+		return nil, err
+	}
+	plannedRows.Close()
+	return out, nil
 }
 
 func (s *Server) stageManagedBundle(part *multipart.Part) (string, bundle.Result, error) {
@@ -528,6 +724,181 @@ func (s *Server) stageManagedBundle(part *multipart.Part) (string, bundle.Result
 	}
 	keep = true
 	return tmpPath, b, nil
+}
+
+func (s *Server) maxManagedRunMultipartBytes() int64 {
+	limit := s.cfg.MaxBundleBytes
+	if s.cfg.BundleMaxUncompressedBytes > limit {
+		limit = s.cfg.BundleMaxUncompressedBytes
+	}
+	if limit <= 0 {
+		limit = bundle.DefaultMaxUncompressedBytes
+	}
+	overhead := limit / 10
+	if overhead < 1<<20 {
+		overhead = 1 << 20
+	}
+	if overhead > 8<<20 {
+		overhead = 8 << 20
+	}
+	return limit + overhead
+}
+
+func (s *Server) stageManagedSourceFile(part *multipart.Part, root string, rel string, totalBytes *int64) error {
+	rel, err := normalizeManagedSourcePath(rel)
+	if err != nil {
+		return err
+	}
+	maxFileBytes := s.cfg.BundleMaxFileBytes
+	if maxFileBytes <= 0 {
+		maxFileBytes = bundle.DefaultMaxFileBytes
+	}
+	target := filepath.Join(root, filepath.FromSlash(rel))
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	targetAbs, err := filepath.Abs(target)
+	if err != nil {
+		return err
+	}
+	inside, err := filepath.Rel(rootAbs, targetAbs)
+	if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) || filepath.IsAbs(inside) {
+		return fmt.Errorf("invalid source file path %q", rel)
+	}
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		return fmt.Errorf("stage source file %q: %w", rel, err)
+	}
+	out, err := os.Create(targetAbs)
+	if err != nil {
+		return fmt.Errorf("stage source file %q: %w", rel, err)
+	}
+	written, copyErr := io.Copy(out, io.LimitReader(part, maxFileBytes+1))
+	closeErr := out.Close()
+	if copyErr != nil {
+		return fmt.Errorf("stage source file %q: %w", rel, copyErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("stage source file %q: %w", rel, closeErr)
+	}
+	if written > maxFileBytes {
+		return fmt.Errorf("%w: source file %q exceeds managed per-file limit", errBundleTooLarge, rel)
+	}
+	*totalBytes += written
+	maxUncompressedBytes := s.cfg.BundleMaxUncompressedBytes
+	if maxUncompressedBytes <= 0 {
+		maxUncompressedBytes = bundle.DefaultMaxUncompressedBytes
+	}
+	if *totalBytes > maxUncompressedBytes {
+		return errBundleTooLarge
+	}
+	return nil
+}
+
+func (s *Server) stageManagedSourceBundle(sourceRoot string, opts bundle.CreateOptions) (string, bundle.Result, error) {
+	tmp, err := os.CreateTemp("", "dari-docs-bundle-*.tar.gz")
+	if err != nil {
+		return "", bundle.Result{}, fmt.Errorf("%w: create temporary bundle file: %v", errBundleStageInternal, err)
+	}
+	tmpPath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", bundle.Result{}, fmt.Errorf("%w: close temporary bundle file: %v", errBundleStageInternal, err)
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	b, err := bundle.CreateWithOptions(sourceRoot, tmpPath, opts)
+	if err != nil {
+		return "", bundle.Result{}, err
+	}
+	maxBundleBytes := s.cfg.MaxBundleBytes
+	if maxBundleBytes <= 0 {
+		maxBundleBytes = managedMaxBundleBytes
+	}
+	if b.Bytes > maxBundleBytes {
+		return "", bundle.Result{}, errBundleTooLarge
+	}
+	if len(b.Manifest.Files) == 0 {
+		return "", bundle.Result{}, errors.New("source upload did not contain any supported docs files")
+	}
+	keep = true
+	return tmpPath, b, nil
+}
+
+func parseManagedSourceManifest(raw string) ([]string, error) {
+	var manifest managedSourceManifest
+	if err := json.Unmarshal([]byte(raw), &manifest); err == nil && manifest.Files != nil {
+		paths := make([]string, 0, len(manifest.Files))
+		for _, file := range manifest.Files {
+			paths = append(paths, file.Path)
+		}
+		return normalizeManagedSourcePaths(paths)
+	}
+	var paths []string
+	if err := json.Unmarshal([]byte(raw), &paths); err != nil {
+		return nil, errors.New("source_files_json must be a JSON array of paths or an object with files")
+	}
+	return normalizeManagedSourcePaths(paths)
+}
+
+func normalizeManagedSourcePaths(paths []string) ([]string, error) {
+	out := make([]string, 0, len(paths))
+	seen := map[string]bool{}
+	for _, raw := range paths {
+		rel, err := normalizeManagedSourcePath(raw)
+		if err != nil {
+			return nil, err
+		}
+		if seen[rel] {
+			return nil, fmt.Errorf("duplicate source file path %q", rel)
+		}
+		seen[rel] = true
+		out = append(out, rel)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("source_files_json must include at least one file")
+	}
+	return out, nil
+}
+
+func normalizeManagedSourcePath(raw string) (string, error) {
+	rel := strings.TrimSpace(filepath.ToSlash(raw))
+	rel = strings.TrimPrefix(rel, "./")
+	if err := bundle.ValidateRelativePath(rel); err != nil {
+		return "", err
+	}
+	return rel, nil
+}
+
+func parseStringListJSON(raw string, field string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil, fmt.Errorf("%s must be a JSON string array", field)
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out, nil
+}
+
+func normalizeRunSource(source string) string {
+	if source == runSourceWeb {
+		return runSourceWeb
+	}
+	return runSourceCLI
 }
 
 func (s *Server) preflightRun(ctx context.Context, userID string, reserve int64) error {
@@ -567,8 +938,11 @@ func parseManagedTasksJSON(raw string, maxTasks int, maxTaskBytes int64) ([]stri
 	return tasks, nil
 }
 
-func reserveCentsForRun(mode string, taskCount int, cfg Config) int64 {
-	reserve := int64(taskCount) * cfg.TesterReserveCents
+func reserveCentsForRun(mode string, taskCount int, testerLLMCount int, cfg Config) int64 {
+	if testerLLMCount <= 0 {
+		testerLLMCount = 1
+	}
+	reserve := int64(taskCount*testerLLMCount) * cfg.TesterReserveCents
 	if mode == "optimize" {
 		reserve += cfg.EditorReserveCents
 	}
@@ -589,11 +963,12 @@ func (s *Server) maxActiveRunsPerUser() int {
 	return int(managedMaxActiveRunsPerUser)
 }
 
-func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, taskJSON []byte, b bundle.Result, reserve int64, liveVerify bool, secretNamesJSON, runtimeNonce, runtimeCiphertext []byte) error {
-	release, err := s.loadManagedAgentRelease(ctx)
+func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, taskJSON, testerLLMIDsJSON []byte, editorLLMID string, source string, b bundle.Result, reserve int64, liveVerify bool, secretNamesJSON, runtimeNonce, runtimeCiphertext []byte) error {
+	agents, err := s.configuredManagedAgents()
 	if err != nil {
 		return err
 	}
+	source = normalizeRunSource(source)
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -617,10 +992,33 @@ func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, tas
 	if balance < reserve {
 		return &insufficientCreditsError{Need: reserve, Balance: balance}
 	}
+	if editorLLMID == "" {
+		editorLLMID = defaultManagedEditorLLMID()
+	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO runs (id, user_id, mode, status, tasks, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files, reserved_cents, live_verify, runtime_secret_names, runtime_secrets_nonce, runtime_secrets_ciphertext)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-		`, runID, userID, mode, statusUploading, taskJSON, release.TesterAgentID, release.TesterVersionID, release.EditorAgentID, release.EditorVersionID, b.SHA256, len(b.Manifest.Files), reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
+		INSERT INTO runs (id, user_id, mode, source, status, tasks, tester_llm_ids, editor_llm_id, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files, reserved_cents, live_verify, runtime_secret_names, runtime_secrets_nonce, runtime_secrets_ciphertext)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+		`,
+		runID,
+		userID,
+		mode,
+		source,
+		statusUploading,
+		taskJSON,
+		testerLLMIDsJSON,
+		editorLLMID,
+		agents.TesterAgentID,
+		managedAgentVersionCompatibilityValue,
+		agents.EditorAgentID,
+		managedAgentVersionCompatibilityValue,
+		b.SHA256,
+		len(b.Manifest.Files),
+		reserve,
+		liveVerify,
+		secretNamesJSON,
+		runtimeNonce,
+		runtimeCiphertext,
+	); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -710,6 +1108,7 @@ func (s *Server) handleUpdatedZip(w http.ResponseWriter, r *http.Request, u user
 type runStatusResponse struct {
 	ID                   string              `json:"id"`
 	Mode                 string              `json:"mode"`
+	Source               string              `json:"source"`
 	Status               string              `json:"status"`
 	Error                string              `json:"error,omitempty"`
 	Tasks                []string            `json:"tasks,omitempty"`
@@ -732,10 +1131,10 @@ func (s *Server) loadRunStatus(ctx context.Context, userID, runID string) (runSt
 	var tasksJSON []byte
 	var costStatus string
 	err := s.db.QueryRow(ctx, `
-SELECT id, mode, status, tasks, coalesce(error,''), coalesce(editor_session_id,''), reserved_cents, charged_cents,
+SELECT id, mode, coalesce(source, 'cli'), status, tasks, coalesce(error,''), coalesce(editor_session_id,''), reserved_cents, charged_cents,
        coalesce(cost_status,''), created_at, completed_at
 FROM runs WHERE id=$1 AND user_id=$2
-`, runID, userID).Scan(&rs.ID, &rs.Mode, &rs.Status, &tasksJSON, &rs.Error, &editorSessionID, &rs.ReservedCents, &rs.ChargedCents, &costStatus, &rs.CreatedAt, &rs.CompletedAt)
+`, runID, userID).Scan(&rs.ID, &rs.Mode, &rs.Source, &rs.Status, &tasksJSON, &rs.Error, &editorSessionID, &rs.ReservedCents, &rs.ChargedCents, &costStatus, &rs.CreatedAt, &rs.CompletedAt)
 	if err != nil {
 		return rs, err
 	}
@@ -783,8 +1182,8 @@ SELECT rs.kind,
 FROM run_sessions rs
 JOIN runs r ON r.id = rs.run_id
 WHERE r.id=$1 AND r.user_id=$2
-ORDER BY CASE rs.kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, rs.task_index, rs.created_at
-`, runID, userID, managedDefaultLLMID)
+ORDER BY CASE rs.kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, rs.task_index, rs.llm_id, rs.created_at
+`, runID, userID, defaultManagedEditorLLMID())
 	if err != nil {
 		return nil, err
 	}
@@ -810,33 +1209,40 @@ ORDER BY CASE rs.kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, rs.t
 
 func (s *Server) completedTesterReports(ctx context.Context, runID string) ([]string, error) {
 	rows, err := s.db.Query(ctx, `
-SELECT session_id
+SELECT session_id,
+       task_index,
+       coalesce(nullif(llm_id,''), $3)
 FROM run_sessions
 WHERE run_id=$1 AND kind='tester' AND status=$2
-ORDER BY task_index, created_at
-`, runID, statusCompleted)
+ORDER BY task_index, llm_id, created_at
+`, runID, statusCompleted, defaultManagedEditorLLMID())
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var sessionIDs []string
+	type testerSession struct {
+		id        string
+		taskIndex int
+		llmID     string
+	}
+	var sessions []testerSession
 	for rows.Next() {
-		var sessionID string
-		if err := rows.Scan(&sessionID); err != nil {
+		var session testerSession
+		if err := rows.Scan(&session.id, &session.taskIndex, &session.llmID); err != nil {
 			return nil, err
 		}
-		sessionIDs = append(sessionIDs, sessionID)
+		sessions = append(sessions, session)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	reports := make([]string, 0, len(sessionIDs))
-	for _, sessionID := range sessionIDs {
-		tr, err := s.dari.GetTranscript(ctx, sessionID)
+	reports := make([]string, 0, len(sessions))
+	for _, session := range sessions {
+		tr, err := s.dari.GetTranscript(ctx, session.id)
 		if err != nil {
-			return nil, fmt.Errorf("%w: get transcript %s: %v", errRunFeedbackLoad, sessionID, err)
+			return nil, fmt.Errorf("%w: get transcript %s: %v", errRunFeedbackLoad, session.id, err)
 		}
-		reports = append(reports, dari.FinalAssistantText(tr))
+		reports = append(reports, formatManagedFeedbackReport(session.taskIndex, session.llmID, dari.FinalAssistantText(tr)))
 	}
 	return reports, nil
 }

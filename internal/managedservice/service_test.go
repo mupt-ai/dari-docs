@@ -1,7 +1,9 @@
 package managedservice
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -10,10 +12,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,7 +25,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mupt-ai/dari-docs/internal/bundle"
-	"github.com/mupt-ai/dari-docs/internal/dari"
 	stripe "github.com/stripe/stripe-go/v82"
 )
 
@@ -62,8 +65,8 @@ func TestConfigFromEnvUsesManagedConstants(t *testing.T) {
 	if cfg.SupabaseURL != "https://supabase.example.test" || cfg.SupabasePublishableKey != "publishable" {
 		t.Fatalf("supabase config = %q/%q", cfg.SupabaseURL, cfg.SupabasePublishableKey)
 	}
-	if cfg.ManagedTesterAgentID != "agt_tester" || cfg.ManagedEditorAgentID != "agt_editor" || cfg.ReleaseAdminToken != "release-admin-token" {
-		t.Fatalf("managed agent config = %q/%q %q/%q", cfg.ManagedTesterAgentID, cfg.ManagedTesterVersionID, cfg.ManagedEditorAgentID, cfg.ManagedEditorVersionID)
+	if cfg.ManagedTesterAgentID != "agt_tester" || cfg.ManagedEditorAgentID != "agt_editor" {
+		t.Fatalf("managed agent config = tester:%q editor:%q", cfg.ManagedTesterAgentID, cfg.ManagedEditorAgentID)
 	}
 	for name, gotWant := range map[string][2]int64{
 		"FreeGrantCents":             {cfg.FreeGrantCents, managedFreeGrantCents},
@@ -146,7 +149,6 @@ func TestConfigFromEnvKeepsDeploymentOverridesAndIgnoresManagedEnvKnobs(t *testi
 func TestConfigFromEnvRequiresRuntimeSecretEncryptionKey(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/dari_docs")
 	t.Setenv("DARI_API_KEY", "dari_test")
-	t.Setenv("DARI_DOCS_RELEASE_ADMIN_TOKEN", "release-admin-token")
 	setRequiredSupabaseEnv(t)
 	setRequiredManagedAgentEnv(t)
 	_, err := ConfigFromEnv()
@@ -161,7 +163,6 @@ func TestConfigFromEnvRequiresSupabaseConfig(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/dari_docs")
 	t.Setenv("DARI_API_KEY", "dari_test")
 	t.Setenv("DARI_DOCS_SECRET_ENCRYPTION_KEY", testManagedSecretEncryptionKey())
-	t.Setenv("DARI_DOCS_RELEASE_ADMIN_TOKEN", "release-admin-token")
 	setRequiredManagedAgentEnv(t)
 	_, err := ConfigFromEnv()
 	if err == nil || !strings.Contains(err.Error(), "SUPABASE_URL is required") {
@@ -179,22 +180,9 @@ func TestConfigFromEnvRequiresManagedHostedAgents(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/dari_docs")
 	t.Setenv("DARI_API_KEY", "dari_test")
 	t.Setenv("DARI_DOCS_SECRET_ENCRYPTION_KEY", testManagedSecretEncryptionKey())
-	t.Setenv("DARI_DOCS_RELEASE_ADMIN_TOKEN", "release-admin-token")
 	setRequiredSupabaseEnv(t)
 	_, err := ConfigFromEnv()
 	if err == nil || !strings.Contains(err.Error(), "MANAGED_TESTER_AGENT_ID is required") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestConfigFromEnvRequiresReleaseAdminToken(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://example.invalid/dari_docs")
-	t.Setenv("DARI_API_KEY", "dari_test")
-	t.Setenv("DARI_DOCS_SECRET_ENCRYPTION_KEY", testManagedSecretEncryptionKey())
-	setRequiredSupabaseEnv(t)
-	setRequiredManagedAgentEnv(t)
-	_, err := ConfigFromEnv()
-	if err == nil || !strings.Contains(err.Error(), "DARI_DOCS_RELEASE_ADMIN_TOKEN is required") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -538,7 +526,21 @@ func TestHandleRunConfigReturnsLaunchPricingAndLimits(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	var got map[string]int64
+	var got struct {
+		FreeCreditCents            int64    `json:"free_credit_cents"`
+		TesterSessionReserveCents  int64    `json:"tester_session_reserve_cents"`
+		EditorSessionReserveCents  int64    `json:"editor_session_reserve_cents"`
+		ServiceFeeCents            int64    `json:"service_fee_cents"`
+		MaxTasksPerRun             int64    `json:"max_tasks_per_run"`
+		MaxTaskBytes               int64    `json:"max_task_bytes"`
+		MaxActiveRunsPerUser       int64    `json:"max_active_runs_per_user"`
+		MaxBundleBytes             int64    `json:"max_bundle_bytes"`
+		BundleMaxUncompressedBytes int64    `json:"bundle_max_uncompressed_bytes"`
+		BundleMaxFileBytes         int64    `json:"bundle_max_file_bytes"`
+		DefaultLLMID               string   `json:"default_llm_id"`
+		DefaultFeedbackLLMIDs      []string `json:"default_feedback_llm_ids"`
+		AllowedLLMIDs              []string `json:"allowed_llm_ids"`
+	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
@@ -554,9 +556,30 @@ func TestHandleRunConfigReturnsLaunchPricingAndLimits(t *testing.T) {
 		"bundle_max_uncompressed_bytes": 100 * 1024 * 1024,
 		"bundle_max_file_bytes":         5 * 1024 * 1024,
 	} {
-		if got[key] != want {
-			t.Fatalf("%s = %d, want %d; body=%s", key, got[key], want, rec.Body.String())
+		values := map[string]int64{
+			"free_credit_cents":             got.FreeCreditCents,
+			"tester_session_reserve_cents":  got.TesterSessionReserveCents,
+			"editor_session_reserve_cents":  got.EditorSessionReserveCents,
+			"service_fee_cents":             got.ServiceFeeCents,
+			"max_tasks_per_run":             got.MaxTasksPerRun,
+			"max_task_bytes":                got.MaxTaskBytes,
+			"max_active_runs_per_user":      got.MaxActiveRunsPerUser,
+			"max_bundle_bytes":              got.MaxBundleBytes,
+			"bundle_max_uncompressed_bytes": got.BundleMaxUncompressedBytes,
+			"bundle_max_file_bytes":         got.BundleMaxFileBytes,
 		}
+		if values[key] != want {
+			t.Fatalf("%s = %d, want %d; body=%s", key, values[key], want, rec.Body.String())
+		}
+	}
+	if got.DefaultLLMID != defaultManagedEditorLLMID() {
+		t.Fatalf("default_llm_id = %q, want %q", got.DefaultLLMID, defaultManagedEditorLLMID())
+	}
+	if strings.Join(got.DefaultFeedbackLLMIDs, ",") != "dumb-claude,medium-claude,smart-claude" {
+		t.Fatalf("default_feedback_llm_ids = %#v", got.DefaultFeedbackLLMIDs)
+	}
+	if strings.Join(got.AllowedLLMIDs, ",") != "dumb-claude,medium-claude,smart-claude,dumb-gpt,medium-gpt,smart-gpt" {
+		t.Fatalf("allowed_llm_ids = %#v", got.AllowedLLMIDs)
 	}
 }
 
@@ -932,212 +955,117 @@ func TestReserveRunStoresConfiguredHostedAgents(t *testing.T) {
 			{Path: "README.md", SizeBytes: 12, SHA256: "file_sha"},
 		}},
 	}
-	if err := s.reserveRun(ctx, userID, runID, "check", []byte(`["task"]`), result, 75, false, []byte(`[]`), nil, nil); err != nil {
+	if err := s.reserveRun(ctx, userID, runID, "check", []byte(`["task"]`), []byte(`["dumb-claude","smart-claude"]`), "smart-claude", runSourceCLI, result, 150, false, []byte(`[]`), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
-	var testerAgentID, testerVersionID, editorAgentID, editorVersionID string
+	var testerAgentID, testerVersionID, editorAgentID, editorVersionID, source string
+	var testerLLMIDsJSON []byte
+	var editorLLMID string
 	if err := db.QueryRow(ctx, `
-SELECT tester_agent_id, tester_version_id, editor_agent_id, editor_version_id
+SELECT tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, tester_llm_ids, editor_llm_id, source
 FROM runs WHERE id=$1
-`, runID).Scan(&testerAgentID, &testerVersionID, &editorAgentID, &editorVersionID); err != nil {
+`, runID).Scan(&testerAgentID, &testerVersionID, &editorAgentID, &editorVersionID, &testerLLMIDsJSON, &editorLLMID, &source); err != nil {
 		t.Fatal(err)
 	}
-	if testerAgentID != "agt_tester" || testerVersionID != "ver_tester" || editorAgentID != "agt_editor" || editorVersionID != "ver_editor" {
+	if testerAgentID != "agt_tester" ||
+		testerVersionID != managedAgentVersionCompatibilityValue ||
+		editorAgentID != "agt_editor" ||
+		editorVersionID != managedAgentVersionCompatibilityValue {
 		t.Fatalf("agent config = tester:%q/%q editor:%q/%q", testerAgentID, testerVersionID, editorAgentID, editorVersionID)
 	}
-}
-
-func TestReserveRunStoresActiveManagedAgentRelease(t *testing.T) {
-	db := openManagedServiceTestDB(t)
-	ctx := context.Background()
-
-	s := &Server{db: db, cfg: testManagedHostedAgentConfig()}
-	userID := "usr_test_" + randomToken(8)
-	runID := "run_test_" + randomToken(8)
-	t.Cleanup(func() {
-		_, _ = db.Exec(context.Background(), `DELETE FROM credit_ledger WHERE run_id=$1 OR user_id=$2`, runID, userID)
-		_, _ = db.Exec(context.Background(), `DELETE FROM runs WHERE id=$1`, runID)
-		_, _ = db.Exec(context.Background(), `DELETE FROM managed_agent_releases WHERE id=$1`, "mar_test_"+runID)
-		_, _ = db.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
-	})
-	if _, err := db.Exec(ctx, `INSERT INTO users (id, auth_subject, email) VALUES ($1, $2, $3)`, userID, "auth_"+userID, userID+"@example.test"); err != nil {
+	var testerLLMIDs []string
+	if err := json.Unmarshal(testerLLMIDsJSON, &testerLLMIDs); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(ctx, `INSERT INTO credit_ledger (id, user_id, amount_cents, kind, source_id) VALUES ($1, $2, 500, 'test_credit', $3)`, "cred_"+randomToken(8), userID, "src_"+randomToken(8)); err != nil {
-		t.Fatal(err)
+	if strings.Join(testerLLMIDs, ",") != "dumb-claude,smart-claude" {
+		t.Fatalf("tester_llm_ids = %#v", testerLLMIDs)
 	}
-	if _, err := db.Exec(ctx, `UPDATE managed_agent_releases SET active=false WHERE active`); err != nil {
-		t.Fatal(err)
+	if editorLLMID != "smart-claude" {
+		t.Fatalf("editor_llm_id = %q", editorLLMID)
 	}
-	if _, err := db.Exec(ctx, `
-INSERT INTO managed_agent_releases (id, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, active, source)
-VALUES ($1, 'agt_tester', 'ver_active_tester', 'agt_editor', 'ver_active_editor', true, 'test')
-`, "mar_test_"+runID); err != nil {
-		t.Fatal(err)
-	}
-
-	result := bundle.Result{
-		SHA256: "bundle_sha",
-		Manifest: bundle.Manifest{Files: []bundle.FileRecord{
-			{Path: "README.md", SizeBytes: 12, SHA256: "file_sha"},
-		}},
-	}
-	if err := s.reserveRun(ctx, userID, runID, "check", []byte(`["task"]`), result, 75, false, []byte(`[]`), nil, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	var testerVersionID, editorVersionID string
-	if err := db.QueryRow(ctx, `
-SELECT tester_version_id, editor_version_id FROM runs WHERE id=$1
-`, runID).Scan(&testerVersionID, &editorVersionID); err != nil {
-		t.Fatal(err)
-	}
-	if testerVersionID != "ver_active_tester" || editorVersionID != "ver_active_editor" {
-		t.Fatalf("run versions = tester:%q editor:%q", testerVersionID, editorVersionID)
+	if source != runSourceCLI {
+		t.Fatalf("source = %q, want %q", source, runSourceCLI)
 	}
 }
 
-func TestActivateManagedAgentReleasePreservesOmittedSide(t *testing.T) {
-	db := openManagedServiceTestDB(t)
-	ctx := context.Background()
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/v1/agents/agt_tester/versions/ver_tester_new":
-			writeJSON(w, http.StatusOK, map[string]any{
-				"agent":   map[string]any{"id": "agt_tester", "active_version_id": "ver_tester_new"},
-				"version": map[string]any{"id": "ver_tester_new", "agent_id": "agt_tester"},
-			})
-		case "/v1/agents/agt_editor/versions/ver_editor_old":
-			writeJSON(w, http.StatusOK, map[string]any{
-				"agent":   map[string]any{"id": "agt_editor", "active_version_id": "ver_editor_old"},
-				"version": map[string]any{"id": "ver_editor_old", "agent_id": "agt_editor"},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer upstream.Close()
+func TestStageManagedSourceBundleUsesBundlerRules(t *testing.T) {
+	root := t.TempDir()
+	s := &Server{cfg: Config{
+		MaxBundleBytes:             1024 * 1024,
+		BundleMaxUncompressedBytes: 1024 * 1024,
+		BundleMaxFileBytes:         1024,
+	}}
 
-	s := &Server{db: db, cfg: Config{ManagedTesterAgentID: "agt_tester", ManagedEditorAgentID: "agt_editor"}, dari: dari.New(upstream.URL, "dari_test")}
-	releaseID := "mar_test_" + randomToken(8)
-	t.Cleanup(func() {
-		_, _ = db.Exec(context.Background(), `DELETE FROM managed_agent_releases WHERE id=$1 OR source=$2`, releaseID, "github_actions")
-	})
-	if _, err := db.Exec(ctx, `UPDATE managed_agent_releases SET active=false WHERE active`); err != nil {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	partWriter, err := mw.CreateFormFile("source_file", "README.md")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(ctx, `
-INSERT INTO managed_agent_releases (id, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, active, source)
-VALUES ($1, 'agt_tester', 'ver_tester_old', 'agt_editor', 'ver_editor_old', true, 'test')
-`, releaseID); err != nil {
+	if _, err := partWriter.Write([]byte("# Docs\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	mr := multipart.NewReader(&body, mw.Boundary())
+	part, err := mr.NextPart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var totalBytes int64
+	if err := s.stageManagedSourceFile(part, root, "README.md", &totalBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "examples"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "examples", "demo.py"), []byte("print('ok')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "node_modules", "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "node_modules", "pkg", "index.md"), []byte("skip\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "drafts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "drafts", "skip.md"), []byte("skip\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	release, err := s.activateManagedAgentRelease(ctx, activateManagedAgentReleaseRequest{
-		TesterVersionID: "ver_tester_new",
-		Source:          "github_actions",
+	tmpPath, result, err := s.stageManagedSourceBundle(root, bundle.CreateOptions{
+		Include:      []string{"examples/*.py"},
+		Exclude:      []string{"drafts/**"},
+		MaxFileBytes: 1024,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if release.TesterVersionID != "ver_tester_new" || release.EditorVersionID != "ver_editor_old" {
-		t.Fatalf("release versions = tester:%q editor:%q", release.TesterVersionID, release.EditorVersionID)
+	defer os.Remove(tmpPath)
+
+	var got []string
+	for _, file := range result.Manifest.Files {
+		got = append(got, file.Path)
 	}
-	var activeCount int
-	if err := db.QueryRow(ctx, `SELECT count(*) FROM managed_agent_releases WHERE active`).Scan(&activeCount); err != nil {
-		t.Fatal(err)
-	}
-	if activeCount != 1 {
-		t.Fatalf("active release count = %d, want 1", activeCount)
+	if strings.Join(got, ",") != "README.md,examples/demo.py" {
+		t.Fatalf("bundled paths = %v", got)
 	}
 }
 
-func TestActivateManagedAgentReleaseRequiresCompleteFirstRelease(t *testing.T) {
-	db := openManagedServiceTestDB(t)
-	ctx := context.Background()
-	s := &Server{db: db, cfg: Config{ManagedTesterAgentID: "agt_tester", ManagedEditorAgentID: "agt_editor"}, dari: dari.New("https://api.example.test", "dari_test")}
-	if _, err := db.Exec(ctx, `UPDATE managed_agent_releases SET active=false WHERE active`); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := s.activateManagedAgentRelease(ctx, activateManagedAgentReleaseRequest{TesterVersionID: "ver_tester"})
-	if !errors.Is(err, errNoActiveManagedAgentRelease) {
-		t.Fatalf("error = %v, want errNoActiveManagedAgentRelease", err)
-	}
-}
-
-func TestActivateManagedAgentReleaseRejectsWrongAgentVersion(t *testing.T) {
-	db := openManagedServiceTestDB(t)
-	ctx := context.Background()
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"agent":   map[string]any{"id": "agt_other", "active_version_id": "ver_wrong"},
-			"version": map[string]any{"id": "ver_wrong", "agent_id": "agt_other"},
-		})
-	}))
-	defer upstream.Close()
-	s := &Server{
-		db: db,
-		cfg: Config{
-			ManagedTesterAgentID:   "agt_tester",
-			ManagedTesterVersionID: "ver_tester",
-			ManagedEditorAgentID:   "agt_editor",
-			ManagedEditorVersionID: "ver_editor",
-		},
-		dari: dari.New(upstream.URL, "dari_test"),
-	}
-
-	_, err := s.activateManagedAgentRelease(ctx, activateManagedAgentReleaseRequest{TesterVersionID: "ver_wrong"})
-	if err == nil || !strings.Contains(err.Error(), "does not belong") {
-		t.Fatalf("error = %v, want wrong-agent validation error", err)
-	}
-}
-
-func TestActivateManagedAgentReleaseRejectsMissingVersionAsInvalidRelease(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.NotFound(w, r)
-	}))
-	defer upstream.Close()
-	s := &Server{
-		cfg: Config{
-			ManagedTesterAgentID:   "agt_tester",
-			ManagedTesterVersionID: "ver_tester",
-			ManagedEditorAgentID:   "agt_editor",
-			ManagedEditorVersionID: "ver_editor",
-		},
-		dari: dari.New(upstream.URL, "dari_test"),
-	}
-
-	err := s.validateManagedAgentVersion(context.Background(), "tester_version_id", "agt_tester", "ver_missing")
-	if !errors.Is(err, errInvalidManagedAgentRelease) {
-		t.Fatalf("error = %v, want errInvalidManagedAgentRelease", err)
-	}
-	if !strings.Contains(err.Error(), "was not found") {
-		t.Fatalf("error = %v, want missing-version message", err)
-	}
-}
-
-func TestManagedAgentReleaseAdminAuthRejectsMissingAndWrongToken(t *testing.T) {
-	s := &Server{cfg: Config{ReleaseAdminToken: "release-admin-token"}}
-	for name, header := range map[string]string{
-		"missing": "",
-		"wrong":   "Bearer wrong-token",
+func TestParseManagedSourceManifestRejectsUnsafePaths(t *testing.T) {
+	for _, raw := range []string{
+		`{"files":[{"path":"../secret.txt"}]}`,
+		`{"files":[{"path":"/etc/passwd"}]}`,
+		`{"files":[{"path":"docs\\secret.md"}]}`,
+		`{"files":[{"path":"README.md"},{"path":"README.md"}]}`,
 	} {
-		t.Run(name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/v1/admin/managed-agent-release", nil)
-			if header != "" {
-				req.Header.Set("Authorization", header)
-			}
-			rec := httptest.NewRecorder()
-			s.handleManagedAgentRelease(rec, req)
-			if rec.Code != http.StatusUnauthorized {
-				t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
-			}
-		})
-	}
-	if !validBearerToken("Bearer release-admin-token", "release-admin-token") {
-		t.Fatal("expected release admin token to validate")
+		if _, err := parseManagedSourceManifest(raw); err == nil {
+			t.Fatalf("parseManagedSourceManifest(%s) succeeded, want error", raw)
+		}
 	}
 }
 
@@ -1555,7 +1483,7 @@ func TestRunListOrderExprWhitelistsSorts(t *testing.T) {
 		}
 	}
 	order, ok := runListOrderExpr("llms")
-	if !ok || !strings.Contains(order.Expr, "$4") || len(order.Args) != 1 || order.Args[0] != managedDefaultLLMID {
+	if !ok || !strings.Contains(order.Expr, "tester_llm_ids") || len(order.Args) != 0 {
 		t.Fatalf("llms sort order = %#v ok=%v", order, ok)
 	}
 	if _, ok := runListOrderExpr("created_at; drop table runs"); ok {
@@ -1749,6 +1677,34 @@ func TestHandleRunsRejectsOversizedTaskText(t *testing.T) {
 	}
 }
 
+func TestHandleRunsRejectsUnknownManagedLLM(t *testing.T) {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	if err := mw.WriteField("mode", "check"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.WriteField("tasks_json", `["check the docs"]`); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.WriteField("feedback_llm_ids_json", `["unknown-model"]`); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{cfg: Config{MaxBundleBytes: 1 << 20, MaxTasksPerRun: 3, MaxTaskBytes: 10000}}
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	s.handleRuns(rec, req, user{ID: "usr_test", TokenScopes: []string{scopeManagedCheck}})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "managed mode supports only these LLM IDs") {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
 func TestHandleRunsReturns413ForOversizedMultipartBody(t *testing.T) {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
@@ -1779,25 +1735,28 @@ func TestHandleRunsReturns413ForOversizedMultipartBody(t *testing.T) {
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusRequestEntityTooLarge, rec.Body.String())
 	}
-	if got := rec.Body.String(); !strings.Contains(got, "bundle exceeds managed size limit") || strings.Contains(got, "http: request body too large") {
+	if got := rec.Body.String(); !strings.Contains(got, "upload exceeds managed size limit") || strings.Contains(got, "http: request body too large") {
 		t.Fatalf("body = %s", got)
 	}
 }
 
-func TestHandleRunsRequiresFieldsBeforeBundle(t *testing.T) {
+func TestHandleRunsReadsFieldsAfterBundle(t *testing.T) {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	part, err := mw.CreateFormFile("bundle", "input-docs-bundle.tar.gz")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := part.Write([]byte("not a real bundle")); err != nil {
+	if err := writeManagedServiceTestBundle(part); err != nil {
 		t.Fatal(err)
 	}
 	if err := mw.WriteField("mode", "check"); err != nil {
 		t.Fatal(err)
 	}
 	if err := mw.WriteField("tasks_json", `["check the docs"]`); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.WriteField("feedback_llm_ids_json", `["unknown-model"]`); err != nil {
 		t.Fatal(err)
 	}
 	if err := mw.Close(); err != nil {
@@ -1814,9 +1773,46 @@ func TestHandleRunsRequiresFieldsBeforeBundle(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "mode and tasks_json must be sent before bundle") {
+	if !strings.Contains(rec.Body.String(), "managed mode supports only these LLM IDs") {
 		t.Fatalf("body = %s", rec.Body.String())
 	}
+}
+
+func writeManagedServiceTestBundle(w io.Writer) error {
+	content := []byte("hello docs\n")
+	sum := sha256.Sum256(content)
+	manifest := bundle.Manifest{
+		SchemaVersion: 1,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+		RepoRoot:      "repo",
+		Files: []bundle.FileRecord{{
+			Path:      "README.md",
+			SizeBytes: int64(len(content)),
+			SHA256:    hex.EncodeToString(sum[:]),
+		}},
+	}
+	gz := gzip.NewWriter(w)
+	tw := tar.NewWriter(gz)
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0o644, Size: int64(len(manifestBytes))}); err != nil {
+		return err
+	}
+	if _, err := tw.Write(manifestBytes); err != nil {
+		return err
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: "files/README.md", Mode: 0o644, Size: int64(len(content))}); err != nil {
+		return err
+	}
+	if _, err := tw.Write(content); err != nil {
+		return err
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	return gz.Close()
 }
 
 func stripeSignatureHeader(payload []byte, secret string) string {
@@ -1831,7 +1827,6 @@ func setRequiredManagedConfigEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/dari_docs")
 	t.Setenv("DARI_API_KEY", "dari_test")
-	t.Setenv("DARI_DOCS_RELEASE_ADMIN_TOKEN", "release-admin-token")
 	t.Setenv("DARI_DOCS_SECRET_ENCRYPTION_KEY", testManagedSecretEncryptionKey())
 	setRequiredSupabaseEnv(t)
 	setRequiredManagedAgentEnv(t)
@@ -1851,11 +1846,8 @@ func setRequiredSupabaseEnv(t *testing.T) {
 
 func testManagedHostedAgentConfig() Config {
 	return Config{
-		ManagedTesterAgentID:   "agt_tester",
-		ManagedTesterVersionID: "ver_tester",
-		ManagedEditorAgentID:   "agt_editor",
-		ManagedEditorVersionID: "ver_editor",
-		ReleaseAdminToken:      "release-admin-token",
+		ManagedTesterAgentID: "agt_tester",
+		ManagedEditorAgentID: "agt_editor",
 	}
 }
 
@@ -1870,8 +1862,6 @@ func clearManagedConfigOptionalEnv(t *testing.T) {
 		"PORT",
 		"PUBLIC_BASE_URL",
 		"DARI_API_BASE_URL",
-		"MANAGED_TESTER_VERSION_ID",
-		"MANAGED_EDITOR_VERSION_ID",
 		"STRIPE_SECRET_KEY",
 		"STRIPE_WEBHOOK_SECRET",
 	} {

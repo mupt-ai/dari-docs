@@ -25,8 +25,6 @@ services:
         sync: false
       - key: MANAGED_EDITOR_AGENT_ID
         sync: false
-      - key: DARI_DOCS_RELEASE_ADMIN_TOKEN
-        sync: false
       - key: DARI_DOCS_SECRET_ENCRYPTION_KEY
         sync: false
       - key: STRIPE_SECRET_KEY

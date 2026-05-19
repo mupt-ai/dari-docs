@@ -60,10 +60,17 @@ async function apiRequest(
   const method = opts.method ?? "GET";
 
   const doRequest = async (token: string | null): Promise<Response> => {
+    const isFormData = opts.body instanceof FormData;
+    const body: BodyInit | undefined =
+      opts.body === undefined
+        ? undefined
+        : isFormData
+          ? (opts.body as FormData)
+          : JSON.stringify(opts.body);
     const headers: Record<string, string> = {
       Accept: "application/json",
     };
-    if (opts.body !== undefined) {
+    if (opts.body !== undefined && !isFormData) {
       headers["Content-Type"] = "application/json";
     }
     if (token) {
@@ -72,7 +79,7 @@ async function apiRequest(
     return fetch(url, {
       method,
       headers,
-      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+      body,
       signal: opts.signal,
     });
   };

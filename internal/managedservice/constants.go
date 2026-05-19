@@ -9,7 +9,6 @@ const (
 	managedTesterReserveCents int64 = 75
 	managedEditorReserveCents int64 = 150
 	managedServiceFeeCents    int64 = 0
-	managedDefaultLLMID             = "medium-claude"
 
 	stripeCheckoutMinCents     int64 = 500
 	stripeCheckoutDefaultCents int64 = 500
