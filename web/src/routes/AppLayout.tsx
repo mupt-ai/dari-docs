@@ -61,7 +61,7 @@ export default function AppLayout({ profile }: { profile: ManagedProfile }) {
               <SidebarMenu>
                 <SidebarExternalNavItem
                   href="https://github.com/mupt-ai/dari-docs"
-                  label="Dari Docs"
+                  label="dari-docs"
                   icon={GitHubIcon}
                 />
                 <SidebarExternalNavItem
