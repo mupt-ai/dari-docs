@@ -577,7 +577,7 @@ func (s *Server) collectTesterReports(ctx context.Context, run queuedRun, sessio
 		if err != nil {
 			return nil, false, fmt.Errorf("get transcript %s: %w", session.ID, err)
 		}
-		reports = append(reports, formatManagedFeedbackReport(session.TaskIndex, llmID, dari.FinalAssistantText(tr)))
+		reports = append(reports, dari.FinalAssistantText(tr))
 		seen[key] = true
 	}
 	for key := range expected {
@@ -654,11 +654,6 @@ func expectedTesterKeys(run queuedRun) map[string]bool {
 
 func testerSessionKey(taskIndex int, llmID string) string {
 	return fmt.Sprintf("%d:%s", taskIndex, managedLLMIDOrDefault(llmID))
-}
-
-func formatManagedFeedbackReport(taskIndex int, llmID string, report string) string {
-	header := fmt.Sprintf("Task index: %d\nTester LLM: %s", taskIndex, managedLLMIDOrDefault(llmID))
-	return header + "\n\n" + report
 }
 
 func waitForCostRetry(ctx context.Context, deadline time.Time) error {
