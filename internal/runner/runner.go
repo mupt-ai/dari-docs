@@ -14,6 +14,7 @@ import (
 
 	"github.com/mupt-ai/dari-docs/internal/bundle"
 	"github.com/mupt-ai/dari-docs/internal/dari"
+	"github.com/mupt-ai/dari-docs/internal/llmoptions"
 	"github.com/mupt-ai/dari-docs/internal/workspace"
 )
 
@@ -22,7 +23,15 @@ const RuntimeSecretsName = "DARI_DOCS_RUNTIME_SECRETS_JSON"
 const maxSessionBatchItems = 100
 
 func DefaultFeedbackLLMIDs() []string {
-	return []string{"dumb-claude", "medium-claude", "smart-claude", "dumb-gpt", "medium-gpt", "smart-gpt"}
+	return llmoptions.DefaultFeedbackLLMIDs()
+}
+
+func ClaudeFeedbackLLMIDs() []string {
+	return llmoptions.ClaudeFeedbackLLMIDs()
+}
+
+func GPTFeedbackLLMIDs() []string {
+	return llmoptions.GPTFeedbackLLMIDs()
 }
 
 //go:embed prompts/*.md

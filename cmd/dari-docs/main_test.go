@@ -1,6 +1,11 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,11 +61,11 @@ func TestParseExpiresIn(t *testing.T) {
 
 func TestManagedRunReserveCents(t *testing.T) {
 	cfg := managed.RunConfig{TesterSessionReserveCents: 75, EditorSessionReserveCents: 150}
-	if got := managedRunReserveCents("check", 3, cfg); got != 225 {
-		t.Fatalf("check reserve = %d, want 225", got)
+	if got := managedRunReserveCents("check", 3, 3, cfg); got != 675 {
+		t.Fatalf("check reserve = %d, want 675", got)
 	}
-	if got := managedRunReserveCents("optimize", 3, cfg); got != 375 {
-		t.Fatalf("optimize reserve = %d, want 375", got)
+	if got := managedRunReserveCents("optimize", 3, 3, cfg); got != 825 {
+		t.Fatalf("optimize reserve = %d, want 825", got)
 	}
 }
 
@@ -68,17 +73,52 @@ func TestManagedSessionSummary(t *testing.T) {
 	tests := map[string]struct {
 		command string
 		tasks   int
+		llms    int
 		want    string
 	}{
-		"single check":    {command: "check", tasks: 1, want: "1 tester session"},
-		"multi check":     {command: "check", tasks: 3, want: "3 tester sessions"},
-		"single optimize": {command: "optimize", tasks: 1, want: "1 tester session + 1 editor session"},
-		"multi optimize":  {command: "optimize", tasks: 3, want: "3 tester sessions + 1 editor session"},
+		"single check":    {command: "check", tasks: 1, llms: 1, want: "1 tester session"},
+		"multi check":     {command: "check", tasks: 3, llms: 1, want: "3 tester sessions"},
+		"matrix check":    {command: "check", tasks: 3, llms: 3, want: "9 tester sessions (3 tasks x 3 LLMs)"},
+		"single optimize": {command: "optimize", tasks: 1, llms: 1, want: "1 tester session + 1 editor session"},
+		"multi optimize":  {command: "optimize", tasks: 3, llms: 3, want: "9 tester sessions (3 tasks x 3 LLMs) + 1 editor session"},
 	}
 	for name, tt := range tests {
-		if got := managedSessionSummary(tt.command, tt.tasks); got != tt.want {
+		if got := managedSessionSummary(tt.command, tt.tasks, tt.llms); got != tt.want {
 			t.Fatalf("%s summary = %q, want %q", name, got, tt.want)
 		}
+	}
+}
+
+func TestManagedLLMSelectionDefaultsToAllowedClaudeMatrix(t *testing.T) {
+	cfg := managed.RunConfig{
+		DefaultLLMID:          "medium-claude",
+		DefaultFeedbackLLMIDs: []string{"dumb-claude", "medium-claude", "smart-claude"},
+		AllowedLLMIDs:         []string{"dumb-claude", "medium-claude", "smart-claude", "dumb-gpt", "medium-gpt", "smart-gpt"},
+	}
+	feedback, editor, err := managedLLMSelection(nil, "", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(feedback, ",") != "dumb-claude,medium-claude,smart-claude" {
+		t.Fatalf("feedback = %#v", feedback)
+	}
+	if editor != "medium-claude" {
+		t.Fatalf("editor = %q", editor)
+	}
+}
+
+func TestManagedLLMSelectionAllowsGPT(t *testing.T) {
+	cfg := managed.RunConfig{
+		DefaultLLMID:          "medium-claude",
+		DefaultFeedbackLLMIDs: []string{"dumb-claude", "medium-claude", "smart-claude"},
+		AllowedLLMIDs:         []string{"dumb-claude", "medium-claude", "smart-claude", "dumb-gpt", "medium-gpt", "smart-gpt"},
+	}
+	feedback, editor, err := managedLLMSelection([]string{"smart-gpt"}, "medium-gpt", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(feedback, ",") != "smart-gpt" || editor != "medium-gpt" {
+		t.Fatalf("feedback/editor = %#v/%q", feedback, editor)
 	}
 }
 
@@ -96,6 +136,149 @@ func TestExpandCSVListTrimsDeduplicatesAndSplits(t *testing.T) {
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("expandCSVList = %#v, want %#v", got, want)
 	}
+}
+
+func TestExpandFeedbackLLMListSupportsGroups(t *testing.T) {
+	got := expandFeedbackLLMList([]string{"claude, medium-gpt", "gpt", "smart-claude"})
+	want := []string{"dumb-claude", "medium-claude", "smart-claude", "medium-gpt", "dumb-gpt", "smart-gpt"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("expandFeedbackLLMList = %#v, want %#v", got, want)
+	}
+}
+
+func TestExtractOutFlagAllowsOutAfterRunID(t *testing.T) {
+	args, outDir, err := extractOutFlag([]string{"run_test", "--out", "/tmp/dari-docs-out"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(args, ",") != "run_test" || outDir != "/tmp/dari-docs-out" {
+		t.Fatalf("args/out = %#v/%q", args, outDir)
+	}
+}
+
+func TestExtractOutFlagRejectsMissingValue(t *testing.T) {
+	if _, _, err := extractOutFlag([]string{"run_test", "--out"}); err == nil {
+		t.Fatal("expected missing --out value error")
+	}
+}
+
+func TestDownloadManagedRunArtifactsForCheckWritesFeedback(t *testing.T) {
+	outDir := t.TempDir()
+	client := managed.New("http://127.0.0.1:1", "token")
+	status := managed.RunStatus{
+		ID:                "run_check",
+		Mode:              "check",
+		Status:            "completed",
+		FeedbackReports:   []string{"feedback one"},
+		AggregateFeedback: "# aggregate\n",
+	}
+	updatedDir, err := downloadManagedRunArtifacts(context.Background(), client, status, outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedDir != "" {
+		t.Fatalf("updatedDir = %q, want empty for check", updatedDir)
+	}
+	aggregate, err := os.ReadFile(filepath.Join(outDir, "aggregate-feedback.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(aggregate) != "# aggregate\n" {
+		t.Fatalf("aggregate = %q", aggregate)
+	}
+	report, err := os.ReadFile(filepath.Join(outDir, "runs", "feedback-001.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(report) != "feedback one\n" {
+		t.Fatalf("report = %q", report)
+	}
+}
+
+func TestDownloadManagedRunArtifactsRejectsActiveRun(t *testing.T) {
+	client := managed.New("http://127.0.0.1:1", "token")
+	status := managed.RunStatus{ID: "run_running", Mode: "check", Status: "running"}
+	if _, err := downloadManagedRunArtifacts(context.Background(), client, status, t.TempDir()); err == nil {
+		t.Fatal("expected running run download to fail")
+	}
+}
+
+func TestDownloadManagedRunArtifactsForFailedRunWritesFeedback(t *testing.T) {
+	outDir := t.TempDir()
+	client := managed.New("http://127.0.0.1:1", "token")
+	status := managed.RunStatus{
+		ID:              "run_failed",
+		Mode:            "check",
+		Status:          "failed",
+		FeedbackReports: []string{"partial feedback"},
+	}
+	updatedDir, err := downloadManagedRunArtifacts(context.Background(), client, status, outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedDir != "" {
+		t.Fatalf("updatedDir = %q, want empty for failed run", updatedDir)
+	}
+	report, err := os.ReadFile(filepath.Join(outDir, "runs", "feedback-001.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(report) != "partial feedback\n" {
+		t.Fatalf("report = %q", report)
+	}
+}
+
+func TestApplyManagedRunArtifactsDownloadsAndAppliesOptimizeOutput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/runs/run_opt/updated-docs.zip" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/zip")
+		if err := writeUpdatedDocsZip(w, map[string]string{"updated-docs/files/README.md": "updated docs\n"}); err != nil {
+			t.Fatal(err)
+		}
+	}))
+	defer server.Close()
+
+	repo := t.TempDir()
+	outDir := t.TempDir()
+	client := managed.New(server.URL, "token")
+	status := managed.RunStatus{
+		ID:                   "run_opt",
+		Mode:                 "optimize",
+		Status:               "completed",
+		UpdatedDocsAvailable: true,
+		FeedbackReports:      []string{"feedback"},
+	}
+	if err := applyManagedRunArtifacts(context.Background(), client, status, repo, outDir); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(repo, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "updated docs\n" {
+		t.Fatalf("applied README = %q", got)
+	}
+}
+
+func writeUpdatedDocsZip(w http.ResponseWriter, files map[string]string) error {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, contents := range files {
+		f, err := zw.Create(name)
+		if err != nil {
+			return err
+		}
+		if _, err := f.Write([]byte(contents)); err != nil {
+			return err
+		}
+	}
+	if err := zw.Close(); err != nil {
+		return err
+	}
+	_, err := w.Write(buf.Bytes())
+	return err
 }
 
 func TestManagedCheckRequiresLoginBeforeRunConfig(t *testing.T) {
