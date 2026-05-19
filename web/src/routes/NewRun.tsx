@@ -943,7 +943,7 @@ function looksLikeDocsPath(filePath: string): boolean {
   const name = filePath.split("/").pop() ?? filePath;
   if (defaultDocsNames.has(name)) return true;
   const dot = name.lastIndexOf(".");
-  return dot >= 0 && defaultDocsExts.has(name.slice(dot));
+  return dot >= 0 && defaultDocsExts.has(name.slice(dot).toLowerCase());
 }
 
 function matchesAnyPattern(patterns: string[], rel: string): boolean {
