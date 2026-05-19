@@ -16,10 +16,17 @@ import (
 )
 
 const (
-	DefaultBaseURL     = "https://optimize.dari.dev"
 	EnvTokenName       = "DARI_DOCS_API_KEY"
 	LegacyEnvTokenName = "DARI_DOCS_TOKEN"
+	EnvBaseURLName     = "DARI_DOCS_BASE_URL"
 )
+
+var DefaultBaseURL = func() string {
+	if override := os.Getenv(EnvBaseURLName); override != "" {
+		return strings.TrimRight(override, "/")
+	}
+	return "https://optimize.dari.dev"
+}()
 
 const (
 	defaultHTTPTimeout = 120 * time.Second

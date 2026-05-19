@@ -422,7 +422,7 @@ llm:
   options:
     medium-claude:
       provider: anthropic
-      model: claude-sonnet-4-6
+      model: claude-sonnet-4-7
     smart-gpt:
       provider: openai
       model: gpt-5.5
@@ -444,7 +444,7 @@ llm:
   options:
     medium-claude:
       provider: anthropic
-      model: claude-sonnet-4-6
+      model: claude-sonnet-4-7
     smart-gpt:
       provider: openai
       model: gpt-5.5
@@ -473,7 +473,7 @@ llm:
   options:
     medium-claude:
       provider: anthropic
-      model: claude-sonnet-4-6
+      model: claude-sonnet-4-7
       api_key_secret: OLD_KEY
 `
 	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
@@ -497,7 +497,7 @@ llm:
 
 func TestSetLLMAPIKeySecretPreservesModel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dari.yml")
-	original := "name: test\nllm:\n  model: anthropic/claude-sonnet-4.6\n"
+	original := "name: test\nllm:\n  model: anthropic/claude-sonnet-4.7\n"
 	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +509,7 @@ func TestSetLLMAPIKeySecretPreservesModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(b)
-	if !strings.Contains(got, "model: anthropic/claude-sonnet-4.6") {
+	if !strings.Contains(got, "model: anthropic/claude-sonnet-4.7") {
 		t.Fatalf("model was not preserved:\n%s", got)
 	}
 	if !strings.Contains(got, "api_key_secret: MY_KEY") {

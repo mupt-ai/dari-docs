@@ -33,10 +33,10 @@ llm:
       model: claude-haiku-4-5
     medium-claude:
       provider: anthropic
-      model: claude-sonnet-4-6
+      model: claude-sonnet-4-7
     smart-claude:
       provider: anthropic
-      model: claude-opus-4-5
+      model: claude-opus-4-6
     dumb-gpt:
       provider: openai
       model: gpt-5-mini
