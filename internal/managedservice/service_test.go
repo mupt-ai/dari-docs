@@ -67,6 +67,22 @@ func TestParseAdminUSDToCents(t *testing.T) {
 	}
 }
 
+func TestEscapeAdminSearchPattern(t *testing.T) {
+	tests := map[string]string{
+		"":        "",
+		"ben":     "ben",
+		"usr_abc": `usr\_abc`,
+		"50%":     `50\%`,
+		`c:\dir`:  `c:\\dir`,
+		"_%\\":    `\_\%\\`,
+	}
+	for in, want := range tests {
+		if got := escapeAdminSearchPattern(in); got != want {
+			t.Fatalf("escapeAdminSearchPattern(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestRequireAdminRequiresBrowserSession(t *testing.T) {
 	s := &Server{}
 	for _, kind := range []string{tokenKindAutomation, tokenKindInteractive} {

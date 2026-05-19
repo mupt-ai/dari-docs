@@ -145,11 +145,12 @@ func (s *Server) handleAdminUserSearch(w http.ResponseWriter, r *http.Request, u
 		return
 	}
 	limit := adminSearchLimit(r.URL.Query().Get("limit"))
+	pattern := "%" + escapeAdminSearchPattern(query) + "%"
 	rows, err := s.db.Query(r.Context(), adminUserSummarySelect+`
 WHERE u.id ILIKE $1 OR u.email ILIKE $1 OR coalesce(u.display_name, '') ILIKE $1 OR u.auth_subject ILIKE $1
 ORDER BY u.created_at DESC
 LIMIT $2
-`, "%"+query+"%", limit)
+`, pattern, limit)
 	if err != nil {
 		writeLoggedError(w, http.StatusInternalServerError, "could not search users", err)
 		return
@@ -345,6 +346,12 @@ func scanAdminUserSummary(row scanRow) (adminUserSummary, error) {
 		summary.DisplayName = &displayName.String
 	}
 	return summary, nil
+}
+
+var adminSearchPatternEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+func escapeAdminSearchPattern(query string) string {
+	return adminSearchPatternEscaper.Replace(query)
 }
 
 func adminSearchLimit(raw string) int {
