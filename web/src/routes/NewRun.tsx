@@ -958,8 +958,11 @@ function matchesPattern(pattern: string, rel: string): boolean {
     const prefix = normalized.slice(0, -3);
     if (rel === prefix || rel.startsWith(`${prefix}/`)) return true;
   }
-  const target = normalized.includes("/") ? rel : (rel.split("/").pop() ?? rel);
-  return new RegExp(`^${globRegExp(normalized)}$`).test(target);
+  const rx = new RegExp(`^${globRegExp(normalized)}$`);
+  if (normalized.includes("/")) {
+    return rx.test(rel);
+  }
+  return rel.split("/").some((segment) => rx.test(segment));
 }
 
 function normalizeBundlePattern(pattern: string): string {
