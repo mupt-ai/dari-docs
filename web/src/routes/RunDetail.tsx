@@ -5,7 +5,7 @@ import { Download, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { downloadUpdatedDocs, formatLLMID, getRun, isActiveRun, type RunSession, type RunStatus } from "@/lib/runs";
-import { formatCents, formatDate } from "@/lib/utils";
+import { formatCents, formatDate, toTitleCase } from "@/lib/utils";
 import { StatusBadge } from "@/routes/Runs";
 
 export default function RunDetail() {
@@ -93,7 +93,7 @@ export default function RunDetail() {
           {run?.updated_docs_available && (
             <Button type="button" variant="outline" size="sm" onClick={handleDownload} disabled={downloading}>
               <Download className="mr-1.5 h-3.5 w-3.5" />
-              {downloading ? "Downloading..." : "Updated docs"}
+              {downloading ? "Downloading..." : "Updated Docs"}
             </Button>
           )}
           <Button
@@ -121,13 +121,13 @@ export default function RunDetail() {
       )}
 
       {loading && run === null ? (
-        <div className="text-sm text-muted-foreground">loading run...</div>
+        <div className="text-sm text-muted-foreground">Loading Run...</div>
       ) : run ? (
         <div className="flex flex-col gap-6">
           <div className="grid gap-4 md:grid-cols-4">
             <Summary label="Status" value={<StatusBadge status={run.status} />} />
-            <Summary label="Type" value={<span className="capitalize">{run.mode}</span>} />
-            <Summary label="Cost" value={<span>{formatCents(run.charged_cents)}{run.estimated ? " est." : ""}</span>} />
+            <Summary label="Type" value={<span>{toTitleCase(run.mode)}</span>} />
+            <Summary label="Cost" value={<span>{formatCents(run.charged_cents)}{run.estimated ? " Est." : ""}</span>} />
             <Summary label="Completed" value={<span>{formatDate(run.completed_at)}</span>} />
           </div>
 
@@ -152,7 +152,7 @@ export default function RunDetail() {
           {run.mode === "optimize" && (
             <section className="border border-border bg-card p-4">
               <SessionHeader
-                label="Editor session"
+                label="Editor Session"
                 session={editorSession(run.sessions)}
                 fallbackStatus={editorFallbackStatus(run)}
               />
@@ -284,13 +284,13 @@ function TaskResults({
             {selectedResult?.feedback ? (
               <Markdown text={selectedResult.feedback} />
             ) : (
-              <div className="text-muted-foreground">No feedback available.</div>
+              <div className="text-muted-foreground">No Feedback Available.</div>
             )}
           </div>
         </>
       ) : (
         <div className="border border-border bg-background p-4 text-sm text-muted-foreground">
-          No model results for this task yet.
+          No Model Results For This Task Yet.
         </div>
       )}
     </section>
@@ -350,7 +350,7 @@ function SessionMeta({
   return (
     <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
       {session?.completed_at && (
-        <span className="text-muted-foreground">completed {formatDate(session.completed_at)}</span>
+        <span className="text-muted-foreground">Completed {formatDate(session.completed_at)}</span>
       )}
       <SessionStatus status={sessionStatus(session, fallbackStatus)} />
     </div>
@@ -373,7 +373,7 @@ function SessionStatus({ status }: { status: string }) {
               : "inline-flex min-w-20 justify-center border border-border bg-muted/40 px-2 py-1 text-xs text-muted-foreground"
       }
     >
-      {status}
+      {toTitleCase(status)}
     </span>
   );
 }

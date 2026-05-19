@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowDown, ArrowUp, Check, Copy, RefreshCw } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Copy } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { getBalance } from "@/lib/billing";
-import { firstLine, formatCents, formatDate } from "@/lib/utils";
+import { firstLine, formatCents, formatDate, toTitleCase } from "@/lib/utils";
 import {
   formatLLMID,
   isActiveRun,
@@ -26,35 +25,26 @@ const columns: Array<{ key: RunSort; label: string; align?: "right" }> = [
 
 export default function Runs() {
   const [runs, setRuns] = useState<RunListItem[] | null>(null);
-  const [balance, setBalance] = useState<number | null>(null);
   const [sort, setSort] = useState<RunSort>("created_at");
   const [direction, setDirection] = useState<SortDirection>("desc");
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async (quiet = false) => {
-    if (quiet) {
-      setRefreshing(true);
-    } else {
+    if (!quiet) {
       setLoading(true);
     }
     setError(null);
     try {
-      const [runResp, balanceResp] = await Promise.all([
-        listRuns({ sort, direction }),
-        getBalance(),
-      ]);
+      const runResp = await listRuns({ sort, direction });
       setRuns(runResp.runs);
       setNextCursor(runResp.next_cursor ?? null);
-      setBalance(balanceResp.balance_cents);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
   }, [direction, sort]);
 
@@ -108,25 +98,6 @@ export default function Runs() {
             Managed documentation checks and revisions from the CLI.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex h-8 items-center justify-center gap-2 whitespace-nowrap border border-border bg-transparent px-3 text-xs font-medium text-foreground">
-            <span>Balance</span>
-            <span>{balance === null ? "-" : formatCents(balance)}</span>
-          </div>
-          <Button type="button" variant="outline" size="sm" asChild>
-            <Link to="/billing">Purchase credits</Link>
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => void refresh(true)}
-            disabled={refreshing}
-          >
-            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-            Refresh
-          </Button>
-        </div>
       </div>
 
       {error && (
@@ -136,7 +107,7 @@ export default function Runs() {
       )}
 
       {loading && runs === null ? (
-        <div className="text-sm text-muted-foreground">loading runs...</div>
+        <div className="text-sm text-muted-foreground">Loading Runs...</div>
       ) : runs && runs.length === 0 ? (
         <EmptyRuns />
       ) : (
@@ -169,13 +140,13 @@ export default function Runs() {
                       <td className="px-3 py-3">
                         <StatusBadge status={run.status} />
                       </td>
-                      <td className="px-3 py-3 capitalize">{run.mode}</td>
+                      <td className="px-3 py-3">{toTitleCase(run.mode)}</td>
                       <td className="max-w-[360px] px-3 py-3">
                         <RunWorkload run={run} />
                       </td>
                       <td className="px-3 py-3 text-right">
                         {formatCents(run.charged_cents)}
-                        {run.estimated && <span className="ml-1 text-xs text-muted-foreground">est.</span>}
+                        {run.estimated && <span className="ml-1 text-xs text-muted-foreground">Est.</span>}
                       </td>
                       <td className="max-w-[260px] px-3 py-3 text-xs text-muted-foreground">
                         <LLMSummary llms={run.llms} />
@@ -191,7 +162,7 @@ export default function Runs() {
           {nextCursor && (
             <div className="flex justify-center">
               <Button type="button" variant="outline" size="sm" onClick={loadMore} disabled={loadingMore}>
-                {loadingMore ? "Loading..." : "Load more"}
+                {loadingMore ? "Loading..." : "Load More"}
               </Button>
             </div>
           )}
@@ -209,7 +180,7 @@ function SortIcon({ active, direction }: { active: boolean; direction: SortDirec
 function EmptyRuns() {
   return (
     <div className="border border-border bg-card p-6">
-      <div className="text-sm font-medium">No managed runs yet</div>
+      <div className="text-sm font-medium">No Managed Runs Yet</div>
       <p className="mt-2 text-sm text-muted-foreground">
         Run a check from your docs repo. The run will appear here while it is queued, running, and completed.
       </p>
@@ -241,7 +212,7 @@ function CopyableCommand({ command }: { command: string }) {
       </pre>
       <button
         type="button"
-        aria-label="Copy command"
+        aria-label="Copy Command"
         onClick={copy}
         className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center border border-border bg-card text-muted-foreground opacity-100 hover:bg-accent hover:text-foreground focus:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
       >
@@ -264,7 +235,7 @@ export function StatusBadge({ status }: { status: string }) {
             : "inline-flex min-w-24 justify-center border border-border bg-muted/40 px-2 py-1 text-xs text-muted-foreground"
       }
     >
-      {status}
+      {toTitleCase(status)}
     </span>
   );
 }
@@ -292,10 +263,10 @@ function RunWorkload({ run }: { run: RunListItem }) {
       </Link>
       <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
         <span className="border border-border bg-muted/30 px-1.5 py-0.5">
-          {run.task_count > 1 ? `${run.task_count}-task batch` : "1 task"}
+          {run.task_count > 1 ? `${run.task_count}-Task Batch` : "1 Task"}
         </span>
         <span>
-          {run.mode === "optimize" ? "tester sessions + editor" : "tester sessions"}
+          {run.mode === "optimize" ? "Tester Sessions + Editor" : "Tester Sessions"}
         </span>
       </div>
     </div>
@@ -305,5 +276,5 @@ function RunWorkload({ run }: { run: RunListItem }) {
 function formatRole(role: string): string {
   if (role === "tester") return "Tester";
   if (role === "editor") return "Editor";
-  return role;
+  return toTitleCase(role);
 }

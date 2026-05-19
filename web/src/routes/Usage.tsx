@@ -26,7 +26,7 @@ const fallbackBillingConfig: BillingConfig = {
   max_checkout_cents: 50000,
 };
 
-export default function Billing() {
+export default function Usage() {
   const [balance, setBalance] = useState<number | null>(null);
   const [config, setConfig] = useState<RunConfig | null>(null);
   const [billingConfig, setBillingConfig] = useState<BillingConfig>(fallbackBillingConfig);
@@ -89,7 +89,7 @@ export default function Billing() {
   return (
     <div className="px-6 py-6">
       <div className="mb-6">
-        <h1 className="text-xl font-medium">Billing</h1>
+        <h1 className="text-xl font-medium">Usage</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Credit balance for managed Dari Docs runs.
         </p>
@@ -102,7 +102,7 @@ export default function Billing() {
       )}
 
       {loading ? (
-        <div className="text-sm text-muted-foreground">loading…</div>
+        <div className="text-sm text-muted-foreground">Loading…</div>
       ) : (
         <div className="flex flex-col gap-6">
           <Card className={exhausted ? "border-destructive/50" : ""}>
@@ -116,7 +116,7 @@ export default function Billing() {
                     {formatCents(balanceCents)}
                   </div>
                   <div className="mt-1 text-xs text-muted-foreground">
-                    available for managed runs
+                    Available for managed runs
                   </div>
                 </div>
                 <Button
@@ -149,19 +149,19 @@ export default function Billing() {
             </CardHeader>
             <CardContent className="flex flex-col gap-2 text-xs text-muted-foreground">
               <Row
-                label="active runs"
-                value={`${config?.max_active_runs_per_user ?? "—"} per account`}
+                label="Active Runs"
+                value={`${config?.max_active_runs_per_user ?? "—"} Per Account`}
               />
               <Row
-                label="tasks per run"
-                value={`${config?.max_tasks_per_run ?? "—"} max`}
+                label="Tasks Per Run"
+                value={`${config?.max_tasks_per_run ?? "—"} Max`}
               />
               <Row
-                label="tester reserve"
+                label="Tester Reserve"
                 value={formatCents(config?.tester_session_reserve_cents ?? 0)}
               />
               <Row
-                label="editor reserve"
+                label="Editor Reserve"
                 value={formatCents(config?.editor_session_reserve_cents ?? 0)}
               />
             </CardContent>
@@ -182,7 +182,7 @@ export default function Billing() {
             <span>Credits are added after Stripe confirms payment.</span>
             <span className="flex flex-col gap-2">
               <label className="text-xs uppercase tracking-widest text-muted-foreground">
-                Credits to Buy
+                Credits To Buy
               </label>
               <Input
                 type="number"

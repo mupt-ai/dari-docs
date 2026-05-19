@@ -40,7 +40,7 @@ export default function AppLayout({ profile }: { profile: ManagedProfile }) {
             <span className="inline-flex h-6 w-6 items-center justify-center rounded-[50%] border border-white/40">
               <img src="/dari-logo.svg" alt="" className="h-4 w-4" />
             </span>
-            Dari Docs
+            dari-docs
           </Link>
         </SidebarHeader>
         <SidebarContent>
@@ -49,7 +49,7 @@ export default function AppLayout({ profile }: { profile: ManagedProfile }) {
             <SidebarGroupContent>
               <SidebarMenu>
                 <SidebarNavItem to="/runs" label="Runs" icon={ListChecks} />
-                <SidebarNavItem to="/billing" label="Billing" icon={CreditCard} />
+                <SidebarNavItem to="/usage" label="Usage" icon={CreditCard} />
                 <SidebarNavItem to="/api-keys" label="API Keys" icon={KeyRound} />
                 <SidebarNavItem to="/settings" label="Settings" icon={SettingsIcon} />
               </SidebarMenu>
@@ -61,12 +61,12 @@ export default function AppLayout({ profile }: { profile: ManagedProfile }) {
               <SidebarMenu>
                 <SidebarExternalNavItem
                   href="https://github.com/mupt-ai/dari-docs"
-                  label="dari-docs"
+                  label="Dari Docs"
                   icon={GitHubIcon}
                 />
                 <SidebarExternalNavItem
                   href="https://dari.dev"
-                  label="dari.dev"
+                  label="Dari.dev"
                   icon={DariMarkIcon}
                 />
               </SidebarMenu>

@@ -31,12 +31,12 @@ export default function Settings() {
           </CardHeader>
           <CardContent className="flex flex-col gap-2 text-xs text-muted-foreground">
             <div>
-              <span className="uppercase tracking-widest">email</span>{" "}
+              <span className="uppercase tracking-widest">Email</span>{" "}
               <span className="text-foreground">{profile.email}</span>
             </div>
             {profile.displayName && (
               <div>
-                <span className="uppercase tracking-widest">name</span>{" "}
+                <span className="uppercase tracking-widest">Name</span>{" "}
                 <span className="text-foreground">{profile.displayName}</span>
               </div>
             )}

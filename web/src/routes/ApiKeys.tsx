@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Check, Copy, MoreVertical, X } from "lucide-react";
+import { Check, Copy, MoreVertical, Plus, X } from "lucide-react";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -88,6 +89,14 @@ export default function ApiKeys() {
     }
   };
 
+  const handleCancelCreate = () => {
+    if (creating) return;
+    setShowCreateForm(false);
+    setName("");
+    setScopes(defaultScopes);
+    setCreateError(null);
+  };
+
   const toggleScope = (scope: string) => {
     setScopes((prev) =>
       prev.includes(scope) ? prev.filter((item) => item !== scope) : [...prev, scope]
@@ -134,115 +143,50 @@ export default function ApiKeys() {
     <div className="px-6 py-6">
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-medium">API keys</h1>
+          <h1 className="text-xl font-medium">API Keys</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Programmatic access for CI and scripts.
           </p>
         </div>
-        {!showCreateForm ? (
-          <Button type="button" onClick={() => setShowCreateForm(true)}>
-            Create Key
-          </Button>
-        ) : null}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => setShowCreateForm(true)}
+          className="shrink-0 bg-white text-black hover:bg-white/90"
+        >
+          <Plus className="mr-1 h-4 w-4" />
+          Create Key
+        </Button>
       </div>
 
       {error ? (
         <StatusBanner variant="error" message={error} onDismiss={() => setError(null)} />
       ) : null}
 
-      {showCreateForm ? (
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle>Create API key</CardTitle>
-            <CardDescription>
-              Issue a new key for CI, scripts, or other programmatic clients.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form id="api-key-create-form" onSubmit={handleCreate} className="space-y-4">
-              <div className="flex items-start gap-2">
-                <Input
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder="Label (e.g. GitHub Actions)"
-                  maxLength={80}
-                  className="max-w-sm"
-                  disabled={creating}
-                  autoFocus
-                />
-                <Button
-                  type="submit"
-                  disabled={creating || !name.trim() || scopes.length === 0}
-                >
-                  {creating ? "Creating…" : "Create Key"}
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={() => {
-                    setShowCreateForm(false);
-                    setCreateError(null);
-                  }}
-                  disabled={creating}
-                  className="text-muted-foreground hover:text-foreground"
-                >
-                  Cancel
-                </Button>
-              </div>
-
-              <div>
-                <div className="mb-2 flex items-baseline justify-between gap-3">
-                  <div className="text-xs uppercase tracking-widest text-muted-foreground">
-                    Scopes
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {scopes.length} selected
-                  </div>
-                </div>
-                <div className="grid gap-2 md:grid-cols-2">
-                  {scopeOptions.map(([scope, description]) => {
-                    const checked = scopes.includes(scope);
-                    return (
-                      <label
-                        key={scope}
-                        className={cn(
-                          "flex cursor-pointer gap-3 border border-border bg-background p-3 text-sm transition-colors hover:bg-accent/50",
-                          checked && "bg-muted/40"
-                        )}
-                      >
-                        <Checkbox
-                          checked={checked}
-                          onChange={() => toggleScope(scope)}
-                          className="mt-0.5"
-                          disabled={creating}
-                        />
-                        <span className="min-w-0">
-                          <span className="block font-mono text-xs text-foreground">
-                            {scope}
-                          </span>
-                          <span className="mt-1 block text-xs text-muted-foreground">
-                            {description}
-                          </span>
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {createError ? (
-                <p className="text-xs text-destructive-foreground">{createError}</p>
-              ) : null}
-            </form>
-          </CardContent>
-        </Card>
-      ) : null}
+      <CreateKeyDialog
+        open={showCreateForm}
+        onOpenChange={(open) => {
+          if (open) {
+            setShowCreateForm(true);
+          } else {
+            handleCancelCreate();
+          }
+        }}
+        name={name}
+        onNameChange={setName}
+        scopes={scopes}
+        onToggleScope={toggleScope}
+        creating={creating}
+        createError={createError}
+        onSubmit={handleCreate}
+      />
 
       {issued?.token ? (
         <Card className="mb-6 border-brand/60">
           <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0">
             <div className="flex flex-col gap-1.5">
-              <CardTitle>Copy your key now</CardTitle>
+              <CardTitle>Copy Your Key Now</CardTitle>
               <CardDescription>
                 This is the only time the full key will be shown. Store it somewhere safe.
               </CardDescription>
@@ -265,7 +209,7 @@ export default function ApiKeys() {
               <div className="flex items-stretch gap-2">
                 <div
                   role="textbox"
-                  aria-label="New API key"
+                  aria-label="New API Key"
                   tabIndex={0}
                   className="min-w-0 flex-1 select-all border border-border bg-card px-3 py-2 font-mono text-xs text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
@@ -300,10 +244,10 @@ export default function ApiKeys() {
       ) : null}
 
       {apiKeys === null && !error ? (
-        <div className="text-sm text-muted-foreground">loading…</div>
+        <div className="text-sm text-muted-foreground">Loading…</div>
       ) : apiKeys && apiKeys.length === 0 ? (
         <div className="text-sm text-muted-foreground">
-          No API keys yet. Create one to get started.
+          No API Keys Yet. Use Create Key to get started.
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -313,12 +257,12 @@ export default function ApiKeys() {
                 <div className="flex min-w-0 flex-col gap-1.5">
                   <CardTitle className="truncate">{apiKey.name || apiKey.id}</CardTitle>
                   <CardDescription>
-                    created {apiKey.created_at ? formatDate(apiKey.created_at) : "—"}
+                    Created {apiKey.created_at ? formatDate(apiKey.created_at) : "—"}
                   </CardDescription>
                 </div>
                 <DropdownMenu>
                   <DropdownMenuTrigger
-                    aria-label="API key actions"
+                    aria-label="API Key Actions"
                     className="-mr-1 -mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   >
                     <MoreVertical className="h-4 w-4" />
@@ -336,14 +280,14 @@ export default function ApiKeys() {
               <CardContent className="flex flex-col gap-1 text-xs text-muted-foreground">
                 {apiKey.token_prefix ? (
                   <div>
-                    <span className="uppercase tracking-widest">prefix</span>{" "}
+                    <span className="uppercase tracking-widest">Prefix</span>{" "}
                     <code className="text-foreground">{apiKey.token_prefix}…</code>
                   </div>
                 ) : null}
                 <div>
-                  <span className="uppercase tracking-widest">last used</span>{" "}
+                  <span className="uppercase tracking-widest">Last Used</span>{" "}
                   <span className="text-foreground">
-                    {apiKey.last_used_at ? formatDate(apiKey.last_used_at) : "never"}
+                    {apiKey.last_used_at ? formatDate(apiKey.last_used_at) : "Never"}
                   </span>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
@@ -367,8 +311,8 @@ export default function ApiKeys() {
         onOpenChange={handleRevokeDialogOpenChange}
         title={
           pendingRevoke
-            ? `Revoke API key "${pendingRevoke.name ?? pendingRevoke.id}"?`
-            : "Revoke API key?"
+            ? `Revoke API Key "${pendingRevoke.name ?? pendingRevoke.id}"?`
+            : "Revoke API Key?"
         }
         description="Any CI job or script using this API key will fail immediately. This cannot be undone."
         confirmLabel="Revoke"
@@ -379,6 +323,142 @@ export default function ApiKeys() {
         error={revokeError}
       />
     </div>
+  );
+}
+
+function CreateKeyDialog({
+  open,
+  onOpenChange,
+  name,
+  onNameChange,
+  scopes,
+  onToggleScope,
+  creating,
+  createError,
+  onSubmit,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  name: string;
+  onNameChange: (value: string) => void;
+  scopes: string[];
+  onToggleScope: (scope: string) => void;
+  creating: boolean;
+  createError: string | null;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/70" />
+        <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] max-w-2xl -translate-x-1/2 -translate-y-1/2 overflow-y-auto border border-border bg-card p-6 shadow-lg focus:outline-none">
+          <div className="mb-5 flex items-start justify-between gap-4">
+            <div>
+              <DialogPrimitive.Title className="text-base font-medium text-foreground">
+                Create API Key
+              </DialogPrimitive.Title>
+              <DialogPrimitive.Description className="mt-2 text-sm text-muted-foreground">
+                Issue a new key for CI, scripts, or other programmatic clients.
+              </DialogPrimitive.Description>
+            </div>
+            <button
+              type="button"
+              aria-label="Close"
+              onClick={() => onOpenChange(false)}
+              disabled={creating}
+              className="-mr-2 -mt-2 inline-flex h-8 w-8 shrink-0 items-center justify-center text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <form id="api-key-create-form" onSubmit={onSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <label htmlFor="api-key-name" className="text-sm font-medium">
+                Label
+              </label>
+              <Input
+                id="api-key-name"
+                value={name}
+                onChange={(event) => onNameChange(event.target.value)}
+                placeholder="Label (e.g. GitHub Actions)"
+                maxLength={80}
+                disabled={creating}
+                autoFocus
+              />
+            </div>
+
+            <div>
+              <div className="mb-2 flex items-baseline justify-between gap-3">
+                <div className="text-xs uppercase tracking-widest text-muted-foreground">
+                  Scopes
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {scopes.length} Selected
+                </div>
+              </div>
+              <div className="grid gap-2 md:grid-cols-2">
+                {scopeOptions.map(([scope, description]) => {
+                  const checked = scopes.includes(scope);
+                  return (
+                    <label
+                      key={scope}
+                      className={cn(
+                        "flex cursor-pointer gap-3 border border-border bg-background p-3 text-sm transition-colors hover:bg-accent/50",
+                        checked && "bg-muted/40",
+                        creating && "cursor-not-allowed opacity-60"
+                      )}
+                    >
+                      <Checkbox
+                        checked={checked}
+                        onChange={() => onToggleScope(scope)}
+                        className="mt-0.5"
+                        disabled={creating}
+                      />
+                      <span className="min-w-0">
+                        <span className="block font-mono text-xs text-foreground">
+                          {scope}
+                        </span>
+                        <span className="mt-1 block text-xs text-muted-foreground">
+                          {description}
+                        </span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+
+            {createError ? (
+              <p className="text-xs text-destructive-foreground">{createError}</p>
+            ) : null}
+
+            <p className="text-xs leading-5 text-muted-foreground">
+              The full key will only be shown once after creation.
+            </p>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => onOpenChange(false)}
+                disabled={creating}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={creating || !name.trim() || scopes.length === 0}
+              >
+                {creating ? "Creating…" : "Create Key"}
+              </Button>
+            </div>
+          </form>
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   );
 }
 

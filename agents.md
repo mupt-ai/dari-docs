@@ -1,5 +1,18 @@
 # Bundled dari.dev agents
 
+## UI copy casing
+
+In the web app, user-facing labels, headings, navigation items, button text, empty-state titles, table headings, badges, and short UI actions should start with uppercase letters for each important word (for example, `New Agent`, `Buy Credits`, `API Keys`). Longer explanatory sentences may use normal sentence casing, but must still start with an uppercase letter.
+
+## Local Compose
+
+`compose.yaml` defaults to Docker-assigned localhost ports so multiple worktrees can run in parallel. Discover them with:
+
+```bash
+docker compose port backend 8080
+docker compose port frontend 5173
+```
+
 The agent template folders live at the repo root:
 
 ```text

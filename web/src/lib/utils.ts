@@ -26,3 +26,9 @@ export function firstLine(value: string): string {
   const line = value.split(/\r?\n/).find((part) => part.trim());
   return line?.trim() ?? "";
 }
+
+export function toTitleCase(value: string): string {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\S/g, (letter) => letter.toUpperCase());
+}
