@@ -512,6 +512,7 @@ func downloadManagedRunArtifacts(ctx context.Context, client *managed.Client, st
 	if err := writeManagedFeedback(outDir, status.FeedbackReports, status.AggregateFeedback); err != nil {
 		return "", err
 	}
+	// Failed terminal runs can still have tester feedback; updated docs only exist for completed optimize runs.
 	if status.Status != "completed" {
 		return "", nil
 	}

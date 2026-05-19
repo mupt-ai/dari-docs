@@ -211,6 +211,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusBadRequest, "bundle file is required")
 		return
 	}
+	// Reserve only after reading every part. Multipart clients may send scalar fields after the bundle.
 	if runtimeSecretJSON != "" && !liveVerify {
 		writeError(w, http.StatusBadRequest, "runtime secrets require live_verify=true")
 		return

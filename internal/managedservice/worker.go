@@ -183,6 +183,7 @@ func (s *Server) startSingleSessionBatch(ctx context.Context, run queuedRun, nex
 	if versionID == "" {
 		versionID = next.VersionID
 	}
+	// Store the requested LLM so reconciliation keys match the planned run matrix.
 	llmID := managedLLMIDOrDefault(next.LLMID)
 	store, err := s.runs()
 	if err != nil {
