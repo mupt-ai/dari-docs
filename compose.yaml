@@ -56,7 +56,7 @@ services:
     command: sh -c "npm ci && npm run dev -- --host 0.0.0.0"
     environment:
       VITE_API_PROXY_TARGET: http://backend:8080
-      VITE_ALLOWED_HOSTS: ${VITE_ALLOWED_HOSTS:-mac-mini.tailf3cee5.ts.net}
+      VITE_ALLOWED_HOSTS: ${VITE_ALLOWED_HOSTS:-}
     ports:
       - "127.0.0.1:${WEB_HOST_PORT:-}:5173"
     volumes:
