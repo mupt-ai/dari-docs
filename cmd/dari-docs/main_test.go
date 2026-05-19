@@ -89,13 +89,6 @@ func TestManagedSessionSummary(t *testing.T) {
 	}
 }
 
-func TestManagedRunTimeoutUsesConfiguredWait(t *testing.T) {
-	base := 30 * time.Minute
-	if got := managedRunTimeout(base); got != base {
-		t.Fatalf("managed run timeout = %s, want %s", got, base)
-	}
-}
-
 func TestManagedLLMSelectionDefaultsToAllowedClaudeMatrix(t *testing.T) {
 	cfg := managed.RunConfig{
 		DefaultLLMID:          "medium-claude",

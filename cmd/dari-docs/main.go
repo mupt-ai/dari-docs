@@ -325,7 +325,7 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 	}
 	fmt.Fprintf(os.Stderr, "Managed run: %s\n", created.RunID)
 	fmt.Fprintf(os.Stderr, "Reserved: %s\n", formatCents(reserve))
-	status, err := waitForManagedRun(ctx, client, created.RunID, managedRunTimeout(cfg.Timeout))
+	status, err := waitForManagedRun(ctx, client, created.RunID, cfg.Timeout)
 	if err != nil {
 		return err
 	}
@@ -399,10 +399,6 @@ func managedSessionSummary(command string, taskCount int, testerLLMCount int) st
 		return tester
 	}
 	return tester + " + 1 editor session"
-}
-
-func managedRunTimeout(base time.Duration) time.Duration {
-	return base
 }
 
 func waitForManagedRun(ctx context.Context, client *managed.Client, runID string, timeout time.Duration) (managed.RunStatus, error) {
