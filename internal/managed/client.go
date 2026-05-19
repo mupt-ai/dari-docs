@@ -160,7 +160,7 @@ type RunStatus struct {
 }
 
 type RunLLMSummary struct {
-	Kind  string `json:"kind"`
+	Role  string `json:"role"`
 	LLMID string `json:"llm_id"`
 	Count int    `json:"count"`
 }

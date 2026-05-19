@@ -506,11 +506,14 @@ func writeManagedFeedback(outDir string, reports []string, aggregate string) err
 }
 
 func downloadManagedRunArtifacts(ctx context.Context, client *managed.Client, status managed.RunStatus, outDir string) (string, error) {
-	if status.Status != "completed" {
-		return "", fmt.Errorf("managed run %s is %s; artifacts are available after completion", status.ID, status.Status)
+	if !isTerminalManagedRunStatus(status.Status) {
+		return "", fmt.Errorf("managed run %s is %s; artifacts are available after the run finishes", status.ID, status.Status)
 	}
 	if err := writeManagedFeedback(outDir, status.FeedbackReports, status.AggregateFeedback); err != nil {
 		return "", err
+	}
+	if status.Status != "completed" {
+		return "", nil
 	}
 	if status.Mode == "check" {
 		return "", nil
@@ -539,6 +542,9 @@ func downloadManagedUpdatedDocs(ctx context.Context, client *managed.Client, run
 
 func applyManagedRunArtifacts(ctx context.Context, client *managed.Client, status managed.RunStatus, repoRoot, outDir string) error {
 	if status.Mode != "optimize" {
+		return fmt.Errorf("apply is only available for completed optimize runs")
+	}
+	if status.Status != "completed" {
 		return fmt.Errorf("apply is only available for completed optimize runs")
 	}
 	updatedDir, err := downloadManagedRunArtifacts(ctx, client, status, outDir)
@@ -1058,7 +1064,7 @@ func printManagedRunStatus(status managed.RunStatus) {
 			if summary.LLMID == "" {
 				continue
 			}
-			label := summary.Kind + ": " + summary.LLMID
+			label := summary.Role + ": " + summary.LLMID
 			if summary.Count > 1 {
 				label += fmt.Sprintf(" (%d)", summary.Count)
 			}

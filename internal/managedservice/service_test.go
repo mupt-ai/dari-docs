@@ -1,7 +1,9 @@
 package managedservice
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -10,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -1840,20 +1843,23 @@ func TestHandleRunsReturns413ForOversizedMultipartBody(t *testing.T) {
 	}
 }
 
-func TestHandleRunsRequiresFieldsBeforeBundle(t *testing.T) {
+func TestHandleRunsReadsFieldsAfterBundle(t *testing.T) {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	part, err := mw.CreateFormFile("bundle", "input-docs-bundle.tar.gz")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := part.Write([]byte("not a real bundle")); err != nil {
+	if err := writeManagedServiceTestBundle(part); err != nil {
 		t.Fatal(err)
 	}
 	if err := mw.WriteField("mode", "check"); err != nil {
 		t.Fatal(err)
 	}
 	if err := mw.WriteField("tasks_json", `["check the docs"]`); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.WriteField("feedback_llm_ids_json", `["unknown-model"]`); err != nil {
 		t.Fatal(err)
 	}
 	if err := mw.Close(); err != nil {
@@ -1870,9 +1876,46 @@ func TestHandleRunsRequiresFieldsBeforeBundle(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "mode and tasks_json must be sent before bundle") {
+	if !strings.Contains(rec.Body.String(), "managed mode supports only these LLM IDs") {
 		t.Fatalf("body = %s", rec.Body.String())
 	}
+}
+
+func writeManagedServiceTestBundle(w io.Writer) error {
+	content := []byte("hello docs\n")
+	sum := sha256.Sum256(content)
+	manifest := bundle.Manifest{
+		SchemaVersion: 1,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+		RepoRoot:      "repo",
+		Files: []bundle.FileRecord{{
+			Path:      "README.md",
+			SizeBytes: int64(len(content)),
+			SHA256:    hex.EncodeToString(sum[:]),
+		}},
+	}
+	gz := gzip.NewWriter(w)
+	tw := tar.NewWriter(gz)
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0o644, Size: int64(len(manifestBytes))}); err != nil {
+		return err
+	}
+	if _, err := tw.Write(manifestBytes); err != nil {
+		return err
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: "files/README.md", Mode: 0o644, Size: int64(len(content))}); err != nil {
+		return err
+	}
+	if _, err := tw.Write(content); err != nil {
+		return err
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	return gz.Close()
 }
 
 func stripeSignatureHeader(payload []byte, secret string) string {

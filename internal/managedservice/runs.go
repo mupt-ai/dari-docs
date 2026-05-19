@@ -168,40 +168,8 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 				return
 			}
 		case "bundle":
-			if mode == "" || tasks == nil {
-				writeError(w, http.StatusBadRequest, "mode and tasks_json must be sent before bundle")
-				return
-			}
-			if runtimeSecretJSON != "" && !liveVerify {
-				writeError(w, http.StatusBadRequest, "runtime secrets require live_verify=true")
-				return
-			}
-			if runtimeSecretJSON != "" {
-				runtimeNonce, runtimeCiphertext, err = s.encryptRuntimeSecrets([]byte(runtimeSecretJSON))
-				if err != nil {
-					writeLoggedError(w, http.StatusInternalServerError, "could not encrypt runtime secrets", err)
-					return
-				}
-			}
-			if len(testerLLMIDs) == 0 {
-				testerLLMIDs = defaultManagedTesterLLMIDs()
-			}
-			if editorLLMID == "" {
-				editorLLMID = managedDefaultLLMID
-			}
-			reserve = reserveCentsForRun(mode, len(tasks), len(testerLLMIDs), s.cfg)
-			if err := s.preflightRun(r.Context(), u.ID, reserve); err != nil {
-				var activeErr *activeRunLimitError
-				if errors.As(err, &activeErr) {
-					writeError(w, http.StatusConflict, err.Error())
-					return
-				}
-				var creditErr *insufficientCreditsError
-				if errors.As(err, &creditErr) {
-					writeError(w, http.StatusPaymentRequired, creditErr.Error())
-					return
-				}
-				writeLoggedError(w, http.StatusInternalServerError, "could not reserve managed run", err)
+			if tmpPath != "" {
+				writeError(w, http.StatusBadRequest, "bundle file must be sent once")
 				return
 			}
 			tmpPath, b, err = s.stageManagedBundle(part)
@@ -230,9 +198,6 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 			writeError(w, http.StatusBadRequest, "unexpected multipart field")
 			return
 		}
-		if tmpPath != "" {
-			break
-		}
 	}
 	if mode == "" {
 		writeError(w, http.StatusBadRequest, "mode must be check or optimize")
@@ -244,6 +209,38 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	if tmpPath == "" {
 		writeError(w, http.StatusBadRequest, "bundle file is required")
+		return
+	}
+	if runtimeSecretJSON != "" && !liveVerify {
+		writeError(w, http.StatusBadRequest, "runtime secrets require live_verify=true")
+		return
+	}
+	if runtimeSecretJSON != "" {
+		runtimeNonce, runtimeCiphertext, err = s.encryptRuntimeSecrets([]byte(runtimeSecretJSON))
+		if err != nil {
+			writeLoggedError(w, http.StatusInternalServerError, "could not encrypt runtime secrets", err)
+			return
+		}
+	}
+	if len(testerLLMIDs) == 0 {
+		testerLLMIDs = defaultManagedTesterLLMIDs()
+	}
+	if editorLLMID == "" {
+		editorLLMID = managedDefaultLLMID
+	}
+	reserve = reserveCentsForRun(mode, len(tasks), len(testerLLMIDs), s.cfg)
+	if err := s.preflightRun(r.Context(), u.ID, reserve); err != nil {
+		var activeErr *activeRunLimitError
+		if errors.As(err, &activeErr) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		var creditErr *insufficientCreditsError
+		if errors.As(err, &creditErr) {
+			writeError(w, http.StatusPaymentRequired, creditErr.Error())
+			return
+		}
+		writeLoggedError(w, http.StatusInternalServerError, "could not reserve managed run", err)
 		return
 	}
 	runID := "run_" + randomToken(18)

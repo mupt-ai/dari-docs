@@ -202,11 +202,36 @@ func TestDownloadManagedRunArtifactsForCheckWritesFeedback(t *testing.T) {
 	}
 }
 
-func TestDownloadManagedRunArtifactsRequiresCompletedRun(t *testing.T) {
+func TestDownloadManagedRunArtifactsRejectsActiveRun(t *testing.T) {
 	client := managed.New("http://127.0.0.1:1", "token")
 	status := managed.RunStatus{ID: "run_running", Mode: "check", Status: "running"}
 	if _, err := downloadManagedRunArtifacts(context.Background(), client, status, t.TempDir()); err == nil {
 		t.Fatal("expected running run download to fail")
+	}
+}
+
+func TestDownloadManagedRunArtifactsForFailedRunWritesFeedback(t *testing.T) {
+	outDir := t.TempDir()
+	client := managed.New("http://127.0.0.1:1", "token")
+	status := managed.RunStatus{
+		ID:              "run_failed",
+		Mode:            "check",
+		Status:          "failed",
+		FeedbackReports: []string{"partial feedback"},
+	}
+	updatedDir, err := downloadManagedRunArtifacts(context.Background(), client, status, outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedDir != "" {
+		t.Fatalf("updatedDir = %q, want empty for failed run", updatedDir)
+	}
+	report, err := os.ReadFile(filepath.Join(outDir, "runs", "feedback-001.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(report) != "partial feedback\n" {
+		t.Fatalf("report = %q", report)
 	}
 }
 

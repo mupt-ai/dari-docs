@@ -183,7 +183,7 @@ func (s *Server) startSingleSessionBatch(ctx context.Context, run queuedRun, nex
 	if versionID == "" {
 		versionID = next.VersionID
 	}
-	llmID := managedLLMIDOrDefault(item.LLMID)
+	llmID := managedLLMIDOrDefault(next.LLMID)
 	store, err := s.runs()
 	if err != nil {
 		return err
