@@ -40,11 +40,11 @@ func defaultFeedbackLLMIDs() []string {
 }
 
 func defaultClaudeFeedbackLLMIDs() []string {
-	return []string{"dumb-claude", "medium-claude", "smart-claude"}
+	return runner.ClaudeFeedbackLLMIDs()
 }
 
 func defaultGPTFeedbackLLMIDs() []string {
-	return []string{"dumb-gpt", "medium-gpt", "smart-gpt"}
+	return runner.GPTFeedbackLLMIDs()
 }
 
 var version = "dev"

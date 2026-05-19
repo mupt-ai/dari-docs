@@ -22,7 +22,15 @@ const RuntimeSecretsName = "DARI_DOCS_RUNTIME_SECRETS_JSON"
 const maxSessionBatchItems = 100
 
 func DefaultFeedbackLLMIDs() []string {
-	return []string{"dumb-claude", "medium-claude", "smart-claude", "dumb-gpt", "medium-gpt", "smart-gpt"}
+	return append(ClaudeFeedbackLLMIDs(), GPTFeedbackLLMIDs()...)
+}
+
+func ClaudeFeedbackLLMIDs() []string {
+	return []string{"dumb-claude", "medium-claude", "smart-claude"}
+}
+
+func GPTFeedbackLLMIDs() []string {
+	return []string{"dumb-gpt", "medium-gpt", "smart-gpt"}
 }
 
 //go:embed prompts/*.md
