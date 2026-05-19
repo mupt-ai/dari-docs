@@ -5,13 +5,11 @@ export type AdminUserSummary = {
   email: string;
   display_name: string | null;
   created_at: string;
-  free_credit_granted_at: string | null;
   balance_cents: number;
   credit_granted_cents: number;
   credit_spent_cents: number;
   run_count: number;
   active_run_count: number;
-  token_count: number;
 };
 
 export type AdminRunSummary = {
@@ -28,23 +26,12 @@ export type AdminRunSummary = {
   completed_at: string | null;
 };
 
-export type AdminAPITokenSummary = {
-  id: string;
-  name: string;
-  kind: string;
-  token_prefix: string;
-  created_at: string;
-  last_used_at: string | null;
-  expires_at: string | null;
-};
-
 export type AdminUserSearch = {
   users: AdminUserSummary[];
 };
 
 export type AdminUserDetail = {
   user: AdminUserSummary;
-  tokens: AdminAPITokenSummary[];
   runs: AdminRunSummary[];
 };
 

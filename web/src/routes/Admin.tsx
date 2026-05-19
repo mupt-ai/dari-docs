@@ -22,7 +22,6 @@ import {
   getAdminUserDetail,
   grantAdminCredits,
   searchAdminUsers,
-  type AdminRunSummary,
   type AdminUserDetail,
   type AdminUserSummary,
 } from "@/lib/admin";
@@ -299,9 +298,17 @@ function SearchView({
   );
 }
 
-function RowStat({ label, value }: { label: string; value: string }) {
+function RowStat({
+  label,
+  value,
+  width = "w-24",
+}: {
+  label: string;
+  value: string;
+  width?: string;
+}) {
   return (
-    <div className="w-24 text-right">
+    <div className={`${width} text-right`}>
       <div className="text-sm tabular-nums text-foreground">{value}</div>
       <div className="text-[10px] uppercase tracking-widest text-muted-foreground">
         {label}
@@ -331,24 +338,19 @@ function UserDetail({ detail }: { detail: AdminUserDetail }) {
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="text-lg font-medium">{headline}</div>
-          <div className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
             {hasDisplayName ? (
               <Detail label="Email" value={user.email} />
             ) : null}
             <Detail label="User ID" value={user.id} mono />
             <Detail label="Created" value={formatDate(user.created_at)} />
-            <Detail
-              label="Free credit granted"
-              value={formatDate(user.free_credit_granted_at)}
-            />
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             <Metric label="Remaining credits" value={formatCents(user.balance_cents)} />
             <Metric label="Spent" value={formatCents(user.credit_spent_cents)} />
             <Metric label="Granted" value={formatCents(user.credit_granted_cents)} />
             <Metric label="Runs" value={formatCount(user.run_count)} />
             <Metric label="Active runs" value={formatCount(user.active_run_count)} />
-            <Metric label="API keys" value={formatCount(user.token_count)} />
           </div>
         </CardContent>
       </Card>
@@ -361,17 +363,49 @@ function UserDetail({ detail }: { detail: AdminUserDetail }) {
             {detail.runs.length}
           </span>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0">
           {detail.runs.length === 0 ? (
-            <div className="py-2 text-sm text-muted-foreground">
+            <div className="px-6 py-4 text-sm text-muted-foreground">
               No agent runs yet.
             </div>
           ) : (
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <ul className="divide-y divide-border border-t border-border">
               {detail.runs.map((run) => (
-                <RunCard key={run.id} run={run} />
+                <li
+                  key={run.id}
+                  className="flex items-center gap-6 px-4 py-3"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate font-medium">
+                        {toTitleCase(run.mode)}
+                      </span>
+                      <span className="shrink-0 border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-widest text-muted-foreground">
+                        {run.status}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
+                      {run.id}
+                    </div>
+                  </div>
+                  <div className="hidden shrink-0 items-center gap-6 sm:flex">
+                    <RowStat
+                      label="Tasks"
+                      value={formatCount(run.task_count)}
+                    />
+                    <RowStat
+                      label="Charged"
+                      value={formatCents(run.charged_cents)}
+                    />
+                    <RowStat
+                      label="Created"
+                      value={formatDate(run.created_at)}
+                      width="w-32"
+                    />
+                  </div>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
         </CardContent>
       </Card>
@@ -404,31 +438,6 @@ function Detail({
   );
 }
 
-function RunCard({ run }: { run: AdminRunSummary }) {
-  return (
-    <div className="border border-border p-3 text-sm">
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div>
-          <div className="font-medium">{toTitleCase(run.mode)}</div>
-          <div className="font-mono text-xs text-muted-foreground">
-            {run.id}
-          </div>
-        </div>
-        <span className="shrink-0 border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-widest text-muted-foreground">
-          {run.status}
-        </span>
-      </div>
-      <div className="space-y-2">
-        <FieldRow label="Tester Agent" value={run.tester_agent_id ?? "-"} mono />
-        <FieldRow label="Editor Agent" value={run.editor_agent_id ?? "-"} mono />
-        <FieldRow label="Tasks" value={formatCount(run.task_count)} />
-        <FieldRow label="Charged" value={formatCents(run.charged_cents)} />
-        <FieldRow label="Created" value={formatDate(run.created_at)} />
-      </div>
-    </div>
-  );
-}
-
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="border border-border p-3">
@@ -438,30 +447,6 @@ function Metric({ label, value }: { label: string; value: string }) {
       <div className="mt-2 break-words text-lg font-medium tabular-nums">
         {value}
       </div>
-    </div>
-  );
-}
-
-function FieldRow({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
-  return (
-    <div className="flex items-start justify-between gap-3 text-sm">
-      <span className="text-muted-foreground">{label}</span>
-      <span
-        className={
-          "max-w-[65%] break-words text-right tabular-nums" +
-          (mono ? " font-mono text-xs" : "")
-        }
-      >
-        {value}
-      </span>
     </div>
   );
 }

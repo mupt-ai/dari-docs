@@ -18,23 +18,20 @@ type adminUserSearchResponse struct {
 }
 
 type adminUserDetailResponse struct {
-	User   adminUserSummary       `json:"user"`
-	Tokens []adminAPITokenSummary `json:"tokens"`
-	Runs   []adminRunSummary      `json:"runs"`
+	User adminUserSummary  `json:"user"`
+	Runs []adminRunSummary `json:"runs"`
 }
 
 type adminUserSummary struct {
-	ID                  string     `json:"id"`
-	Email               string     `json:"email"`
-	DisplayName         *string    `json:"display_name"`
-	CreatedAt           time.Time  `json:"created_at"`
-	FreeCreditGrantedAt *time.Time `json:"free_credit_granted_at"`
-	BalanceCents        int64      `json:"balance_cents"`
-	CreditGrantedCents  int64      `json:"credit_granted_cents"`
-	CreditSpentCents    int64      `json:"credit_spent_cents"`
-	RunCount            int64      `json:"run_count"`
-	ActiveRunCount      int64      `json:"active_run_count"`
-	TokenCount          int64      `json:"token_count"`
+	ID                 string    `json:"id"`
+	Email              string    `json:"email"`
+	DisplayName        *string   `json:"display_name"`
+	CreatedAt          time.Time `json:"created_at"`
+	BalanceCents       int64     `json:"balance_cents"`
+	CreditGrantedCents int64     `json:"credit_granted_cents"`
+	CreditSpentCents   int64     `json:"credit_spent_cents"`
+	RunCount           int64     `json:"run_count"`
+	ActiveRunCount     int64     `json:"active_run_count"`
 }
 
 type adminRunSummary struct {
@@ -49,16 +46,6 @@ type adminRunSummary struct {
 	ChargedCents  int64      `json:"charged_cents"`
 	CreatedAt     time.Time  `json:"created_at"`
 	CompletedAt   *time.Time `json:"completed_at"`
-}
-
-type adminAPITokenSummary struct {
-	ID          string     `json:"id"`
-	Name        string     `json:"name"`
-	Kind        string     `json:"kind"`
-	TokenPrefix string     `json:"token_prefix"`
-	CreatedAt   time.Time  `json:"created_at"`
-	LastUsedAt  *time.Time `json:"last_used_at"`
-	ExpiresAt   *time.Time `json:"expires_at"`
 }
 
 type adminCreditGrantResponse struct {
@@ -77,13 +64,11 @@ SELECT
 	u.email,
 	u.display_name,
 	u.created_at,
-	u.free_credit_granted_at,
 	coalesce(credits.balance_cents, 0),
 	coalesce(credits.granted_cents, 0),
 	greatest(coalesce(credits.granted_cents, 0) - coalesce(credits.balance_cents, 0), 0),
 	coalesce(runs.run_count, 0),
-	coalesce(runs.active_run_count, 0),
-	coalesce(tokens.token_count, 0)
+	coalesce(runs.active_run_count, 0)
 FROM users u
 LEFT JOIN (
 	SELECT
@@ -101,12 +86,6 @@ LEFT JOIN (
 	FROM runs
 	GROUP BY user_id
 ) runs ON runs.user_id = u.id
-LEFT JOIN (
-	SELECT user_id, count(*) AS token_count
-	FROM api_tokens
-	WHERE revoked_at IS NULL
-	GROUP BY user_id
-) tokens ON tokens.user_id = u.id
 `
 
 var adminEmails = map[string]struct{}{
@@ -194,17 +173,12 @@ func (s *Server) handleAdminUserByID(w http.ResponseWriter, r *http.Request, u u
 		writeLoggedError(w, http.StatusInternalServerError, "could not load user", err)
 		return
 	}
-	tokens, err := s.listAdminUserTokens(r.Context(), userID)
-	if err != nil {
-		writeLoggedError(w, http.StatusInternalServerError, "could not load user API keys", err)
-		return
-	}
 	runs, err := s.listAdminUserRuns(r.Context(), userID)
 	if err != nil {
 		writeLoggedError(w, http.StatusInternalServerError, "could not load user runs", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, adminUserDetailResponse{User: summary, Tokens: tokens, Runs: runs})
+	writeJSON(w, http.StatusOK, adminUserDetailResponse{User: summary, Runs: runs})
 }
 
 func (s *Server) handleAdminCredits(w http.ResponseWriter, r *http.Request, u user) {
@@ -271,30 +245,6 @@ func (s *Server) getAdminUserSummary(ctx context.Context, userID string) (adminU
 	return scanAdminUserSummary(s.db.QueryRow(ctx, adminUserSummarySelect+`WHERE u.id=$1`, userID))
 }
 
-func (s *Server) listAdminUserTokens(ctx context.Context, userID string) ([]adminAPITokenSummary, error) {
-	rows, err := s.db.Query(ctx, `
-SELECT id, coalesce(name, ''), coalesce(kind, 'interactive'), coalesce(token_prefix, ''),
-       created_at, last_used_at, expires_at
-FROM api_tokens
-WHERE user_id=$1 AND revoked_at IS NULL
-ORDER BY created_at DESC
-LIMIT 25
-`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	tokens := []adminAPITokenSummary{}
-	for rows.Next() {
-		var token adminAPITokenSummary
-		if err := rows.Scan(&token.ID, &token.Name, &token.Kind, &token.TokenPrefix, &token.CreatedAt, &token.LastUsedAt, &token.ExpiresAt); err != nil {
-			return nil, err
-		}
-		tokens = append(tokens, token)
-	}
-	return tokens, rows.Err()
-}
-
 func (s *Server) listAdminUserRuns(ctx context.Context, userID string) ([]adminRunSummary, error) {
 	rows, err := s.db.Query(ctx, `
 SELECT id, mode, coalesce(source, 'cli'), status, tester_agent_id, editor_agent_id, jsonb_array_length(tasks),
@@ -331,13 +281,11 @@ func scanAdminUserSummary(row scanRow) (adminUserSummary, error) {
 		&summary.Email,
 		&displayName,
 		&summary.CreatedAt,
-		&summary.FreeCreditGrantedAt,
 		&summary.BalanceCents,
 		&summary.CreditGrantedCents,
 		&summary.CreditSpentCents,
 		&summary.RunCount,
 		&summary.ActiveRunCount,
-		&summary.TokenCount,
 	)
 	if err != nil {
 		return adminUserSummary{}, err
