@@ -29,6 +29,22 @@ var (
 	errRunFeedbackLoad     = errors.New("run feedback unavailable")
 )
 
+const (
+	runSourceCLI = "cli"
+	runSourceWeb = "web"
+
+	managedMaxSourceManifestBytes = 1 << 20
+	managedMaxBundlePatternBytes  = 64 * 1024
+)
+
+type managedSourceManifest struct {
+	Files []managedSourceManifestFile `json:"files"`
+}
+
+type managedSourceManifestFile struct {
+	Path string `json:"path"`
+}
+
 type activeRunLimitError struct {
 	Limit int
 }
@@ -60,9 +76,9 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	maxMultipartBytes := s.cfg.MaxBundleBytes + 1<<20
+	maxMultipartBytes := s.maxManagedRunMultipartBytes()
 	if r.ContentLength > maxMultipartBytes {
-		writeError(w, http.StatusRequestEntityTooLarge, "bundle exceeds managed size limit")
+		writeError(w, http.StatusRequestEntityTooLarge, "upload exceeds managed size limit")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxMultipartBytes)
@@ -83,6 +99,13 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		testerLLMIDs       []string
 		editorLLMID        string
 		tmpPath            string
+		sourceRoot         string
+		sourcePaths        []string
+		sourceFilesSeen    int
+		sourceUploadBytes  int64
+		sourceInclude      []string
+		sourceExclude      []string
+		runSource          = runSourceCLI
 		b                  bundle.Result
 		bundleName         string
 		reserve            int64
@@ -94,7 +117,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		}
 		if err != nil {
 			if isRequestBodyTooLarge(err) {
-				writeError(w, http.StatusRequestEntityTooLarge, "bundle exceeds managed size limit")
+				writeError(w, http.StatusRequestEntityTooLarge, "upload exceeds managed size limit")
 				return
 			}
 			writeLoggedError(w, http.StatusBadRequest, "invalid multipart form", err)
@@ -167,7 +190,94 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
+		case "bundle_include_json":
+			v, err := readTextPart(part, managedMaxBundlePatternBytes)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "bundle_include_json field is too large")
+				return
+			}
+			sourceInclude, err = parseStringListJSON(v, "bundle_include_json")
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		case "bundle_exclude_json":
+			v, err := readTextPart(part, managedMaxBundlePatternBytes)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "bundle_exclude_json field is too large")
+				return
+			}
+			sourceExclude, err = parseStringListJSON(v, "bundle_exclude_json")
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		case "source_files_json":
+			if sourceRoot != "" {
+				writeError(w, http.StatusBadRequest, "source_files_json must be sent before source_file")
+				return
+			}
+			if tmpPath != "" {
+				writeError(w, http.StatusBadRequest, "source files cannot be sent with a prebuilt bundle")
+				return
+			}
+			if sourcePaths != nil {
+				writeError(w, http.StatusBadRequest, "source_files_json field must be sent once")
+				return
+			}
+			v, err := readTextPart(part, managedMaxSourceManifestBytes)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "source_files_json field is too large")
+				return
+			}
+			sourcePaths, err = parseManagedSourceManifest(v)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		case "source_file":
+			if mode == "" {
+				writeError(w, http.StatusBadRequest, "mode must be sent before source_file")
+				return
+			}
+			if tmpPath != "" {
+				writeError(w, http.StatusBadRequest, "send either bundle or source files, not both")
+				return
+			}
+			if len(sourcePaths) == 0 {
+				writeError(w, http.StatusBadRequest, "source_files_json must be sent before source_file")
+				return
+			}
+			if sourceFilesSeen >= len(sourcePaths) {
+				writeError(w, http.StatusBadRequest, "too many source_file parts")
+				return
+			}
+			if sourceRoot == "" {
+				sourceRoot, err = os.MkdirTemp("", "dari-docs-source-*")
+				if err != nil {
+					writeLoggedError(w, http.StatusInternalServerError, "could not stage source files", err)
+					return
+				}
+				defer os.RemoveAll(sourceRoot)
+			}
+			if err := s.stageManagedSourceFile(part, sourceRoot, sourcePaths[sourceFilesSeen], &sourceUploadBytes); err != nil {
+				if errors.Is(err, errBundleTooLarge) {
+					writeError(w, http.StatusRequestEntityTooLarge, "source upload exceeds managed size limit")
+					return
+				}
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			sourceFilesSeen++
 		case "bundle":
+			if mode == "" {
+				writeError(w, http.StatusBadRequest, "mode must be sent before bundle")
+				return
+			}
+			if sourceRoot != "" || len(sourcePaths) > 0 || len(sourceInclude) > 0 || len(sourceExclude) > 0 {
+				writeError(w, http.StatusBadRequest, "send either bundle or source files, not both")
+				return
+			}
 			if tmpPath != "" {
 				writeError(w, http.StatusBadRequest, "bundle file must be sent once")
 				return
@@ -205,6 +315,40 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	if tasks == nil {
 		writeError(w, http.StatusBadRequest, "tasks_json must be a JSON string array")
+		return
+	}
+	if sourceRoot != "" || len(sourcePaths) > 0 {
+		if sourceRoot == "" {
+			writeError(w, http.StatusBadRequest, "source_file is required")
+			return
+		}
+		if sourceFilesSeen != len(sourcePaths) {
+			writeError(w, http.StatusBadRequest, "source_file parts do not match source_files_json")
+			return
+		}
+		var err error
+		tmpPath, b, err = s.stageManagedSourceBundle(sourceRoot, bundle.CreateOptions{
+			Include:      sourceInclude,
+			Exclude:      sourceExclude,
+			MaxFileBytes: s.cfg.BundleMaxFileBytes,
+		})
+		if err != nil {
+			if errors.Is(err, errBundleTooLarge) {
+				writeError(w, http.StatusRequestEntityTooLarge, "bundle exceeds managed size limit")
+				return
+			}
+			if errors.Is(err, errBundleStageInternal) {
+				writeLoggedError(w, http.StatusInternalServerError, "could not stage bundle", err)
+				return
+			}
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		defer os.Remove(tmpPath)
+		bundleName = "input-docs-bundle.tar.gz"
+		runSource = runSourceWeb
+	} else if len(sourceInclude) > 0 || len(sourceExclude) > 0 {
+		writeError(w, http.StatusBadRequest, "bundle include/exclude options require source files")
 		return
 	}
 	if tmpPath == "" {
@@ -260,7 +404,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		writeLoggedError(w, http.StatusInternalServerError, "could not encode runtime secret names", err)
 		return
 	}
-	if err := s.reserveRun(r.Context(), u.ID, runID, mode, taskJSON, testerLLMIDsJSON, editorLLMID, b, reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
+	if err := s.reserveRun(r.Context(), u.ID, runID, mode, taskJSON, testerLLMIDsJSON, editorLLMID, runSource, b, reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
 		if errors.Is(err, errManagedAgentsNotConfigured) {
 			writeError(w, http.StatusServiceUnavailable, "managed agents are not configured")
 			return
@@ -310,6 +454,7 @@ type runListResponse struct {
 type runListItem struct {
 	ID                   string          `json:"id"`
 	Mode                 string          `json:"mode"`
+	Source               string          `json:"source"`
 	Status               string          `json:"status"`
 	Tasks                []string        `json:"tasks"`
 	TaskCount            int             `json:"task_count"`
@@ -364,7 +509,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request, u user) 
 		direction = "ASC"
 	}
 	query := fmt.Sprintf(`
-SELECT id, mode, status, tasks, created_at, completed_at, reserved_cents, charged_cents,
+SELECT id, mode, coalesce(source, 'cli'), status, tasks, created_at, completed_at, reserved_cents, charged_cents,
        coalesce(cost_status,''), coalesce(error,''), coalesce(editor_session_id,'')
 FROM runs
 WHERE user_id=$1
@@ -385,7 +530,7 @@ LIMIT $2 OFFSET $3
 		var item runListItem
 		var tasksJSON []byte
 		var costStatus, editorSessionID string
-		if err := rows.Scan(&item.ID, &item.Mode, &item.Status, &tasksJSON, &item.CreatedAt, &item.CompletedAt, &item.ReservedCents, &item.ChargedCents, &costStatus, &item.Error, &editorSessionID); err != nil {
+		if err := rows.Scan(&item.ID, &item.Mode, &item.Source, &item.Status, &tasksJSON, &item.CreatedAt, &item.CompletedAt, &item.ReservedCents, &item.ChargedCents, &costStatus, &item.Error, &editorSessionID); err != nil {
 			writeLoggedError(w, http.StatusInternalServerError, "could not list runs", err)
 			return
 		}
@@ -585,6 +730,181 @@ func (s *Server) stageManagedBundle(part *multipart.Part) (string, bundle.Result
 	return tmpPath, b, nil
 }
 
+func (s *Server) maxManagedRunMultipartBytes() int64 {
+	limit := s.cfg.MaxBundleBytes
+	if s.cfg.BundleMaxUncompressedBytes > limit {
+		limit = s.cfg.BundleMaxUncompressedBytes
+	}
+	if limit <= 0 {
+		limit = bundle.DefaultMaxUncompressedBytes
+	}
+	overhead := limit / 10
+	if overhead < 1<<20 {
+		overhead = 1 << 20
+	}
+	if overhead > 8<<20 {
+		overhead = 8 << 20
+	}
+	return limit + overhead
+}
+
+func (s *Server) stageManagedSourceFile(part *multipart.Part, root string, rel string, totalBytes *int64) error {
+	rel, err := normalizeManagedSourcePath(rel)
+	if err != nil {
+		return err
+	}
+	maxFileBytes := s.cfg.BundleMaxFileBytes
+	if maxFileBytes <= 0 {
+		maxFileBytes = bundle.DefaultMaxFileBytes
+	}
+	target := filepath.Join(root, filepath.FromSlash(rel))
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	targetAbs, err := filepath.Abs(target)
+	if err != nil {
+		return err
+	}
+	inside, err := filepath.Rel(rootAbs, targetAbs)
+	if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) || filepath.IsAbs(inside) {
+		return fmt.Errorf("invalid source file path %q", rel)
+	}
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		return fmt.Errorf("stage source file %q: %w", rel, err)
+	}
+	out, err := os.Create(targetAbs)
+	if err != nil {
+		return fmt.Errorf("stage source file %q: %w", rel, err)
+	}
+	written, copyErr := io.Copy(out, io.LimitReader(part, maxFileBytes+1))
+	closeErr := out.Close()
+	if copyErr != nil {
+		return fmt.Errorf("stage source file %q: %w", rel, copyErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("stage source file %q: %w", rel, closeErr)
+	}
+	if written > maxFileBytes {
+		return fmt.Errorf("%w: source file %q exceeds managed per-file limit", errBundleTooLarge, rel)
+	}
+	*totalBytes += written
+	maxUncompressedBytes := s.cfg.BundleMaxUncompressedBytes
+	if maxUncompressedBytes <= 0 {
+		maxUncompressedBytes = bundle.DefaultMaxUncompressedBytes
+	}
+	if *totalBytes > maxUncompressedBytes {
+		return errBundleTooLarge
+	}
+	return nil
+}
+
+func (s *Server) stageManagedSourceBundle(sourceRoot string, opts bundle.CreateOptions) (string, bundle.Result, error) {
+	tmp, err := os.CreateTemp("", "dari-docs-bundle-*.tar.gz")
+	if err != nil {
+		return "", bundle.Result{}, fmt.Errorf("%w: create temporary bundle file: %v", errBundleStageInternal, err)
+	}
+	tmpPath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", bundle.Result{}, fmt.Errorf("%w: close temporary bundle file: %v", errBundleStageInternal, err)
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	b, err := bundle.CreateWithOptions(sourceRoot, tmpPath, opts)
+	if err != nil {
+		return "", bundle.Result{}, err
+	}
+	maxBundleBytes := s.cfg.MaxBundleBytes
+	if maxBundleBytes <= 0 {
+		maxBundleBytes = managedMaxBundleBytes
+	}
+	if b.Bytes > maxBundleBytes {
+		return "", bundle.Result{}, errBundleTooLarge
+	}
+	if len(b.Manifest.Files) == 0 {
+		return "", bundle.Result{}, errors.New("source upload did not contain any supported docs files")
+	}
+	keep = true
+	return tmpPath, b, nil
+}
+
+func parseManagedSourceManifest(raw string) ([]string, error) {
+	var manifest managedSourceManifest
+	if err := json.Unmarshal([]byte(raw), &manifest); err == nil && manifest.Files != nil {
+		paths := make([]string, 0, len(manifest.Files))
+		for _, file := range manifest.Files {
+			paths = append(paths, file.Path)
+		}
+		return normalizeManagedSourcePaths(paths)
+	}
+	var paths []string
+	if err := json.Unmarshal([]byte(raw), &paths); err != nil {
+		return nil, errors.New("source_files_json must be a JSON array of paths or an object with files")
+	}
+	return normalizeManagedSourcePaths(paths)
+}
+
+func normalizeManagedSourcePaths(paths []string) ([]string, error) {
+	out := make([]string, 0, len(paths))
+	seen := map[string]bool{}
+	for _, raw := range paths {
+		rel, err := normalizeManagedSourcePath(raw)
+		if err != nil {
+			return nil, err
+		}
+		if seen[rel] {
+			return nil, fmt.Errorf("duplicate source file path %q", rel)
+		}
+		seen[rel] = true
+		out = append(out, rel)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("source_files_json must include at least one file")
+	}
+	return out, nil
+}
+
+func normalizeManagedSourcePath(raw string) (string, error) {
+	rel := strings.TrimSpace(filepath.ToSlash(raw))
+	rel = strings.TrimPrefix(rel, "./")
+	if err := bundle.ValidateRelativePath(rel); err != nil {
+		return "", err
+	}
+	return rel, nil
+}
+
+func parseStringListJSON(raw string, field string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil, fmt.Errorf("%s must be a JSON string array", field)
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out, nil
+}
+
+func normalizeRunSource(source string) string {
+	if source == runSourceWeb {
+		return runSourceWeb
+	}
+	return runSourceCLI
+}
+
 func (s *Server) preflightRun(ctx context.Context, userID string, reserve int64) error {
 	var active int
 	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM runs WHERE user_id=$1 AND status IN ($2,$3,$4,$5)`, userID, statusUploading, statusQueued, statusStarting, statusRunning).Scan(&active); err != nil {
@@ -647,11 +967,12 @@ func (s *Server) maxActiveRunsPerUser() int {
 	return int(managedMaxActiveRunsPerUser)
 }
 
-func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, taskJSON, testerLLMIDsJSON []byte, editorLLMID string, b bundle.Result, reserve int64, liveVerify bool, secretNamesJSON, runtimeNonce, runtimeCiphertext []byte) error {
+func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, taskJSON, testerLLMIDsJSON []byte, editorLLMID string, source string, b bundle.Result, reserve int64, liveVerify bool, secretNamesJSON, runtimeNonce, runtimeCiphertext []byte) error {
 	agents, err := s.configuredManagedAgents()
 	if err != nil {
 		return err
 	}
+	source = normalizeRunSource(source)
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -679,12 +1000,13 @@ func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, tas
 		editorLLMID = defaultManagedEditorLLMID()
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO runs (id, user_id, mode, status, tasks, tester_llm_ids, editor_llm_id, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files, reserved_cents, live_verify, runtime_secret_names, runtime_secrets_nonce, runtime_secrets_ciphertext)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+		INSERT INTO runs (id, user_id, mode, source, status, tasks, tester_llm_ids, editor_llm_id, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files, reserved_cents, live_verify, runtime_secret_names, runtime_secrets_nonce, runtime_secrets_ciphertext)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 		`,
 		runID,
 		userID,
 		mode,
+		source,
 		statusUploading,
 		taskJSON,
 		testerLLMIDsJSON,
@@ -790,6 +1112,7 @@ func (s *Server) handleUpdatedZip(w http.ResponseWriter, r *http.Request, u user
 type runStatusResponse struct {
 	ID                   string              `json:"id"`
 	Mode                 string              `json:"mode"`
+	Source               string              `json:"source"`
 	Status               string              `json:"status"`
 	Error                string              `json:"error,omitempty"`
 	Tasks                []string            `json:"tasks,omitempty"`
@@ -812,10 +1135,10 @@ func (s *Server) loadRunStatus(ctx context.Context, userID, runID string) (runSt
 	var tasksJSON []byte
 	var costStatus string
 	err := s.db.QueryRow(ctx, `
-SELECT id, mode, status, tasks, coalesce(error,''), coalesce(editor_session_id,''), reserved_cents, charged_cents,
+SELECT id, mode, coalesce(source, 'cli'), status, tasks, coalesce(error,''), coalesce(editor_session_id,''), reserved_cents, charged_cents,
        coalesce(cost_status,''), created_at, completed_at
 FROM runs WHERE id=$1 AND user_id=$2
-`, runID, userID).Scan(&rs.ID, &rs.Mode, &rs.Status, &tasksJSON, &rs.Error, &editorSessionID, &rs.ReservedCents, &rs.ChargedCents, &costStatus, &rs.CreatedAt, &rs.CompletedAt)
+`, runID, userID).Scan(&rs.ID, &rs.Mode, &rs.Source, &rs.Status, &tasksJSON, &rs.Error, &editorSessionID, &rs.ReservedCents, &rs.ChargedCents, &costStatus, &rs.CreatedAt, &rs.CompletedAt)
 	if err != nil {
 		return rs, err
 	}

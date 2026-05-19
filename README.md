@@ -77,6 +77,8 @@ MANAGED_TESTER_AGENT_ID=...
 MANAGED_EDITOR_AGENT_ID=...
 ```
 
+Supabase is used for browser sign-in. The local backend still owns the Dari Docs database, billing state, run creation, bundle upload, and worker loops. When the frontend calls the backend with a Supabase session, the backend verifies that session against `DARI_API_BASE_URL`, so use matching Supabase and Dari API environments.
+
 ## Quickstart
 
 Managed mode uses the hosted dari.dev Docs service and a separate dari.dev Docs credit balance. New accounts start with five dollars worth of free credits.
