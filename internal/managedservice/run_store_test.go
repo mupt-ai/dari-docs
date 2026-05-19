@@ -56,10 +56,18 @@ func TestManagedRunStoreExecOnlyMethodsPassSQLAndArgumentsInOrder(t *testing.T) 
 		{
 			name: "insert started run session",
 			run: func(ctx context.Context, store *managedRunStore) error {
-				return store.InsertStartedRunSession(ctx, "sess_test", "run_test", "tester", 2, "ver_test", "llm_test")
+				return store.InsertStartedRunSession(ctx, "sess_test", "run_test", "tester", 2, "llm_test")
 			},
 			wantSQLContains: "INSERT INTO run_sessions",
-			wantArgs:        []any{"sess_test", "run_test", "tester", 2, statusRunning, "ver_test", "llm_test"},
+			wantArgs: []any{
+				"sess_test",
+				"run_test",
+				"tester",
+				2,
+				statusRunning,
+				managedAgentVersionCompatibilityValue,
+				"llm_test",
+			},
 		},
 		{
 			name: "mark run running from starting",

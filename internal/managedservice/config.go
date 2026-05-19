@@ -16,10 +16,7 @@ type Config struct {
 	SupabaseURL                string
 	SupabasePublishableKey     string
 	ManagedTesterAgentID       string
-	ManagedTesterVersionID     string
 	ManagedEditorAgentID       string
-	ManagedEditorVersionID     string
-	ReleaseAdminToken          string
 	RuntimeSecretsKey          []byte
 	FreeGrantCents             int64
 	TesterReserveCents         int64
@@ -75,10 +72,7 @@ func ConfigFromEnv() (Config, error) {
 		SupabaseURL:                strings.TrimRight(strings.TrimSpace(os.Getenv("SUPABASE_URL")), "/"),
 		SupabasePublishableKey:     strings.TrimSpace(os.Getenv("SUPABASE_PUBLISHABLE_KEY")),
 		ManagedTesterAgentID:       os.Getenv("MANAGED_TESTER_AGENT_ID"),
-		ManagedTesterVersionID:     os.Getenv("MANAGED_TESTER_VERSION_ID"),
 		ManagedEditorAgentID:       os.Getenv("MANAGED_EDITOR_AGENT_ID"),
-		ManagedEditorVersionID:     os.Getenv("MANAGED_EDITOR_VERSION_ID"),
-		ReleaseAdminToken:          os.Getenv("DARI_DOCS_RELEASE_ADMIN_TOKEN"),
 		StripeSecretKey:            os.Getenv("STRIPE_SECRET_KEY"),
 		StripeWebhookSecret:        os.Getenv("STRIPE_WEBHOOK_SECRET"),
 	}
@@ -99,9 +93,6 @@ func ConfigFromEnv() (Config, error) {
 	}
 	if cfg.ManagedEditorAgentID == "" {
 		return Config{}, errors.New("MANAGED_EDITOR_AGENT_ID is required")
-	}
-	if cfg.ReleaseAdminToken == "" {
-		return Config{}, errors.New("DARI_DOCS_RELEASE_ADMIN_TOKEN is required")
 	}
 	key, err := decodeRuntimeSecretsKey(os.Getenv("DARI_DOCS_SECRET_ENCRYPTION_KEY"))
 	if err != nil {
