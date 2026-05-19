@@ -12,7 +12,7 @@ func TestNormalizeManagedLLMIDsDefaultsToClaudeMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(got, ",") != "claude-haiku-4-5,claude-sonnet-4-7,claude-opus-4-6" {
+	if strings.Join(got, ",") != "claude-haiku-4-5,claude-sonnet-4-6,claude-opus-4-7" {
 		t.Fatalf("managed LLM IDs = %#v", got)
 	}
 }
@@ -36,7 +36,7 @@ func TestNormalizeManagedLLMIDsRejectsUnknownModel(t *testing.T) {
 func TestTesterBatchItemsExpandsTasksAcrossManagedLLMs(t *testing.T) {
 	run := queuedRun{
 		Tasks:        []string{"task one", "task two"},
-		TesterLLMIDs: []string{"claude-haiku-4-5", "claude-opus-4-6"},
+		TesterLLMIDs: []string{"claude-haiku-4-5", "claude-opus-4-7"},
 	}
 	items := testerBatchItems(run)
 	if len(items) != 4 {
@@ -48,7 +48,7 @@ func TestTesterBatchItemsExpandsTasksAcrossManagedLLMs(t *testing.T) {
 		items[2].task + ":" + items[2].llmID,
 		items[3].task + ":" + items[3].llmID,
 	}
-	want := "task one:claude-haiku-4-5,task one:claude-opus-4-6,task two:claude-haiku-4-5,task two:claude-opus-4-6"
+	want := "task one:claude-haiku-4-5,task one:claude-opus-4-7,task two:claude-haiku-4-5,task two:claude-opus-4-7"
 	if strings.Join(got, ",") != want {
 		t.Fatalf("items = %#v", got)
 	}
@@ -57,18 +57,18 @@ func TestTesterBatchItemsExpandsTasksAcrossManagedLLMs(t *testing.T) {
 func TestMissingTesterBatchItemsReturnsOnlyUnstartedMatrixItems(t *testing.T) {
 	run := queuedRun{
 		Tasks:        []string{"task one", "task two"},
-		TesterLLMIDs: []string{"claude-haiku-4-5", "claude-sonnet-4-7"},
+		TesterLLMIDs: []string{"claude-haiku-4-5", "claude-sonnet-4-6"},
 	}
 	sessions := []runSessionRecord{
 		{Kind: "tester", TaskIndex: 1, LLMID: "claude-haiku-4-5", Status: statusCompleted},
-		{Kind: "tester", TaskIndex: 2, LLMID: "claude-sonnet-4-7", Status: statusRunning},
+		{Kind: "tester", TaskIndex: 2, LLMID: "claude-sonnet-4-6", Status: statusRunning},
 	}
 	items := missingTesterBatchItems(run, sessions)
 	got := make([]string, 0, len(items))
 	for _, item := range items {
 		got = append(got, item.task+":"+item.llmID)
 	}
-	want := "task one:claude-sonnet-4-7,task two:claude-haiku-4-5"
+	want := "task one:claude-sonnet-4-6,task two:claude-haiku-4-5"
 	if strings.Join(got, ",") != want {
 		t.Fatalf("missing tester items = %#v, want %s", got, want)
 	}
@@ -78,7 +78,7 @@ func TestTesterBatchIdempotencyKeyKeepsOriginalKeyForFullMatrix(t *testing.T) {
 	run := queuedRun{
 		ID:           "run_test",
 		Tasks:        []string{"task one"},
-		TesterLLMIDs: []string{"claude-haiku-4-5", "claude-sonnet-4-7"},
+		TesterLLMIDs: []string{"claude-haiku-4-5", "claude-sonnet-4-6"},
 	}
 	full := testerBatchItems(run)
 	if got := testerBatchIdempotencyKey(run, full); got != "dari-docs-managed-run_test-testers" {
@@ -102,8 +102,8 @@ func TestReserveCentsForRunCountsTesterLLMMatrix(t *testing.T) {
 
 func TestSessionLLMIDPreservesStoredRequestedID(t *testing.T) {
 	remoteLLMID := "unexpected-remote-llm"
-	got := sessionLLMID("claude-opus-4-6", dari.Session{LLMID: &remoteLLMID})
-	if got != "claude-opus-4-6" {
+	got := sessionLLMID("claude-opus-4-7", dari.Session{LLMID: &remoteLLMID})
+	if got != "claude-opus-4-7" {
 		t.Fatalf("session LLM ID = %q, want stored requested ID", got)
 	}
 }

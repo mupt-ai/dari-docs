@@ -20,17 +20,17 @@ sandbox:
       - diffutils
 
 llm:
-  default: claude-sonnet-4-7
+  default: claude-sonnet-4-6
   options:
     claude-haiku-4-5:
       provider: anthropic
       model: claude-haiku-4-5
-    claude-sonnet-4-7:
+    claude-sonnet-4-6:
       provider: anthropic
-      model: claude-sonnet-4-7
-    claude-opus-4-6:
+      model: claude-sonnet-4-6
+    claude-opus-4-7:
       provider: anthropic
-      model: claude-opus-4-6
+      model: claude-opus-4-7
     gpt-5-mini:
       provider: openai
       model: gpt-5-mini

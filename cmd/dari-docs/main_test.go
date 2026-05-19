@@ -91,27 +91,27 @@ func TestManagedSessionSummary(t *testing.T) {
 
 func TestManagedLLMSelectionDefaultsToAllowedClaudeMatrix(t *testing.T) {
 	cfg := managed.RunConfig{
-		DefaultLLMID:          "claude-sonnet-4-7",
-		DefaultFeedbackLLMIDs: []string{"claude-haiku-4-5", "claude-sonnet-4-7", "claude-opus-4-6"},
-		AllowedLLMIDs:         []string{"claude-haiku-4-5", "claude-sonnet-4-7", "claude-opus-4-6", "gpt-5-mini", "gpt-5.1", "gpt-5.5"},
+		DefaultLLMID:          "claude-sonnet-4-6",
+		DefaultFeedbackLLMIDs: []string{"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"},
+		AllowedLLMIDs:         []string{"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7", "gpt-5-mini", "gpt-5.1", "gpt-5.5"},
 	}
 	feedback, editor, err := managedLLMSelection(nil, "", cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(feedback, ",") != "claude-haiku-4-5,claude-sonnet-4-7,claude-opus-4-6" {
+	if strings.Join(feedback, ",") != "claude-haiku-4-5,claude-sonnet-4-6,claude-opus-4-7" {
 		t.Fatalf("feedback = %#v", feedback)
 	}
-	if editor != "claude-sonnet-4-7" {
+	if editor != "claude-sonnet-4-6" {
 		t.Fatalf("editor = %q", editor)
 	}
 }
 
 func TestManagedLLMSelectionAllowsGPT(t *testing.T) {
 	cfg := managed.RunConfig{
-		DefaultLLMID:          "claude-sonnet-4-7",
-		DefaultFeedbackLLMIDs: []string{"claude-haiku-4-5", "claude-sonnet-4-7", "claude-opus-4-6"},
-		AllowedLLMIDs:         []string{"claude-haiku-4-5", "claude-sonnet-4-7", "claude-opus-4-6", "gpt-5-mini", "gpt-5.1", "gpt-5.5"},
+		DefaultLLMID:          "claude-sonnet-4-6",
+		DefaultFeedbackLLMIDs: []string{"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"},
+		AllowedLLMIDs:         []string{"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7", "gpt-5-mini", "gpt-5.1", "gpt-5.5"},
 	}
 	feedback, editor, err := managedLLMSelection([]string{"gpt-5.5"}, "gpt-5.1", cfg)
 	if err != nil {
@@ -124,23 +124,23 @@ func TestManagedLLMSelectionAllowsGPT(t *testing.T) {
 
 func TestDefaultFeedbackLLMIDsIncludesBundledMatrix(t *testing.T) {
 	got := defaultFeedbackLLMIDs()
-	want := []string{"claude-haiku-4-5", "claude-sonnet-4-7", "claude-opus-4-6", "gpt-5-mini", "gpt-5.1", "gpt-5.5"}
+	want := []string{"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7", "gpt-5-mini", "gpt-5.1", "gpt-5.5"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("defaultFeedbackLLMIDs = %#v, want %#v", got, want)
 	}
 }
 
 func TestExpandCSVListTrimsDeduplicatesAndSplits(t *testing.T) {
-	got := expandCSVList([]string{"claude-haiku-4-5, claude-sonnet-4-7", "gpt-5.5", "claude-sonnet-4-7"})
-	want := []string{"claude-haiku-4-5", "claude-sonnet-4-7", "gpt-5.5"}
+	got := expandCSVList([]string{"claude-haiku-4-5, claude-sonnet-4-6", "gpt-5.5", "claude-sonnet-4-6"})
+	want := []string{"claude-haiku-4-5", "claude-sonnet-4-6", "gpt-5.5"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("expandCSVList = %#v, want %#v", got, want)
 	}
 }
 
 func TestExpandFeedbackLLMListSupportsGroups(t *testing.T) {
-	got := expandFeedbackLLMList([]string{"claude, gpt-5.1", "gpt", "claude-opus-4-6"})
-	want := []string{"claude-haiku-4-5", "claude-sonnet-4-7", "claude-opus-4-6", "gpt-5.1", "gpt-5-mini", "gpt-5.5"}
+	got := expandFeedbackLLMList([]string{"claude, gpt-5.1", "gpt", "claude-opus-4-7"})
+	want := []string{"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7", "gpt-5.1", "gpt-5-mini", "gpt-5.5"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("expandFeedbackLLMList = %#v, want %#v", got, want)
 	}
@@ -418,11 +418,11 @@ func TestSetLLMAPIKeySecretRejectsMultipleProviders(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dari.yml")
 	original := `name: test
 llm:
-  default: claude-sonnet-4-7
+  default: claude-sonnet-4-6
   options:
-    claude-sonnet-4-7:
+    claude-sonnet-4-6:
       provider: anthropic
-      model: claude-sonnet-4-7
+      model: claude-sonnet-4-6
     gpt-5.5:
       provider: openai
       model: gpt-5.5
@@ -440,11 +440,11 @@ func TestSetLLMAPIKeySecretsByProviderUpdatesMatchingOptions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dari.yml")
 	original := `name: test
 llm:
-  default: claude-sonnet-4-7
+  default: claude-sonnet-4-6
   options:
-    claude-sonnet-4-7:
+    claude-sonnet-4-6:
       provider: anthropic
-      model: claude-sonnet-4-7
+      model: claude-sonnet-4-6
     gpt-5.5:
       provider: openai
       model: gpt-5.5
@@ -469,11 +469,11 @@ func TestSetLLMAPIKeySecretReplacesExistingSecret(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dari.yml")
 	original := `name: test
 llm:
-  default: claude-sonnet-4-7
+  default: claude-sonnet-4-6
   options:
-    claude-sonnet-4-7:
+    claude-sonnet-4-6:
       provider: anthropic
-      model: claude-sonnet-4-7
+      model: claude-sonnet-4-6
       api_key_secret: OLD_KEY
 `
 	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
@@ -497,7 +497,7 @@ llm:
 
 func TestSetLLMAPIKeySecretPreservesModel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dari.yml")
-	original := "name: test\nllm:\n  model: anthropic/claude-sonnet-4.7\n"
+	original := "name: test\nllm:\n  model: anthropic/claude-sonnet-4.6\n"
 	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +509,7 @@ func TestSetLLMAPIKeySecretPreservesModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(b)
-	if !strings.Contains(got, "model: anthropic/claude-sonnet-4.7") {
+	if !strings.Contains(got, "model: anthropic/claude-sonnet-4.6") {
 		t.Fatalf("model was not preserved:\n%s", got)
 	}
 	if !strings.Contains(got, "api_key_secret: MY_KEY") {

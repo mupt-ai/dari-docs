@@ -26,16 +26,16 @@ dari-docs optimize . \
 
 ## Choose model tiers
 
-By default, the bundled agents expose named LLM options such as `claude-haiku-4-5`, `claude-sonnet-4-7`, `claude-opus-4-6`, `gpt-5-mini`, `gpt-5.1`, and `gpt-5.5`. The Claude options use the `anthropic` provider and the GPT options use the `openai` provider.
+By default, the bundled agents expose named LLM options such as `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-7`, `gpt-5-mini`, `gpt-5.1`, and `gpt-5.5`. The Claude options use the `anthropic` provider and the GPT options use the `openai` provider.
 
-In self-managed mode, tester sessions run every task across all six options by default. The CLI creates tester sessions through the Dari session-batch API, in chunks controlled by `--parallel`, and attaches metadata such as `kind`, `task_index`, and `llm_id` so agent webhooks can correlate lifecycle events. The editor uses the manifest default, `claude-sonnet-4-7`.
+In self-managed mode, tester sessions run every task across all six options by default. The CLI creates tester sessions through the Dari session-batch API, in chunks controlled by `--parallel`, and attaches metadata such as `kind`, `task_index`, and `llm_id` so agent webhooks can correlate lifecycle events. The editor uses the manifest default, `claude-sonnet-4-6`.
 
 To explicitly choose tester model tiers:
 
 ```bash
 dari-docs check . \
   --task "Install the SDK and make a first API call" \
-  --feedback-llm claude-haiku-4-5,claude-sonnet-4-7,claude-opus-4-6
+  --feedback-llm claude-haiku-4-5,claude-sonnet-4-6,claude-opus-4-7
 ```
 
 `--feedback-llm` also accepts `claude`, `gpt`, and `all` groups, and groups can be mixed with explicit IDs.

@@ -930,7 +930,7 @@ const defaultDocsNames = new Set([
   "llms-full.txt",
 ]);
 
-const defaultClaudeTesterLLMIDs = ["claude-haiku-4-5", "claude-sonnet-4-7", "claude-opus-4-6"];
+const defaultClaudeTesterLLMIDs = ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"];
 
 function defaultTesterLLMIDs(config: RunConfig): string[] {
   const allowed = new Set(config.allowed_llm_ids);
