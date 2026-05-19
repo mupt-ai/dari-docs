@@ -26,24 +26,24 @@ sandbox:
       - tar
 
 llm:
-  default: medium-claude
+  default: claude-sonnet-4-7
   options:
-    dumb-claude:
+    claude-haiku-4-5:
       provider: anthropic
       model: claude-haiku-4-5
-    medium-claude:
+    claude-sonnet-4-7:
       provider: anthropic
       model: claude-sonnet-4-7
-    smart-claude:
+    claude-opus-4-6:
       provider: anthropic
       model: claude-opus-4-6
-    dumb-gpt:
+    gpt-5-mini:
       provider: openai
       model: gpt-5-mini
-    medium-gpt:
+    gpt-5.1:
       provider: openai
       model: gpt-5.1
-    smart-gpt:
+    gpt-5.5:
       provider: openai
       model: gpt-5.5
 

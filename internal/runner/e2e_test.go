@@ -128,7 +128,7 @@ func TestRunCheckE2EDefaultFeedbackLLMMatrix(t *testing.T) {
 	gotLLMs := append([]string(nil), llmIDs...)
 	sawReadme := uploadedBundleSawReadme
 	mu.Unlock()
-	wantLLMs := []string{"dumb-claude", "medium-claude", "smart-claude", "dumb-gpt", "medium-gpt", "smart-gpt"}
+	wantLLMs := []string{"claude-haiku-4-5", "claude-sonnet-4-7", "claude-opus-4-6", "gpt-5-mini", "gpt-5.1", "gpt-5.5"}
 	if strings.Join(gotLLMs, ",") != strings.Join(wantLLMs, ",") {
 		t.Fatalf("session llm_id sequence = %#v, want %#v", gotLLMs, wantLLMs)
 	}

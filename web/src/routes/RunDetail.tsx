@@ -454,8 +454,19 @@ function Summary({ label, value }: { label: string; value: React.ReactNode }) {
 
 function Markdown({ text }: { text: string }) {
   return (
-    <div className="prose prose-invert max-w-none text-sm prose-p:my-2 prose-pre:border prose-pre:border-border prose-pre:bg-background prose-pre:p-3">
-      <ReactMarkdown skipHtml>{text}</ReactMarkdown>
+    <div className="max-w-none text-sm leading-6 text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:text-brand [&_a]:underline [&_code]:bg-muted/50 [&_code]:px-1 [&_h1]:mb-2 [&_h1]:mt-4 [&_h1]:text-base [&_h1]:font-medium [&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-sm [&_h2]:font-medium [&_h3]:mb-2 [&_h3]:mt-3 [&_h3]:font-medium [&_li]:my-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:border [&_pre]:border-border [&_pre]:bg-card [&_pre]:p-3 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5">
+      <ReactMarkdown skipHtml components={{ hr: () => null }}>
+        {feedbackMarkdownBody(text)}
+      </ReactMarkdown>
     </div>
   );
+}
+
+function feedbackMarkdownBody(text: string): string {
+  return text
+    .replace(/\r\n/g, "\n")
+    .trim()
+    .replace(/^Task index:\s*\d+\s*\nTester LLM:\s*[^\n]+\s*\n{2,}/i, "")
+    .replace(/^Task index:\s*\d+\s*\n{2,}/i, "")
+    .trim();
 }
