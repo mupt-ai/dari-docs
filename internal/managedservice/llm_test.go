@@ -54,6 +54,42 @@ func TestTesterBatchItemsExpandsTasksAcrossManagedLLMs(t *testing.T) {
 	}
 }
 
+func TestMissingTesterBatchItemsReturnsOnlyUnstartedMatrixItems(t *testing.T) {
+	run := queuedRun{
+		Tasks:        []string{"task one", "task two"},
+		TesterLLMIDs: []string{"dumb-claude", "medium-claude"},
+	}
+	sessions := []runSessionRecord{
+		{Kind: "tester", TaskIndex: 1, LLMID: "dumb-claude", Status: statusCompleted},
+		{Kind: "tester", TaskIndex: 2, LLMID: "medium-claude", Status: statusRunning},
+	}
+	items := missingTesterBatchItems(run, sessions)
+	got := make([]string, 0, len(items))
+	for _, item := range items {
+		got = append(got, item.task+":"+item.llmID)
+	}
+	want := "task one:medium-claude,task two:dumb-claude"
+	if strings.Join(got, ",") != want {
+		t.Fatalf("missing tester items = %#v, want %s", got, want)
+	}
+}
+
+func TestTesterBatchIdempotencyKeyKeepsOriginalKeyForFullMatrix(t *testing.T) {
+	run := queuedRun{
+		ID:           "run_test",
+		Tasks:        []string{"task one"},
+		TesterLLMIDs: []string{"dumb-claude", "medium-claude"},
+	}
+	full := testerBatchItems(run)
+	if got := testerBatchIdempotencyKey(run, full); got != "dari-docs-managed-run_test-testers" {
+		t.Fatalf("full batch key = %q", got)
+	}
+	partial := full[:1]
+	if got := testerBatchIdempotencyKey(run, partial); got == "dari-docs-managed-run_test-testers" {
+		t.Fatalf("partial batch reused full batch key")
+	}
+}
+
 func TestReserveCentsForRunCountsTesterLLMMatrix(t *testing.T) {
 	cfg := Config{TesterReserveCents: 75, EditorReserveCents: 150}
 	if got := reserveCentsForRun("check", 2, 3, cfg); got != 450 {

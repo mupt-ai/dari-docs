@@ -2,6 +2,8 @@ package managedservice
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"time"
@@ -130,17 +132,18 @@ func (s *Server) startNextSession(ctx context.Context, run queuedRun) error {
 	if err != nil {
 		return err
 	}
-	if shouldStartTesterBatch(run, sessions) {
-		return s.startTesterBatch(ctx, run)
-	}
 	next, ok, err := s.nextSession(ctx, run, sessions)
 	if err != nil {
 		return s.failStartedRun(ctx, run, persistedErrSessionFailed, err)
 	}
-	if !ok {
-		return s.reconcileRunProgress(ctx, run.ID)
+	if ok {
+		return s.startSingleSessionBatch(ctx, run, next)
 	}
-	return s.startSingleSessionBatch(ctx, run, next)
+	missing := missingTesterBatchItems(run, sessions)
+	if len(missing) > 0 {
+		return s.startTesterBatch(ctx, run, missing)
+	}
+	return s.reconcileRunProgress(ctx, run.ID)
 }
 
 func (s *Server) startSingleSessionBatch(ctx context.Context, run queuedRun, next nextSession) error {
@@ -216,11 +219,10 @@ func managedSessionMetadata(run queuedRun, next nextSession) map[string]string {
 	return metadata
 }
 
-func shouldStartTesterBatch(run queuedRun, sessions []runSessionRecord) bool {
-	return len(run.Tasks) > 0 && len(sessions) == 0
-}
-
-func (s *Server) startTesterBatch(ctx context.Context, run queuedRun) error {
+func (s *Server) startTesterBatch(ctx context.Context, run queuedRun, items []testerBatchItem) error {
+	if len(items) == 0 {
+		return nil
+	}
 	b := bundle.Result{SHA256: run.BundleSHA256, Manifest: bundle.Manifest{Files: make([]bundle.FileRecord, run.BundleFiles)}}
 	var secrets map[string]string
 	if run.LiveVerify {
@@ -233,10 +235,9 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun) error {
 		}
 	}
 	batchReq := dari.CreateSessionBatchRequest{
-		IdempotencyKey: "dari-docs-managed-" + run.ID + "-testers",
-		Items:          make([]dari.CreateSessionBatchItem, 0, expectedTesterSessions(run)),
+		IdempotencyKey: testerBatchIdempotencyKey(run, items),
+		Items:          make([]dari.CreateSessionBatchItem, 0, len(items)),
 	}
-	items := testerBatchItems(run)
 	for _, item := range items {
 		metadata := map[string]string{
 			"managed_run_id": run.ID,
@@ -294,6 +295,18 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun) error {
 		s.clearRuntimeSecrets(ctx, run.ID)
 	}
 	return store.MarkRunRunningFromStarting(ctx, run.ID)
+}
+
+func testerBatchIdempotencyKey(run queuedRun, items []testerBatchItem) string {
+	base := "dari-docs-managed-" + run.ID + "-testers"
+	if len(items) == expectedTesterSessions(run) {
+		return base
+	}
+	h := sha256.New()
+	for _, item := range items {
+		fmt.Fprintf(h, "%d:%s\n", item.taskIndex+1, managedLLMIDOrDefault(item.llmID))
+	}
+	return base + "-" + hex.EncodeToString(h.Sum(nil))[:16]
 }
 
 func (s *Server) nextSession(ctx context.Context, run queuedRun, sessions []runSessionRecord) (nextSession, bool, error) {
@@ -607,6 +620,23 @@ func testerBatchItems(run queuedRun) []testerBatchItem {
 		}
 	}
 	return items
+}
+
+func missingTesterBatchItems(run queuedRun, sessions []runSessionRecord) []testerBatchItem {
+	existing := map[string]bool{}
+	for _, session := range sessions {
+		if session.Kind != "tester" || session.TaskIndex < 1 || session.TaskIndex > len(run.Tasks) {
+			continue
+		}
+		existing[testerSessionKey(session.TaskIndex, session.LLMID)] = true
+	}
+	var missing []testerBatchItem
+	for _, item := range testerBatchItems(run) {
+		if !existing[testerSessionKey(item.taskIndex+1, item.llmID)] {
+			missing = append(missing, item)
+		}
+	}
+	return missing
 }
 
 func expectedTesterSessions(run queuedRun) int {
