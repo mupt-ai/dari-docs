@@ -270,10 +270,6 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 			}
 			sourceFilesSeen++
 		case "bundle":
-			if mode == "" {
-				writeError(w, http.StatusBadRequest, "mode must be sent before bundle")
-				return
-			}
 			if sourceRoot != "" || len(sourcePaths) > 0 || len(sourceInclude) > 0 || len(sourceExclude) > 0 {
 				writeError(w, http.StatusBadRequest, "send either bundle or source files, not both")
 				return

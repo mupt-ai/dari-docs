@@ -1743,14 +1743,14 @@ func TestHandleRunsReturns413ForOversizedMultipartBody(t *testing.T) {
 func TestHandleRunsReadsFieldsAfterBundle(t *testing.T) {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
-	if err := mw.WriteField("mode", "check"); err != nil {
-		t.Fatal(err)
-	}
 	part, err := mw.CreateFormFile("bundle", "input-docs-bundle.tar.gz")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := writeManagedServiceTestBundle(part); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.WriteField("mode", "check"); err != nil {
 		t.Fatal(err)
 	}
 	if err := mw.WriteField("tasks_json", `["check the docs"]`); err != nil {
