@@ -575,10 +575,10 @@ func TestHandleRunConfigReturnsLaunchPricingAndLimits(t *testing.T) {
 	if got.DefaultLLMID != defaultManagedEditorLLMID() {
 		t.Fatalf("default_llm_id = %q, want %q", got.DefaultLLMID, defaultManagedEditorLLMID())
 	}
-	if strings.Join(got.DefaultFeedbackLLMIDs, ",") != "dumb-claude,medium-claude,smart-claude" {
+	if strings.Join(got.DefaultFeedbackLLMIDs, ",") != "claude-haiku-4-5,claude-sonnet-4-6,claude-opus-4-7" {
 		t.Fatalf("default_feedback_llm_ids = %#v", got.DefaultFeedbackLLMIDs)
 	}
-	if strings.Join(got.AllowedLLMIDs, ",") != "dumb-claude,medium-claude,smart-claude,dumb-gpt,medium-gpt,smart-gpt" {
+	if strings.Join(got.AllowedLLMIDs, ",") != "claude-haiku-4-5,claude-sonnet-4-6,claude-opus-4-7,gpt-5-mini,gpt-5.1,gpt-5.5" {
 		t.Fatalf("allowed_llm_ids = %#v", got.AllowedLLMIDs)
 	}
 }
@@ -955,7 +955,7 @@ func TestReserveRunStoresConfiguredHostedAgents(t *testing.T) {
 			{Path: "README.md", SizeBytes: 12, SHA256: "file_sha"},
 		}},
 	}
-	if err := s.reserveRun(ctx, userID, runID, "check", []byte(`["task"]`), []byte(`["dumb-claude","smart-claude"]`), "smart-claude", runSourceCLI, result, 150, false, []byte(`[]`), nil, nil); err != nil {
+	if err := s.reserveRun(ctx, userID, runID, "check", []byte(`["task"]`), []byte(`["claude-haiku-4-5","claude-opus-4-7"]`), "claude-opus-4-7", runSourceCLI, result, 150, false, []byte(`[]`), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -978,10 +978,10 @@ FROM runs WHERE id=$1
 	if err := json.Unmarshal(testerLLMIDsJSON, &testerLLMIDs); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(testerLLMIDs, ",") != "dumb-claude,smart-claude" {
+	if strings.Join(testerLLMIDs, ",") != "claude-haiku-4-5,claude-opus-4-7" {
 		t.Fatalf("tester_llm_ids = %#v", testerLLMIDs)
 	}
-	if editorLLMID != "smart-claude" {
+	if editorLLMID != "claude-opus-4-7" {
 		t.Fatalf("editor_llm_id = %q", editorLLMID)
 	}
 	if source != runSourceCLI {

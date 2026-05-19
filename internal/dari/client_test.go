@@ -27,11 +27,11 @@ func TestCreateSessionBatchSendsItems(t *testing.T) {
 			t.Fatalf("batch request = %#v", got)
 		}
 		item := got.Items[0]
-		if item.AgentID != "agt_test" || item.LLMID != "smart-claude" || item.Metadata["kind"] != "tester" || len(item.Message.Content) != 1 {
+		if item.AgentID != "agt_test" || item.LLMID != "claude-opus-4-7" || item.Metadata["kind"] != "tester" || len(item.Message.Content) != 1 {
 			t.Fatalf("batch item = %#v", item)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"batch_id":"batch_test","status":"queued","sessions":[{"index":0,"session_id":"sess_test","status":"queued","last_message_status":"queued","agent_id":"agt_test","version_id":"ver_test","llm_id":"smart-claude","metadata":{"kind":"tester"}}]}`))
+		_, _ = w.Write([]byte(`{"batch_id":"batch_test","status":"queued","sessions":[{"index":0,"session_id":"sess_test","status":"queued","last_message_status":"queued","agent_id":"agt_test","version_id":"ver_test","llm_id":"claude-opus-4-7","metadata":{"kind":"tester"}}]}`))
 	}))
 	defer server.Close()
 
@@ -39,7 +39,7 @@ func TestCreateSessionBatchSendsItems(t *testing.T) {
 		IdempotencyKey: "batch-key",
 		Items: []CreateSessionBatchItem{{
 			AgentID:  "agt_test",
-			LLMID:    "smart-claude",
+			LLMID:    "claude-opus-4-7",
 			Metadata: map[string]string{"kind": "tester"},
 			Message:  CreateSessionBatchMessage{Content: []ContentBlock{TextBlock("hello")}},
 		}},
