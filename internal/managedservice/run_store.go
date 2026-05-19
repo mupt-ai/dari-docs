@@ -52,9 +52,7 @@ SELECT id,
        mode,
        tasks,
        tester_agent_id,
-       tester_version_id,
        editor_agent_id,
-       editor_version_id,
        COALESCE(bundle_file_id, ''),
        bundle_sha256,
        bundle_files,
@@ -93,14 +91,13 @@ func (store *managedRunStore) InsertStartedRunSession(
 	runID string,
 	kind string,
 	taskIndex int,
-	versionID string,
 	llmID string,
 ) error {
 	_, err := store.db.Exec(ctx, `
 INSERT INTO run_sessions (session_id, run_id, kind, task_index, status, version_id, llm_id)
 VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''))
 ON CONFLICT (session_id) DO NOTHING
-`, sessionID, runID, kind, taskIndex, statusRunning, versionID, llmID)
+`, sessionID, runID, kind, taskIndex, statusRunning, managedAgentVersionCompatibilityValue, llmID)
 	return err
 }
 
@@ -304,9 +301,7 @@ SELECT id,
        mode,
        tasks,
        tester_agent_id,
-       tester_version_id,
        editor_agent_id,
-       editor_version_id,
        COALESCE(bundle_file_id, ''),
        bundle_sha256,
        bundle_files,
@@ -483,9 +478,7 @@ func scanQueuedRun(row pgx.Row) (queuedRun, error) {
 		&run.Mode,
 		&tasksJSON,
 		&run.TesterAgentID,
-		&run.TesterVersionID,
 		&run.EditorAgentID,
-		&run.EditorVersionID,
 		&run.BundleFileID,
 		&run.BundleSHA256,
 		&run.BundleFiles,

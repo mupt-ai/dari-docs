@@ -12,20 +12,18 @@ import (
 )
 
 type queuedRun struct {
-	ID              string
-	UserID          string
-	Mode            string
-	Tasks           []string
-	TesterAgentID   string
-	TesterVersionID string
-	EditorAgentID   string
-	EditorVersionID string
-	BundleFileID    string
-	BundleSHA256    string
-	BundleFiles     int
-	LiveVerify      bool
-	SecretNames     []string
-	ReservedCents   int64
+	ID            string
+	UserID        string
+	Mode          string
+	Tasks         []string
+	TesterAgentID string
+	EditorAgentID string
+	BundleFileID  string
+	BundleSHA256  string
+	BundleFiles   int
+	LiveVerify    bool
+	SecretNames   []string
+	ReservedCents int64
 }
 
 type runSessionRecord struct {
@@ -44,7 +42,6 @@ type nextSession struct {
 	Kind      string
 	TaskIndex int
 	AgentID   string
-	VersionID string
 	Prompt    string
 }
 
@@ -154,11 +151,10 @@ func (s *Server) startSingleSessionBatch(ctx context.Context, run queuedRun, nex
 	batch, err := s.dari.CreateSessionBatch(ctx, dari.CreateSessionBatchRequest{
 		IdempotencyKey: "dari-docs-managed-" + run.ID + "-" + next.Kind,
 		Items: []dari.CreateSessionBatchItem{{
-			AgentID:   next.AgentID,
-			VersionID: next.VersionID,
-			LLMID:     managedDefaultLLMID,
-			Metadata:  managedSessionMetadata(run, next),
-			Secrets:   secrets,
+			AgentID:  next.AgentID,
+			LLMID:    managedDefaultLLMID,
+			Metadata: managedSessionMetadata(run, next),
+			Secrets:  secrets,
 			Message: dari.CreateSessionBatchMessage{Content: []dari.ContentBlock{
 				dari.TextBlock(next.Prompt),
 				dari.FileBlock(run.BundleFileID),
@@ -176,16 +172,12 @@ func (s *Server) startSingleSessionBatch(ctx context.Context, run queuedRun, nex
 		return s.failStartedRun(ctx, run, persistedErrSessionCreateFailed, fmt.Errorf("create %s session: %s", next.Kind, msg))
 	}
 	item := batch.Sessions[0]
-	versionID := item.VersionID
-	if versionID == "" {
-		versionID = next.VersionID
-	}
 	llmID := managedLLMIDOrDefault(item.LLMID)
 	store, err := s.runs()
 	if err != nil {
 		return err
 	}
-	if err := store.InsertStartedRunSession(ctx, item.SessionID, run.ID, next.Kind, next.TaskIndex, versionID, llmID); err != nil {
+	if err := store.InsertStartedRunSession(ctx, item.SessionID, run.ID, next.Kind, next.TaskIndex, llmID); err != nil {
 		return err
 	}
 	if isFinalSecretBearingSession(run, next) {
@@ -239,11 +231,10 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun) error {
 			"task_index":     fmt.Sprintf("%d", i+1),
 		}
 		batchReq.Items = append(batchReq.Items, dari.CreateSessionBatchItem{
-			AgentID:   run.TesterAgentID,
-			VersionID: run.TesterVersionID,
-			LLMID:     managedDefaultLLMID,
-			Metadata:  metadata,
-			Secrets:   secrets,
+			AgentID:  run.TesterAgentID,
+			LLMID:    managedDefaultLLMID,
+			Metadata: metadata,
+			Secrets:  secrets,
 			Message: dari.CreateSessionBatchMessage{Content: []dari.ContentBlock{
 				dari.TextBlock(runner.FeedbackPrompt(task, b, run.LiveVerify, secretNameMap(run.SecretNames))),
 				dari.FileBlock(run.BundleFileID),
@@ -269,12 +260,8 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun) error {
 			}
 			continue
 		}
-		versionID := item.VersionID
-		if versionID == "" {
-			versionID = run.TesterVersionID
-		}
 		llmID := managedLLMIDOrDefault(item.LLMID)
-		if err := store.InsertStartedRunSession(ctx, item.SessionID, run.ID, "tester", item.Index+1, versionID, llmID); err != nil {
+		if err := store.InsertStartedRunSession(ctx, item.SessionID, run.ID, "tester", item.Index+1, llmID); err != nil {
 			return err
 		}
 	}
@@ -314,7 +301,6 @@ func (s *Server) nextSession(ctx context.Context, run queuedRun, sessions []runS
 			Kind:      "tester",
 			TaskIndex: taskIndex,
 			AgentID:   run.TesterAgentID,
-			VersionID: run.TesterVersionID,
 			Prompt:    runner.FeedbackPrompt(run.Tasks[taskIndex-1], b, run.LiveVerify, secretNameMap(run.SecretNames)),
 		}, true, nil
 	}
@@ -337,7 +323,6 @@ func (s *Server) nextSession(ctx context.Context, run queuedRun, sessions []runS
 		Kind:      "editor",
 		TaskIndex: 0,
 		AgentID:   run.EditorAgentID,
-		VersionID: run.EditorVersionID,
 		Prompt:    runner.EditorPrompt(reports),
 	}, true, nil
 }

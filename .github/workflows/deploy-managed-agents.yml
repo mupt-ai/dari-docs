@@ -25,7 +25,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: managed-agent-release
+  group: managed-agent-deploy
   cancel-in-progress: false
 
 jobs:
@@ -34,8 +34,6 @@ jobs:
     env:
       DARI_API_KEY: ${{ secrets.DARI_API_KEY }}
       DARI_API_URL: https://api.dari.dev
-      DARI_DOCS_RELEASE_ADMIN_TOKEN: ${{ secrets.DARI_DOCS_RELEASE_ADMIN_TOKEN }}
-      DARI_DOCS_SERVICE_URL: ${{ vars.DARI_DOCS_SERVICE_URL || 'https://optimize.dari.dev' }}
       MANAGED_TESTER_AGENT_ID: ${{ vars.MANAGED_TESTER_AGENT_ID }}
       MANAGED_EDITOR_AGENT_ID: ${{ vars.MANAGED_EDITOR_AGENT_ID }}
     steps:
@@ -50,11 +48,11 @@ jobs:
       - name: Install Dari CLI
         run: python -m pip install --upgrade dari-cli
 
-      - name: Validate release configuration
+      - name: Validate deployment configuration
         shell: bash
         run: |
           set -euo pipefail
-          for name in DARI_API_KEY DARI_DOCS_RELEASE_ADMIN_TOKEN DARI_DOCS_SERVICE_URL MANAGED_TESTER_AGENT_ID MANAGED_EDITOR_AGENT_ID; do
+          for name in DARI_API_KEY MANAGED_TESTER_AGENT_ID MANAGED_EDITOR_AGENT_ID; do
             if [[ -z "${!name}" ]]; then
               echo "$name is required" >&2
               exit 1
@@ -100,53 +98,10 @@ jobs:
 
       - name: Deploy tester agent
         if: steps.changes.outputs.tester == 'true'
-        id: tester
         shell: bash
-        run: |
-          set -euo pipefail
-          output="$(dari deploy agents/docs-user-tester-agent --agent-id "$MANAGED_TESTER_AGENT_ID")"
-          version_id="$(python -c 'import json,sys; print(json.load(sys.stdin)["version_id"])' <<< "$output")"
-          echo "version_id=$version_id" >> "$GITHUB_OUTPUT"
+        run: dari deploy agents/docs-user-tester-agent --agent-id "$MANAGED_TESTER_AGENT_ID"
 
       - name: Deploy editor agent
         if: steps.changes.outputs.editor == 'true'
-        id: editor
         shell: bash
-        run: |
-          set -euo pipefail
-          output="$(dari deploy agents/docs-editor-agent --agent-id "$MANAGED_EDITOR_AGENT_ID")"
-          version_id="$(python -c 'import json,sys; print(json.load(sys.stdin)["version_id"])' <<< "$output")"
-          echo "version_id=$version_id" >> "$GITHUB_OUTPUT"
-
-      - name: Activate managed agent release
-        if: steps.changes.outputs.tester == 'true' || steps.changes.outputs.editor == 'true'
-        shell: bash
-        env:
-          TESTER_VERSION_ID: ${{ steps.tester.outputs.version_id }}
-          EDITOR_VERSION_ID: ${{ steps.editor.outputs.version_id }}
-        run: |
-          set -euo pipefail
-          python - <<'PY' > release.json
-          import json
-          import os
-
-          payload = {
-              "source": "github_actions",
-              "git_sha": os.environ["GITHUB_SHA"],
-              "github_run_id": os.environ["GITHUB_RUN_ID"],
-          }
-          tester = os.environ.get("TESTER_VERSION_ID", "").strip()
-          editor = os.environ.get("EDITOR_VERSION_ID", "").strip()
-          if tester:
-              payload["tester_version_id"] = tester
-          if editor:
-              payload["editor_version_id"] = editor
-          print(json.dumps(payload))
-          PY
-
-          curl --fail --show-error --silent \
-            --retry 8 --retry-all-errors --retry-delay 5 \
-            -X POST "$DARI_DOCS_SERVICE_URL/v1/admin/managed-agent-release" \
-            -H "Authorization: Bearer $DARI_DOCS_RELEASE_ADMIN_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data @release.json
+        run: dari deploy agents/docs-editor-agent --agent-id "$MANAGED_EDITOR_AGENT_ID"
