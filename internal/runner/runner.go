@@ -145,7 +145,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if err := dari.ExtractZip(zipPath, extractDir); err != nil {
 		return res, err
 	}
-	res.UpdatedDir, err = workspace.UpdatedRoot(extractDir)
+	res.UpdatedDir, err = workspace.FindUpdatedDocsFilesDir(extractDir)
 	if err != nil {
 		return res, err
 	}

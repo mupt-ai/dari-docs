@@ -522,7 +522,7 @@ func downloadManagedUpdatedDocs(ctx context.Context, client *managed.Client, run
 	if err := dari.ExtractZip(zipPath, extractDir); err != nil {
 		return "", err
 	}
-	return workspace.UpdatedRoot(extractDir)
+	return workspace.FindUpdatedDocsFilesDir(extractDir)
 }
 
 func runAuth(args []string) error {

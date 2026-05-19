@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 )
 
-func UpdatedRoot(extractDir string) (string, error) {
+func FindUpdatedDocsFilesDir(extractDir string) (string, error) {
 	candidates := []string{
 		filepath.Join(extractDir, "updated-docs", "files"),
 		filepath.Join(extractDir, "workspace", "updated-docs", "files"),
