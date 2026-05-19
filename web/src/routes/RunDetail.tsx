@@ -246,14 +246,7 @@ function plannedTesterLLMIDs(run: RunStatus): string[] {
 function completedFeedbackByKey(run: RunStatus): Map<string, string> {
   const out = new Map<string, string>();
   const completedSessions = (run.sessions ?? [])
-    .filter((session) => session.kind === "tester" && session.status === "completed")
-    .slice()
-    .sort((a, b) => {
-      if (a.task_index !== b.task_index) return a.task_index - b.task_index;
-      const byLLM = a.llm_id.localeCompare(b.llm_id);
-      if (byLLM !== 0) return byLLM;
-      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-    });
+    .filter((session) => session.kind === "tester" && session.status === "completed");
   completedSessions.forEach((session, index) => {
     const feedback = run.feedback_reports?.[index];
     if (feedback) {
