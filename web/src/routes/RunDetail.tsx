@@ -167,6 +167,7 @@ export default function RunDetail() {
 
 type TaskResult = {
   key: string;
+  llmID: string;
   session?: RunSession;
   feedback?: string;
 };
@@ -180,32 +181,102 @@ type TaskGroup = {
 function taskGroups(run: RunStatus): TaskGroup[] {
   const tasks = run.tasks ?? [];
   const groups = new Map<number, TaskGroup>();
+  const plannedLLMIDs = plannedTesterLLMIDs(run);
+  const sessionsByKey = new Map<string, RunSession>();
+  const feedbackByKey = completedFeedbackByKey(run);
 
   tasks.forEach((task, index) => {
     const taskIndex = index + 1;
-    groups.set(taskIndex, { taskIndex, task, results: [] });
+    groups.set(taskIndex, {
+      taskIndex,
+      task,
+      results: plannedLLMIDs.map((llmID) => ({
+        key: taskResultKey(taskIndex, llmID),
+        llmID,
+        session: undefined,
+        feedback: undefined,
+      })),
+    });
   });
 
   const testerSessions = (run.sessions ?? []).filter((session) => session.kind === "tester");
-  let completedFeedbackIndex = 0;
-  testerSessions.forEach((session, index) => {
+  testerSessions.forEach((session) => {
+    sessionsByKey.set(taskResultKey(session.task_index || 1, session.llm_id), session);
+  });
+
+  groups.forEach((group) => {
+    group.results = group.results.map((result) => ({
+      ...result,
+      session: sessionsByKey.get(result.key),
+      feedback: feedbackByKey.get(result.key),
+    }));
+  });
+
+  testerSessions.forEach((session) => {
     const taskIndex = Math.max(1, session.task_index || 1);
     const group = groups.get(taskIndex) ?? {
       taskIndex,
       task: tasks[taskIndex - 1] ?? `Task ${taskIndex}`,
       results: [],
     };
-    const feedback =
-      session.status === "completed" ? run.feedback_reports?.[completedFeedbackIndex++] : undefined;
-    group.results.push({
-      key: `tester:${taskIndex}:${index}:${session.llm_id}`,
-      session,
-      feedback,
-    });
+    const key = taskResultKey(taskIndex, session.llm_id);
+    if (!group.results.some((result) => result.key === key)) {
+      group.results.push({ key, llmID: session.llm_id, session, feedback: feedbackByKey.get(key) });
+    }
     groups.set(taskIndex, group);
   });
 
   return Array.from(groups.values()).sort((a, b) => a.taskIndex - b.taskIndex);
+}
+
+function plannedTesterLLMIDs(run: RunStatus): string[] {
+  const fromRun = uniqueStrings(
+    (run.llms ?? [])
+      .filter((item) => item.role === "tester")
+      .map((item) => item.llm_id)
+  );
+  if (fromRun.length > 0) return fromRun;
+  return uniqueStrings(
+    (run.sessions ?? [])
+      .filter((session) => session.kind === "tester")
+      .map((session) => session.llm_id)
+  );
+}
+
+function completedFeedbackByKey(run: RunStatus): Map<string, string> {
+  const out = new Map<string, string>();
+  const completedSessions = (run.sessions ?? [])
+    .filter((session) => session.kind === "tester" && session.status === "completed")
+    .slice()
+    .sort((a, b) => {
+      if (a.task_index !== b.task_index) return a.task_index - b.task_index;
+      const byLLM = a.llm_id.localeCompare(b.llm_id);
+      if (byLLM !== 0) return byLLM;
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    });
+  completedSessions.forEach((session, index) => {
+    const feedback = run.feedback_reports?.[index];
+    if (feedback) {
+      out.set(taskResultKey(session.task_index || 1, session.llm_id), feedback);
+    }
+  });
+  return out;
+}
+
+function taskResultKey(taskIndex: number, llmID: string): string {
+  return `tester:${taskIndex}:${llmID.trim() || "default"}`;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of values) {
+    const value = raw.trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
 }
 
 function TaskResults({
@@ -256,7 +327,7 @@ function TaskResults({
 
       {selectedGroup.results.length > 0 ? (
         <>
-          <div className="mb-4 flex gap-6 overflow-x-auto border-b border-border">
+          <div className="mb-4 flex min-h-9 items-end gap-6 overflow-x-auto overflow-y-hidden border-b border-border">
             {selectedGroup.results.map((result) => {
               const active = result.key === (selectedResult?.key ?? "");
               return (
@@ -270,7 +341,7 @@ function TaskResults({
                       : "border-transparent text-muted-foreground hover:text-foreground"
                   }`}
                 >
-                  {formatLLMID(result.session?.llm_id)}
+                  {formatLLMID(result.llmID)}
                 </button>
               );
             })}
@@ -278,7 +349,7 @@ function TaskResults({
 
           <div className="border border-border bg-background p-3 text-sm">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <div className="font-medium">{formatLLMID(selectedResult?.session?.llm_id)}</div>
+              <div className="font-medium">{formatLLMID(selectedResult?.llmID)}</div>
               <SessionMeta session={selectedResult?.session} fallbackStatus={run.status} />
             </div>
             {selectedResult?.feedback ? (

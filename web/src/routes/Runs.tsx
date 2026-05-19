@@ -242,12 +242,23 @@ export function StatusBadge({ status }: { status: string }) {
 
 export function LLMSummary({ llms }: { llms: Array<{ role: string; llm_id: string; count: number }> }) {
   if (!llms || llms.length === 0) return <span>-</span>;
+  const byRole = new Map<string, string[]>();
+  for (const item of llms) {
+    const llmID = formatLLMID(item.llm_id);
+    if (llmID === "-") continue;
+    const values = byRole.get(item.role) ?? [];
+    if (!values.includes(llmID)) {
+      values.push(llmID);
+    }
+    byRole.set(item.role, values);
+  }
+  if (byRole.size === 0) return <span>-</span>;
+
   return (
     <span className="flex flex-col gap-1">
-      {llms.map((item) => (
-        <span key={`${item.role}:${item.llm_id}`}>
-          {formatRole(item.role)}: {formatLLMID(item.llm_id)}
-          {item.count > 1 ? ` x${item.count}` : ""}
+      {Array.from(byRole.entries()).map(([role, modelIDs]) => (
+        <span key={role}>
+          {formatRole(role)}: {modelIDs.join(", ")}
         </span>
       ))}
     </span>
@@ -263,7 +274,7 @@ function RunWorkload({ run }: { run: RunListItem }) {
       </Link>
       <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
         <span className="border border-border bg-muted/30 px-1.5 py-0.5">
-          {run.task_count > 1 ? `${run.task_count}-Task Batch` : "1 Task"}
+          {run.task_count === 1 ? "1 Task" : `${run.task_count} Tasks`}
         </span>
         <span>
           {run.mode === "optimize" ? "Tester Sessions + Editor" : "Tester Sessions"}

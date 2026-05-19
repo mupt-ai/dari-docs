@@ -547,36 +547,6 @@ WHERE user_id=$1 AND id = ANY($2)
 		return nil, err
 	}
 	plannedRows.Close()
-
-	rows, err := s.db.Query(ctx, `
-SELECT rs.run_id, rs.kind, coalesce(nullif(rs.llm_id,''), $3) AS llm_id, count(*)
-FROM run_sessions rs
-JOIN runs r ON r.id = rs.run_id
-WHERE r.user_id=$1 AND rs.run_id = ANY($2)
-GROUP BY rs.run_id, rs.kind, coalesce(nullif(rs.llm_id,''), $3)
-ORDER BY rs.run_id, CASE rs.kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, llm_id
-`, userID, runIDs, defaultManagedEditorLLMID())
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	actual := make(map[string][]runLLMSummary, len(runIDs))
-	for rows.Next() {
-		var runID string
-		var item runLLMSummary
-		if err := rows.Scan(&runID, &item.Role, &item.LLMID, &item.Count); err != nil {
-			return nil, err
-		}
-		actual[runID] = append(actual[runID], item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	for runID, llms := range actual {
-		if len(llms) > 0 {
-			out[runID] = llms
-		}
-	}
 	return out, nil
 }
 
