@@ -921,8 +921,13 @@ func runRunsStatus(args []string) error {
 }
 
 func runRunsWait(args []string) error {
-	fs := flag.NewFlagSet("dari-docs runs wait", flag.ExitOnError)
 	var timeoutMinutes int
+	var err error
+	args, timeoutMinutes, err = extractTimeoutMinutesFlag(args, 30)
+	if err != nil {
+		return err
+	}
+	fs := flag.NewFlagSet("dari-docs runs wait", flag.ExitOnError)
 	fs.IntVar(&timeoutMinutes, "timeout-minutes", 30, "managed CLI wait timeout in minutes")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -1019,6 +1024,37 @@ func parseRunArtifactArgs(command string, args []string) (string, string, string
 		outDir = filepath.Join(absRepo, ".dari-docs")
 	}
 	return args[0], absRepo, outDir, nil
+}
+
+func extractTimeoutMinutesFlag(args []string, defaultValue int) ([]string, int, error) {
+	timeoutMinutes := defaultValue
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--timeout-minutes" {
+			if i+1 >= len(args) {
+				return nil, 0, fmt.Errorf("--timeout-minutes requires a value")
+			}
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil || n < 0 {
+				return nil, 0, fmt.Errorf("--timeout-minutes must be a non-negative integer")
+			}
+			timeoutMinutes = n
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "--timeout-minutes=") {
+			raw := strings.TrimSpace(strings.TrimPrefix(arg, "--timeout-minutes="))
+			n, err := strconv.Atoi(raw)
+			if err != nil || n < 0 {
+				return nil, 0, fmt.Errorf("--timeout-minutes must be a non-negative integer")
+			}
+			timeoutMinutes = n
+			continue
+		}
+		out = append(out, arg)
+	}
+	return out, timeoutMinutes, nil
 }
 
 func extractOutFlag(args []string) ([]string, string, error) {

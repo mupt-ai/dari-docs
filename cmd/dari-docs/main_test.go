@@ -162,6 +162,32 @@ func TestExtractOutFlagRejectsMissingValue(t *testing.T) {
 	}
 }
 
+func TestExtractTimeoutMinutesFlagAllowsTimeoutAfterRunID(t *testing.T) {
+	args, timeout, err := extractTimeoutMinutesFlag([]string{"run_test", "--timeout-minutes", "30"}, 15)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(args, ",") != "run_test" || timeout != 30 {
+		t.Fatalf("args/timeout = %#v/%d", args, timeout)
+	}
+}
+
+func TestExtractTimeoutMinutesFlagAllowsEqualsSyntax(t *testing.T) {
+	args, timeout, err := extractTimeoutMinutesFlag([]string{"--timeout-minutes=0", "run_test"}, 15)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(args, ",") != "run_test" || timeout != 0 {
+		t.Fatalf("args/timeout = %#v/%d", args, timeout)
+	}
+}
+
+func TestExtractTimeoutMinutesFlagRejectsMissingValue(t *testing.T) {
+	if _, _, err := extractTimeoutMinutesFlag([]string{"run_test", "--timeout-minutes"}, 15); err == nil {
+		t.Fatal("expected missing --timeout-minutes value error")
+	}
+}
+
 func TestDownloadManagedRunArtifactsForCheckWritesFeedback(t *testing.T) {
 	outDir := t.TempDir()
 	client := managed.New("http://127.0.0.1:1", "token")
