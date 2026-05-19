@@ -921,25 +921,15 @@ func runRunsStatus(args []string) error {
 }
 
 func runRunsWait(args []string) error {
-	var timeoutMinutes int
-	var err error
-	args, timeoutMinutes, err = extractTimeoutMinutesFlag(args, 30)
+	parsed, err := parseRunsWaitArgs(args)
 	if err != nil {
 		return err
-	}
-	fs := flag.NewFlagSet("dari-docs runs wait", flag.ExitOnError)
-	fs.IntVar(&timeoutMinutes, "timeout-minutes", 30, "managed CLI wait timeout in minutes")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: dari-docs runs wait <run-id>")
 	}
 	client, err := managedClientWithToken()
 	if err != nil {
 		return err
 	}
-	status, err := waitForManagedRun(context.Background(), client, fs.Arg(0), time.Duration(timeoutMinutes)*time.Minute)
+	status, err := waitForManagedRun(context.Background(), client, parsed.RunID, time.Duration(parsed.TimeoutMinutes)*time.Minute)
 	if err != nil {
 		return err
 	}
@@ -956,6 +946,32 @@ func runRunsWait(args []string) error {
 		}
 	}
 	return nil
+}
+
+type runsWaitArgs struct {
+	RunID          string
+	TimeoutMinutes int
+}
+
+func parseRunsWaitArgs(args []string) (runsWaitArgs, error) {
+	var err error
+	parsed := runsWaitArgs{TimeoutMinutes: 30}
+	args, parsed.TimeoutMinutes, err = extractTimeoutMinutesFlag(args, parsed.TimeoutMinutes)
+	if err != nil {
+		return runsWaitArgs{}, err
+	}
+	fs := flag.NewFlagSet("dari-docs runs wait", flag.ContinueOnError)
+	var flagOutput bytes.Buffer
+	fs.SetOutput(&flagOutput)
+	fs.IntVar(&parsed.TimeoutMinutes, "timeout-minutes", parsed.TimeoutMinutes, "managed CLI wait timeout in minutes")
+	if err := fs.Parse(args); err != nil {
+		return runsWaitArgs{}, err
+	}
+	if fs.NArg() != 1 {
+		return runsWaitArgs{}, fmt.Errorf("usage: dari-docs runs wait <run-id>")
+	}
+	parsed.RunID = fs.Arg(0)
+	return parsed, nil
 }
 
 func runRunsDownload(args []string) error {
