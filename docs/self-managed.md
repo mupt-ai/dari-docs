@@ -38,6 +38,10 @@ dari-docs check . \
   --feedback-llm dumb-claude,medium-claude,smart-claude
 ```
 
+`--feedback-llm` also accepts `claude`, `gpt`, and `all` groups, and groups can be mixed with explicit IDs.
+
 Use `--llm ID` to collapse the run to one option for all sessions, or `--editor-llm ID` to select the editor model independently.
+
+Managed mode uses the same model-selection flags with the hosted Claude and GPT options. See [Managed mode and billing](managed.md#model-selection).
 
 If you need BYOK at agent deploy time, add provider-specific dari.dev credentials and pass `--anthropic-api-key-secret` and/or `--openai-api-key-secret` to `dari-docs init --deploy`.

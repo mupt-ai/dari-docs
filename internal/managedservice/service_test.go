@@ -1,7 +1,9 @@
 package managedservice
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -10,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -522,7 +525,21 @@ func TestHandleRunConfigReturnsLaunchPricingAndLimits(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	var got map[string]int64
+	var got struct {
+		FreeCreditCents            int64    `json:"free_credit_cents"`
+		TesterSessionReserveCents  int64    `json:"tester_session_reserve_cents"`
+		EditorSessionReserveCents  int64    `json:"editor_session_reserve_cents"`
+		ServiceFeeCents            int64    `json:"service_fee_cents"`
+		MaxTasksPerRun             int64    `json:"max_tasks_per_run"`
+		MaxTaskBytes               int64    `json:"max_task_bytes"`
+		MaxActiveRunsPerUser       int64    `json:"max_active_runs_per_user"`
+		MaxBundleBytes             int64    `json:"max_bundle_bytes"`
+		BundleMaxUncompressedBytes int64    `json:"bundle_max_uncompressed_bytes"`
+		BundleMaxFileBytes         int64    `json:"bundle_max_file_bytes"`
+		DefaultLLMID               string   `json:"default_llm_id"`
+		DefaultFeedbackLLMIDs      []string `json:"default_feedback_llm_ids"`
+		AllowedLLMIDs              []string `json:"allowed_llm_ids"`
+	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
@@ -538,9 +555,30 @@ func TestHandleRunConfigReturnsLaunchPricingAndLimits(t *testing.T) {
 		"bundle_max_uncompressed_bytes": 100 * 1024 * 1024,
 		"bundle_max_file_bytes":         5 * 1024 * 1024,
 	} {
-		if got[key] != want {
-			t.Fatalf("%s = %d, want %d; body=%s", key, got[key], want, rec.Body.String())
+		values := map[string]int64{
+			"free_credit_cents":             got.FreeCreditCents,
+			"tester_session_reserve_cents":  got.TesterSessionReserveCents,
+			"editor_session_reserve_cents":  got.EditorSessionReserveCents,
+			"service_fee_cents":             got.ServiceFeeCents,
+			"max_tasks_per_run":             got.MaxTasksPerRun,
+			"max_task_bytes":                got.MaxTaskBytes,
+			"max_active_runs_per_user":      got.MaxActiveRunsPerUser,
+			"max_bundle_bytes":              got.MaxBundleBytes,
+			"bundle_max_uncompressed_bytes": got.BundleMaxUncompressedBytes,
+			"bundle_max_file_bytes":         got.BundleMaxFileBytes,
 		}
+		if values[key] != want {
+			t.Fatalf("%s = %d, want %d; body=%s", key, values[key], want, rec.Body.String())
+		}
+	}
+	if got.DefaultLLMID != defaultManagedEditorLLMID() {
+		t.Fatalf("default_llm_id = %q, want %q", got.DefaultLLMID, defaultManagedEditorLLMID())
+	}
+	if strings.Join(got.DefaultFeedbackLLMIDs, ",") != "dumb-claude,medium-claude,smart-claude" {
+		t.Fatalf("default_feedback_llm_ids = %#v", got.DefaultFeedbackLLMIDs)
+	}
+	if strings.Join(got.AllowedLLMIDs, ",") != "dumb-claude,medium-claude,smart-claude,dumb-gpt,medium-gpt,smart-gpt" {
+		t.Fatalf("allowed_llm_ids = %#v", got.AllowedLLMIDs)
 	}
 }
 
@@ -916,15 +954,17 @@ func TestReserveRunStoresConfiguredHostedAgents(t *testing.T) {
 			{Path: "README.md", SizeBytes: 12, SHA256: "file_sha"},
 		}},
 	}
-	if err := s.reserveRun(ctx, userID, runID, "check", []byte(`["task"]`), result, 75, false, []byte(`[]`), nil, nil); err != nil {
+	if err := s.reserveRun(ctx, userID, runID, "check", []byte(`["task"]`), []byte(`["dumb-claude","smart-claude"]`), "smart-claude", result, 150, false, []byte(`[]`), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	var testerAgentID, testerVersionID, editorAgentID, editorVersionID string
+	var testerLLMIDsJSON []byte
+	var editorLLMID string
 	if err := db.QueryRow(ctx, `
-SELECT tester_agent_id, tester_version_id, editor_agent_id, editor_version_id
+SELECT tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, tester_llm_ids, editor_llm_id
 FROM runs WHERE id=$1
-`, runID).Scan(&testerAgentID, &testerVersionID, &editorAgentID, &editorVersionID); err != nil {
+`, runID).Scan(&testerAgentID, &testerVersionID, &editorAgentID, &editorVersionID, &testerLLMIDsJSON, &editorLLMID); err != nil {
 		t.Fatal(err)
 	}
 	if testerAgentID != "agt_tester" ||
@@ -932,6 +972,16 @@ FROM runs WHERE id=$1
 		editorAgentID != "agt_editor" ||
 		editorVersionID != managedAgentVersionCompatibilityValue {
 		t.Fatalf("agent config = tester:%q/%q editor:%q/%q", testerAgentID, testerVersionID, editorAgentID, editorVersionID)
+	}
+	var testerLLMIDs []string
+	if err := json.Unmarshal(testerLLMIDsJSON, &testerLLMIDs); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(testerLLMIDs, ",") != "dumb-claude,smart-claude" {
+		t.Fatalf("tester_llm_ids = %#v", testerLLMIDs)
+	}
+	if editorLLMID != "smart-claude" {
+		t.Fatalf("editor_llm_id = %q", editorLLMID)
 	}
 }
 
@@ -1349,7 +1399,7 @@ func TestRunListOrderExprWhitelistsSorts(t *testing.T) {
 		}
 	}
 	order, ok := runListOrderExpr("llms")
-	if !ok || !strings.Contains(order.Expr, "$4") || len(order.Args) != 1 || order.Args[0] != managedDefaultLLMID {
+	if !ok || !strings.Contains(order.Expr, "tester_llm_ids") || len(order.Args) != 0 {
 		t.Fatalf("llms sort order = %#v ok=%v", order, ok)
 	}
 	if _, ok := runListOrderExpr("created_at; drop table runs"); ok {
@@ -1543,6 +1593,34 @@ func TestHandleRunsRejectsOversizedTaskText(t *testing.T) {
 	}
 }
 
+func TestHandleRunsRejectsUnknownManagedLLM(t *testing.T) {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	if err := mw.WriteField("mode", "check"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.WriteField("tasks_json", `["check the docs"]`); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.WriteField("feedback_llm_ids_json", `["unknown-model"]`); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{cfg: Config{MaxBundleBytes: 1 << 20, MaxTasksPerRun: 3, MaxTaskBytes: 10000}}
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	s.handleRuns(rec, req, user{ID: "usr_test", TokenScopes: []string{scopeManagedCheck}})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "managed mode supports only these LLM IDs") {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
 func TestHandleRunsReturns413ForOversizedMultipartBody(t *testing.T) {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
@@ -1578,20 +1656,23 @@ func TestHandleRunsReturns413ForOversizedMultipartBody(t *testing.T) {
 	}
 }
 
-func TestHandleRunsRequiresFieldsBeforeBundle(t *testing.T) {
+func TestHandleRunsReadsFieldsAfterBundle(t *testing.T) {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	part, err := mw.CreateFormFile("bundle", "input-docs-bundle.tar.gz")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := part.Write([]byte("not a real bundle")); err != nil {
+	if err := writeManagedServiceTestBundle(part); err != nil {
 		t.Fatal(err)
 	}
 	if err := mw.WriteField("mode", "check"); err != nil {
 		t.Fatal(err)
 	}
 	if err := mw.WriteField("tasks_json", `["check the docs"]`); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.WriteField("feedback_llm_ids_json", `["unknown-model"]`); err != nil {
 		t.Fatal(err)
 	}
 	if err := mw.Close(); err != nil {
@@ -1608,9 +1689,46 @@ func TestHandleRunsRequiresFieldsBeforeBundle(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "mode and tasks_json must be sent before bundle") {
+	if !strings.Contains(rec.Body.String(), "managed mode supports only these LLM IDs") {
 		t.Fatalf("body = %s", rec.Body.String())
 	}
+}
+
+func writeManagedServiceTestBundle(w io.Writer) error {
+	content := []byte("hello docs\n")
+	sum := sha256.Sum256(content)
+	manifest := bundle.Manifest{
+		SchemaVersion: 1,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+		RepoRoot:      "repo",
+		Files: []bundle.FileRecord{{
+			Path:      "README.md",
+			SizeBytes: int64(len(content)),
+			SHA256:    hex.EncodeToString(sum[:]),
+		}},
+	}
+	gz := gzip.NewWriter(w)
+	tw := tar.NewWriter(gz)
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0o644, Size: int64(len(manifestBytes))}); err != nil {
+		return err
+	}
+	if _, err := tw.Write(manifestBytes); err != nil {
+		return err
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: "files/README.md", Mode: 0o644, Size: int64(len(content))}); err != nil {
+		return err
+	}
+	if _, err := tw.Write(content); err != nil {
+		return err
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	return gz.Close()
 }
 
 func stripeSignatureHeader(payload []byte, secret string) string {

@@ -121,6 +121,7 @@ func TestCreateRunDoesNotSendAgentSetID(t *testing.T) {
 			t.Fatal(err)
 		}
 		seen := map[string]bool{}
+		fields := map[string]string{}
 		for {
 			part, err := mr.NextPart()
 			if err == io.EOF {
@@ -130,20 +131,36 @@ func TestCreateRunDoesNotSendAgentSetID(t *testing.T) {
 				t.Fatal(err)
 			}
 			seen[part.FormName()] = true
+			if part.FormName() != "bundle" {
+				b, err := io.ReadAll(part)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fields[part.FormName()] = string(b)
+			}
 		}
 		if seen["agent_set_id"] {
 			t.Fatalf("managed run request should not include agent_set_id")
 		}
-		for _, want := range []string{"mode", "tasks_json", "bundle"} {
+		for _, want := range []string{"mode", "tasks_json", "feedback_llm_ids_json", "editor_llm_id", "bundle"} {
 			if !seen[want] {
 				t.Fatalf("missing multipart field %q; seen=%#v", want, seen)
 			}
+		}
+		if fields["feedback_llm_ids_json"] != `["dumb-claude","smart-claude"]` {
+			t.Fatalf("feedback_llm_ids_json = %q", fields["feedback_llm_ids_json"])
+		}
+		if fields["editor_llm_id"] != "smart-claude" {
+			t.Fatalf("editor_llm_id = %q", fields["editor_llm_id"])
 		}
 		_ = json.NewEncoder(w).Encode(CreateRunResponse{RunID: "run_test", Status: "queued"})
 	}))
 	defer server.Close()
 
-	got, err := New(server.URL, "managed-token").CreateRun(context.Background(), "check", []string{"task"}, bundlePath, CreateRunOptions{})
+	got, err := New(server.URL, "managed-token").CreateRun(context.Background(), "check", []string{"task"}, bundlePath, CreateRunOptions{
+		FeedbackLLMIDs: []string{"dumb-claude", "smart-claude"},
+		EditorLLMID:    "smart-claude",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

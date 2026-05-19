@@ -137,31 +137,58 @@ type CreateRunResponse struct {
 type CreateRunOptions struct {
 	LiveVerify         bool
 	RuntimeSecretsJSON string
+	FeedbackLLMIDs     []string
+	EditorLLMID        string
 }
 
 type RunStatus struct {
-	ID                   string   `json:"id"`
-	Mode                 string   `json:"mode"`
-	Status               string   `json:"status"`
-	Error                string   `json:"error,omitempty"`
-	FeedbackReports      []string `json:"feedback_reports,omitempty"`
-	AggregateFeedback    string   `json:"aggregate_feedback,omitempty"`
-	UpdatedDocsAvailable bool     `json:"updated_docs_available"`
-	ReservedCents        int64    `json:"reserved_cents"`
-	ChargedCents         int64    `json:"charged_cents"`
+	ID                   string              `json:"id"`
+	Mode                 string              `json:"mode"`
+	Status               string              `json:"status"`
+	Error                string              `json:"error,omitempty"`
+	Tasks                []string            `json:"tasks,omitempty"`
+	TaskCount            int                 `json:"task_count"`
+	CreatedAt            time.Time           `json:"created_at"`
+	CompletedAt          *time.Time          `json:"completed_at,omitempty"`
+	LLMs                 []RunLLMSummary     `json:"llms"`
+	Sessions             []RunSessionSummary `json:"sessions"`
+	FeedbackReports      []string            `json:"feedback_reports,omitempty"`
+	AggregateFeedback    string              `json:"aggregate_feedback,omitempty"`
+	UpdatedDocsAvailable bool                `json:"updated_docs_available"`
+	ReservedCents        int64               `json:"reserved_cents"`
+	ChargedCents         int64               `json:"charged_cents"`
+	Estimated            bool                `json:"estimated"`
+}
+
+type RunLLMSummary struct {
+	Role  string `json:"role"`
+	LLMID string `json:"llm_id"`
+	Count int    `json:"count"`
+}
+
+type RunSessionSummary struct {
+	Kind        string     `json:"kind"`
+	TaskIndex   int        `json:"task_index"`
+	Status      string     `json:"status"`
+	LLMID       string     `json:"llm_id"`
+	CreatedAt   time.Time  `json:"created_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
 }
 
 type RunConfig struct {
-	FreeCreditCents            int64 `json:"free_credit_cents"`
-	TesterSessionReserveCents  int64 `json:"tester_session_reserve_cents"`
-	EditorSessionReserveCents  int64 `json:"editor_session_reserve_cents"`
-	ServiceFeeCents            int64 `json:"service_fee_cents"`
-	MaxTasksPerRun             int   `json:"max_tasks_per_run"`
-	MaxTaskBytes               int64 `json:"max_task_bytes"`
-	MaxActiveRunsPerUser       int   `json:"max_active_runs_per_user"`
-	MaxBundleBytes             int64 `json:"max_bundle_bytes"`
-	BundleMaxUncompressedBytes int64 `json:"bundle_max_uncompressed_bytes"`
-	BundleMaxFileBytes         int64 `json:"bundle_max_file_bytes"`
+	FreeCreditCents            int64    `json:"free_credit_cents"`
+	TesterSessionReserveCents  int64    `json:"tester_session_reserve_cents"`
+	EditorSessionReserveCents  int64    `json:"editor_session_reserve_cents"`
+	ServiceFeeCents            int64    `json:"service_fee_cents"`
+	MaxTasksPerRun             int      `json:"max_tasks_per_run"`
+	MaxTaskBytes               int64    `json:"max_task_bytes"`
+	MaxActiveRunsPerUser       int      `json:"max_active_runs_per_user"`
+	MaxBundleBytes             int64    `json:"max_bundle_bytes"`
+	BundleMaxUncompressedBytes int64    `json:"bundle_max_uncompressed_bytes"`
+	BundleMaxFileBytes         int64    `json:"bundle_max_file_bytes"`
+	DefaultLLMID               string   `json:"default_llm_id"`
+	DefaultFeedbackLLMIDs      []string `json:"default_feedback_llm_ids"`
+	AllowedLLMIDs              []string `json:"allowed_llm_ids"`
 }
 
 func (c *Client) ExchangeDariToken(ctx context.Context, accessToken string) (DariExchangeResponse, error) {
@@ -249,6 +276,20 @@ func (c *Client) CreateRun(ctx context.Context, mode string, tasks []string, bun
 	}
 	if opts.RuntimeSecretsJSON != "" {
 		if err := mw.WriteField("runtime_secrets_json", opts.RuntimeSecretsJSON); err != nil {
+			return CreateRunResponse{}, err
+		}
+	}
+	if len(opts.FeedbackLLMIDs) > 0 {
+		llmJSON, err := json.Marshal(opts.FeedbackLLMIDs)
+		if err != nil {
+			return CreateRunResponse{}, err
+		}
+		if err := mw.WriteField("feedback_llm_ids_json", string(llmJSON)); err != nil {
+			return CreateRunResponse{}, err
+		}
+	}
+	if opts.EditorLLMID != "" {
+		if err := mw.WriteField("editor_llm_id", opts.EditorLLMID); err != nil {
 			return CreateRunResponse{}, err
 		}
 	}
