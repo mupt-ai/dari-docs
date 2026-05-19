@@ -66,7 +66,7 @@ export default function AppLayout({ profile }: { profile: ManagedProfile }) {
                 />
                 <SidebarExternalNavItem
                   href="https://dari.dev"
-                  label="Dari.dev"
+                  label="dari.dev"
                   icon={DariMarkIcon}
                 />
               </SidebarMenu>
