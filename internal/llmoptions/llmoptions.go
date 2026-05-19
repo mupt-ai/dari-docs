@@ -1,22 +1,22 @@
 package llmoptions
 
 const (
-	DumbClaude   = "dumb-claude"
-	MediumClaude = "medium-claude"
-	SmartClaude  = "smart-claude"
-	DumbGPT      = "dumb-gpt"
-	MediumGPT    = "medium-gpt"
-	SmartGPT     = "smart-gpt"
+	ClaudeHaiku45  = "claude-haiku-4-5"
+	ClaudeSonnet47 = "claude-sonnet-4-7"
+	ClaudeOpus46   = "claude-opus-4-6"
+	GPT5Mini       = "gpt-5-mini"
+	GPT51          = "gpt-5.1"
+	GPT55          = "gpt-5.5"
 
-	ManagedDefaultEditorLLMID = MediumClaude
+	ManagedDefaultEditorLLMID = ClaudeSonnet47
 )
 
 func ClaudeFeedbackLLMIDs() []string {
-	return []string{DumbClaude, MediumClaude, SmartClaude}
+	return []string{ClaudeHaiku45, ClaudeSonnet47, ClaudeOpus46}
 }
 
 func GPTFeedbackLLMIDs() []string {
-	return []string{DumbGPT, MediumGPT, SmartGPT}
+	return []string{GPT5Mini, GPT51, GPT55}
 }
 
 func DefaultFeedbackLLMIDs() []string {

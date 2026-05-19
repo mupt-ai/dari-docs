@@ -91,56 +91,56 @@ func TestManagedSessionSummary(t *testing.T) {
 
 func TestManagedLLMSelectionDefaultsToAllowedClaudeMatrix(t *testing.T) {
 	cfg := managed.RunConfig{
-		DefaultLLMID:          "medium-claude",
-		DefaultFeedbackLLMIDs: []string{"dumb-claude", "medium-claude", "smart-claude"},
-		AllowedLLMIDs:         []string{"dumb-claude", "medium-claude", "smart-claude", "dumb-gpt", "medium-gpt", "smart-gpt"},
+		DefaultLLMID:          "claude-sonnet-4-7",
+		DefaultFeedbackLLMIDs: []string{"claude-haiku-4-5", "claude-sonnet-4-7", "claude-opus-4-6"},
+		AllowedLLMIDs:         []string{"claude-haiku-4-5", "claude-sonnet-4-7", "claude-opus-4-6", "gpt-5-mini", "gpt-5.1", "gpt-5.5"},
 	}
 	feedback, editor, err := managedLLMSelection(nil, "", cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(feedback, ",") != "dumb-claude,medium-claude,smart-claude" {
+	if strings.Join(feedback, ",") != "claude-haiku-4-5,claude-sonnet-4-7,claude-opus-4-6" {
 		t.Fatalf("feedback = %#v", feedback)
 	}
-	if editor != "medium-claude" {
+	if editor != "claude-sonnet-4-7" {
 		t.Fatalf("editor = %q", editor)
 	}
 }
 
 func TestManagedLLMSelectionAllowsGPT(t *testing.T) {
 	cfg := managed.RunConfig{
-		DefaultLLMID:          "medium-claude",
-		DefaultFeedbackLLMIDs: []string{"dumb-claude", "medium-claude", "smart-claude"},
-		AllowedLLMIDs:         []string{"dumb-claude", "medium-claude", "smart-claude", "dumb-gpt", "medium-gpt", "smart-gpt"},
+		DefaultLLMID:          "claude-sonnet-4-7",
+		DefaultFeedbackLLMIDs: []string{"claude-haiku-4-5", "claude-sonnet-4-7", "claude-opus-4-6"},
+		AllowedLLMIDs:         []string{"claude-haiku-4-5", "claude-sonnet-4-7", "claude-opus-4-6", "gpt-5-mini", "gpt-5.1", "gpt-5.5"},
 	}
-	feedback, editor, err := managedLLMSelection([]string{"smart-gpt"}, "medium-gpt", cfg)
+	feedback, editor, err := managedLLMSelection([]string{"gpt-5.5"}, "gpt-5.1", cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(feedback, ",") != "smart-gpt" || editor != "medium-gpt" {
+	if strings.Join(feedback, ",") != "gpt-5.5" || editor != "gpt-5.1" {
 		t.Fatalf("feedback/editor = %#v/%q", feedback, editor)
 	}
 }
 
 func TestDefaultFeedbackLLMIDsIncludesBundledMatrix(t *testing.T) {
 	got := defaultFeedbackLLMIDs()
-	want := []string{"dumb-claude", "medium-claude", "smart-claude", "dumb-gpt", "medium-gpt", "smart-gpt"}
+	want := []string{"claude-haiku-4-5", "claude-sonnet-4-7", "claude-opus-4-6", "gpt-5-mini", "gpt-5.1", "gpt-5.5"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("defaultFeedbackLLMIDs = %#v, want %#v", got, want)
 	}
 }
 
 func TestExpandCSVListTrimsDeduplicatesAndSplits(t *testing.T) {
-	got := expandCSVList([]string{"dumb-claude, medium-claude", "smart-gpt", "medium-claude"})
-	want := []string{"dumb-claude", "medium-claude", "smart-gpt"}
+	got := expandCSVList([]string{"claude-haiku-4-5, claude-sonnet-4-7", "gpt-5.5", "claude-sonnet-4-7"})
+	want := []string{"claude-haiku-4-5", "claude-sonnet-4-7", "gpt-5.5"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("expandCSVList = %#v, want %#v", got, want)
 	}
 }
 
 func TestExpandFeedbackLLMListSupportsGroups(t *testing.T) {
-	got := expandFeedbackLLMList([]string{"claude, medium-gpt", "gpt", "smart-claude"})
-	want := []string{"dumb-claude", "medium-claude", "smart-claude", "medium-gpt", "dumb-gpt", "smart-gpt"}
+	got := expandFeedbackLLMList([]string{"claude, gpt-5.1", "gpt", "claude-opus-4-6"})
+	want := []string{"claude-haiku-4-5", "claude-sonnet-4-7", "claude-opus-4-6", "gpt-5.1", "gpt-5-mini", "gpt-5.5"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("expandFeedbackLLMList = %#v, want %#v", got, want)
 	}
@@ -418,12 +418,12 @@ func TestSetLLMAPIKeySecretRejectsMultipleProviders(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dari.yml")
 	original := `name: test
 llm:
-  default: medium-claude
+  default: claude-sonnet-4-7
   options:
-    medium-claude:
+    claude-sonnet-4-7:
       provider: anthropic
       model: claude-sonnet-4-7
-    smart-gpt:
+    gpt-5.5:
       provider: openai
       model: gpt-5.5
 `
@@ -440,12 +440,12 @@ func TestSetLLMAPIKeySecretsByProviderUpdatesMatchingOptions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dari.yml")
 	original := `name: test
 llm:
-  default: medium-claude
+  default: claude-sonnet-4-7
   options:
-    medium-claude:
+    claude-sonnet-4-7:
       provider: anthropic
       model: claude-sonnet-4-7
-    smart-gpt:
+    gpt-5.5:
       provider: openai
       model: gpt-5.5
 `
@@ -469,9 +469,9 @@ func TestSetLLMAPIKeySecretReplacesExistingSecret(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dari.yml")
 	original := `name: test
 llm:
-  default: medium-claude
+  default: claude-sonnet-4-7
   options:
-    medium-claude:
+    claude-sonnet-4-7:
       provider: anthropic
       model: claude-sonnet-4-7
       api_key_secret: OLD_KEY
