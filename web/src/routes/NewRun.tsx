@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ChevronDown, FolderOpen, Loader2, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, FolderOpen, Loader2, Plus, Trash2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -44,7 +44,7 @@ export default function NewRun() {
   const [config, setConfig] = useState<RunConfig | null>(null);
   const [configError, setConfigError] = useState<string | null>(null);
   const [mode, setMode] = useState<RunMode>("check");
-  const [taskText, setTaskText] = useState(defaultTask);
+  const [taskInputs, setTaskInputs] = useState<string[]>([defaultTask]);
   const [browserFiles, setBrowserFiles] = useState<File[]>([]);
   const [testerLLMIDs, setTesterLLMIDs] = useState<string[]>([]);
   const [editorLLMID, setEditorLLMID] = useState("");
@@ -54,6 +54,7 @@ export default function NewRun() {
   const [runtimeSecrets, setRuntimeSecrets] = useState<RuntimeSecretInput[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     let canceled = false;
@@ -76,9 +77,12 @@ export default function NewRun() {
     };
   }, []);
 
-  const tasks = useMemo(() => parseTasks(taskText), [taskText]);
+  const tasks = useMemo(() => parseTaskInputs(taskInputs), [taskInputs]);
   const includeGlobs = useMemo(() => parsePatternLines(includeText), [includeText]);
   const excludeGlobs = useMemo(() => parsePatternLines(excludeText), [excludeText]);
+  const taskLimit = config?.max_tasks_per_run ?? 3;
+  const taskByteLimit = config?.max_task_bytes ?? 10000;
+  const selectedFolder = useMemo(() => selectedFolderLabel(browserFiles), [browserFiles]);
   const { selected: selectedFiles, skipped: skippedFiles } = useMemo(
     () =>
       config
@@ -99,6 +103,32 @@ export default function NewRun() {
   const onFolderChange = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.currentTarget.files ?? []);
     setBrowserFiles(files);
+  };
+
+  const clearFolder = () => {
+    setBrowserFiles([]);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  const addTask = () => {
+    setTaskInputs((current) =>
+      current.length >= taskLimit ? current : [...current, ""]
+    );
+  };
+
+  const updateTask = (index: number, value: string) => {
+    const clipped = truncateToUTF8Bytes(value, taskByteLimit);
+    setTaskInputs((current) =>
+      current.map((task, itemIndex) => (itemIndex === index ? clipped : task))
+    );
+  };
+
+  const removeTask = (index: number) => {
+    setTaskInputs((current) =>
+      current.length <= 1 ? [""] : current.filter((_, itemIndex) => itemIndex !== index)
+    );
   };
 
   const addSecret = () => {
@@ -222,26 +252,61 @@ export default function NewRun() {
                   </p>
                 </div>
               </div>
-              <label className="flex min-h-36 cursor-pointer flex-col items-center justify-center border border-dashed border-border bg-background px-4 py-6 text-center hover:border-muted-foreground/60">
-                <FolderOpen className="mb-3 h-6 w-6 text-muted-foreground" />
-                <span className="text-sm font-medium">Choose Docs Folder</span>
-                <span className="mt-1 text-xs text-muted-foreground">
-                  Files are staged only for this run.
-                </span>
-                <input
-                  {...directoryInputProps}
-                  type="file"
-                  multiple
-                  className="sr-only"
-                  onChange={onFolderChange}
-                />
-              </label>
+              {browserFiles.length === 0 ? (
+                <label className="flex min-h-36 cursor-pointer flex-col items-center justify-center border border-dashed border-border bg-background px-4 py-6 text-center hover:border-muted-foreground/60">
+                  <FolderOpen className="mb-3 h-6 w-6 text-muted-foreground" />
+                  <span className="text-sm font-medium">Choose Docs Folder</span>
+                  <span className="mt-1 text-xs text-muted-foreground">
+                    Files are staged only for this run.
+                  </span>
+                  <input
+                    {...directoryInputProps}
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    className="sr-only"
+                    onChange={onFolderChange}
+                  />
+                </label>
+              ) : (
+                <div className="border border-border bg-background p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-border bg-card">
+                        <FolderOpen className="h-5 w-5 text-muted-foreground" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">{selectedFolder}</div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          {browserFiles.length} raw files selected
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <label className="inline-flex h-9 cursor-pointer items-center border border-border px-3 text-sm text-muted-foreground hover:bg-accent hover:text-foreground">
+                        Replace
+                        <input
+                          {...directoryInputProps}
+                          ref={fileInputRef}
+                          type="file"
+                          multiple
+                          className="sr-only"
+                          onChange={onFolderChange}
+                        />
+                      </label>
+                      <Button type="button" variant="outline" size="icon" onClick={clearFolder}>
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
                 <span className="border border-border bg-background px-2 py-1">
                   {selectedFiles.length} Selected
                 </span>
                 <span className="border border-border bg-background px-2 py-1">
-                  {formatBytes(selectedBytes)} Uploaded
+                  {formatBytes(selectedBytes)} / {formatBytes(config.bundle_max_uncompressed_bytes)}
                 </span>
                 <span className="border border-border bg-background px-2 py-1">
                   {skippedFiles.length} Skipped
@@ -262,20 +327,86 @@ export default function NewRun() {
                   </div>
                 </details>
               )}
+              <details className="group mt-4 border border-border bg-background p-3">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-4 text-sm font-medium">
+                  Include / exclude patterns
+                  <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />
+                </summary>
+                <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                  <div>
+                    <label className="mb-2 block text-xs uppercase tracking-widest text-muted-foreground">
+                      Include Patterns
+                    </label>
+                    <textarea
+                      value={includeText}
+                      onChange={(event) => setIncludeText(event.target.value)}
+                      placeholder="examples/**/*.py"
+                      className="min-h-28 w-full border border-border bg-card px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground hover:border-muted-foreground/60 focus:border-brand"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-xs uppercase tracking-widest text-muted-foreground">
+                      Exclude Patterns
+                    </label>
+                    <textarea
+                      value={excludeText}
+                      onChange={(event) => setExcludeText(event.target.value)}
+                      placeholder="generated/**"
+                      className="min-h-28 w-full border border-border bg-card px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground hover:border-muted-foreground/60 focus:border-brand"
+                    />
+                  </div>
+                </div>
+              </details>
             </section>
 
             <section className="border border-border bg-card p-4">
-              <h2 className="text-sm font-medium">Tasks</h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Enter one task per paragraph or line. Managed runs support up to {config.max_tasks_per_run} tasks.
-              </p>
-              <textarea
-                value={taskText}
-                onChange={(event) => setTaskText(event.target.value)}
-                className="mt-3 min-h-36 w-full border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground hover:border-muted-foreground/60 focus:border-brand"
-              />
-              <div className="mt-2 text-xs text-muted-foreground">
-                {tasks.length} {tasks.length === 1 ? "task" : "tasks"} parsed
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 className="text-sm font-medium">Tasks</h2>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Add up to {config.max_tasks_per_run} tasks. Each task runs against every selected tester model.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={addTask}
+                  disabled={taskInputs.length >= config.max_tasks_per_run}
+                  className="w-fit"
+                >
+                  <Plus className="mr-1.5 h-3.5 w-3.5" />
+                  Add Task
+                </Button>
+              </div>
+              <div className="mt-4 flex flex-col gap-3">
+                {taskInputs.map((task, index) => (
+                  <div key={index} className="border border-border bg-background p-3">
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <label htmlFor={`task-${index}`} className="text-xs uppercase tracking-widest text-muted-foreground">
+                        Task {index + 1}
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">
+                          {utf8ByteLength(task)} / {config.max_task_bytes} bytes
+                        </span>
+                        {taskInputs.length > 1 && (
+                          <Button type="button" variant="ghost" size="icon" onClick={() => removeTask(index)}>
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                    <textarea
+                      id={`task-${index}`}
+                      value={task}
+                      maxLength={config.max_task_bytes}
+                      onChange={(event) => updateTask(index, event.target.value)}
+                      placeholder="Install the SDK and make a first API call based only on these docs."
+                      className="min-h-24 w-full border border-border bg-card px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground hover:border-muted-foreground/60 focus:border-brand"
+                    />
+                  </div>
+                ))}
               </div>
             </section>
 
@@ -284,24 +415,35 @@ export default function NewRun() {
               <p className="mt-1 text-xs text-muted-foreground">
                 Tester model choices are used for every task. The editor model is used only for optimize runs.
               </p>
-              <div className="mt-4 grid gap-4 lg:grid-cols-2">
-                <div>
-                  <div className="mb-2 text-xs uppercase tracking-widest text-muted-foreground">
-                    Tester Models
-                  </div>
-                  <div className="grid gap-2">
-                    {config.allowed_llm_ids.map((llmID) => (
-                      <label key={llmID} className="flex items-center gap-2 text-sm">
-                        <Checkbox
-                          checked={testerLLMIDs.includes(llmID)}
-                          onChange={() => toggleTesterLLM(llmID)}
-                        />
-                        <span>{llmID}</span>
-                      </label>
-                    ))}
-                  </div>
+              <div className="mt-4">
+                <div className="mb-2 text-xs uppercase tracking-widest text-muted-foreground">
+                  Tester Models
                 </div>
-                <div className={mode === "optimize" ? "" : "opacity-50"}>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {config.allowed_llm_ids.map((llmID) => {
+                    const selected = testerLLMIDs.includes(llmID);
+                    return (
+                      <button
+                        key={llmID}
+                        type="button"
+                        aria-pressed={selected}
+                        onClick={() => toggleTesterLLM(llmID)}
+                        className={cn(
+                          "min-h-16 border px-3 py-2 text-left text-sm transition-colors",
+                          selected
+                            ? "border-brand bg-brand/10 text-foreground"
+                            : "border-border bg-background text-muted-foreground hover:border-muted-foreground/60 hover:text-foreground"
+                        )}
+                      >
+                        <span className="block font-medium">{llmID}</span>
+                        <span className="mt-1 block text-xs text-muted-foreground">
+                          {selected ? "Selected" : "Click to include"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="mt-4">
                   <label htmlFor="editor-llm" className="mb-2 block text-xs uppercase tracking-widest text-muted-foreground">
                     Editor Model
                   </label>
@@ -309,8 +451,7 @@ export default function NewRun() {
                     id="editor-llm"
                     value={editorLLMID}
                     onChange={(event) => setEditorLLMID(event.target.value)}
-                    disabled={mode !== "optimize"}
-                    className="w-full border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors hover:border-muted-foreground/60 focus:border-brand disabled:cursor-not-allowed"
+                    className="w-full border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors hover:border-muted-foreground/60 focus:border-brand"
                   >
                     {config.allowed_llm_ids.map((llmID) => (
                       <option key={llmID} value={llmID}>
@@ -318,40 +459,19 @@ export default function NewRun() {
                       </option>
                     ))}
                   </select>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Used only when mode is set to optimize.
+                  </p>
                 </div>
               </div>
             </section>
 
-            <details className="group border border-border bg-card p-4">
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-4 text-sm font-medium">
-                Advanced Options
-                <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />
-              </summary>
-              <div className="mt-4 grid gap-4 lg:grid-cols-2">
-                <div>
-                  <label className="mb-2 block text-xs uppercase tracking-widest text-muted-foreground">
-                    Include Patterns
-                  </label>
-                  <textarea
-                    value={includeText}
-                    onChange={(event) => setIncludeText(event.target.value)}
-                    placeholder="examples/**/*.py"
-                    className="min-h-28 w-full border border-border bg-background px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground hover:border-muted-foreground/60 focus:border-brand"
-                  />
-                </div>
-                <div>
-                  <label className="mb-2 block text-xs uppercase tracking-widest text-muted-foreground">
-                    Exclude Patterns
-                  </label>
-                  <textarea
-                    value={excludeText}
-                    onChange={(event) => setExcludeText(event.target.value)}
-                    placeholder="generated/**"
-                    className="min-h-28 w-full border border-border bg-background px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground hover:border-muted-foreground/60 focus:border-brand"
-                  />
-                </div>
-              </div>
-              <div className="mt-5 border-t border-border pt-4">
+            <section className="border border-border bg-card p-4">
+              <h2 className="text-sm font-medium">Live Verification Secrets</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Pass runtime product/API secrets only for runs that need to exercise private or authenticated workflows.
+              </p>
+              <div className="mt-4">
                 <label className="flex items-center gap-2 text-sm">
                   <Checkbox
                     checked={liveVerify}
@@ -386,17 +506,21 @@ export default function NewRun() {
                   </div>
                 )}
               </div>
-            </details>
+            </section>
           </div>
 
-          <aside className="h-fit border border-border bg-card p-4">
+          <aside className="h-fit border border-border bg-card p-4 xl:sticky xl:top-6">
             <h2 className="text-sm font-medium">Summary</h2>
             <div className="mt-4 grid gap-3 text-sm">
               <SummaryRow label="Mode" value={mode === "optimize" ? "Optimize" : "Check"} />
-              <SummaryRow label="Tasks" value={String(tasks.length)} />
-              <SummaryRow label="Tester Sessions" value={String(testerSessionCount)} />
-              {mode === "optimize" && <SummaryRow label="Editor Sessions" value="1" />}
-              <SummaryRow label="Upload" value={formatBytes(selectedBytes)} />
+              <SummaryRow label="Tasks" value={`${tasks.length} / ${config.max_tasks_per_run}`} />
+              <SummaryRow label="Tester Models" value={`${testerLLMIDs.length} / ${config.allowed_llm_ids.length}`} />
+              <SummaryRow
+                label="Tester Sessions"
+                value={`${testerSessionCount} / ${config.max_tasks_per_run * config.allowed_llm_ids.length}`}
+              />
+              {mode === "optimize" && <SummaryRow label="Editor Sessions" value="1 / 1" />}
+              <SummaryRow label="Upload" value={`${formatBytes(selectedBytes)} / ${formatBytes(config.bundle_max_uncompressed_bytes)}`} />
               <SummaryRow label="Reserved" value={formatCents(estimatedReserve)} />
             </div>
             <Button
@@ -515,15 +639,8 @@ function validateRunForm({
   return null;
 }
 
-function parseTasks(value: string): string[] {
-  const normalized = value.replace(/\r\n/g, "\n").trim();
-  if (!normalized) return [];
-  const chunks = normalized.includes("\n\n")
-    ? normalized.split(/\n\s*\n/g)
-    : normalized.split("\n");
-  return chunks
-    .map((chunk) => chunk.replace(/^\s*(?:[-*]|\d+[.)])\s+/, "").trim())
-    .filter(Boolean);
+function parseTaskInputs(values: string[]): string[] {
+  return values.map((value) => value.trim()).filter(Boolean);
 }
 
 function parsePatternLines(value: string): string[] {
@@ -531,6 +648,32 @@ function parsePatternLines(value: string): string[] {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line && !line.startsWith("#"));
+}
+
+function selectedFolderLabel(files: File[]): string {
+  if (files.length === 0) return "No folder selected";
+  const firstPath = browserFilePath(files[0]);
+  const firstSegment = firstPath.split("/").filter(Boolean)[0];
+  if (!firstSegment) return "Selected folder";
+  const allShareRoot = files.every((file) => browserFilePath(file).split("/").filter(Boolean)[0] === firstSegment);
+  return allShareRoot ? firstSegment : "Selected files";
+}
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
+function truncateToUTF8Bytes(value: string, maxBytes: number): string {
+  if (maxBytes <= 0 || utf8ByteLength(value) <= maxBytes) return value;
+  let out = "";
+  let bytes = 0;
+  for (const char of value) {
+    const nextBytes = utf8ByteLength(char);
+    if (bytes + nextBytes > maxBytes) break;
+    out += char;
+    bytes += nextBytes;
+  }
+  return out;
 }
 
 function selectBrowserFiles(
