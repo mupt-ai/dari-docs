@@ -1,0 +1,62 @@
+# GoReleaser config for dari-docs.
+# Docs: https://goreleaser.com
+
+version: 2
+
+project_name: dari-docs
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: dari-docs
+    main: ./cmd/dari-docs
+    binary: dari-docs
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: default
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- if eq .Os "darwin" }}macOS{{ else }}{{ .Os }}{{ end }}_
+      {{- if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}
+    files:
+      - README*
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: mupt-ai
+    name: dari-docs
+  extra_files:
+    - glob: ./install.sh
+  draft: false
+  prerelease: auto

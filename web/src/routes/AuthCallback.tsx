@@ -34,7 +34,7 @@ export default function AuthCallback() {
     return (
       <div className="flex min-h-screen items-center justify-center px-6">
         <div className="max-w-md border border-destructive/50 bg-destructive/10 p-6 text-sm">
-          <div className="mb-2 font-medium">Sign-in failed</div>
+          <div className="mb-2 font-medium">Sign-In Failed</div>
           <div className="text-destructive-foreground">{error}</div>
         </div>
       </div>
@@ -43,7 +43,7 @@ export default function AuthCallback() {
 
   return (
     <div className="flex h-screen items-center justify-center text-muted-foreground">
-      signing in...
+      Signing In...
     </div>
   );
 }

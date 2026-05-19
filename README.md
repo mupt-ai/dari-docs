@@ -24,11 +24,17 @@ When the reader is an agent, ambiguity becomes measurable. Inconsistent terminol
 
 ## Install
 
-Install with Homebrew:
+Install the native macOS/Linux binary:
 
 ```bash
-brew install mupt-ai/tap/dari-docs
+curl -fsSL https://raw.githubusercontent.com/mupt-ai/dari-docs/main/install.sh | bash
 dari-docs --help
+```
+
+To choose a destination, set `DARI_DOCS_INSTALL_DIR`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mupt-ai/dari-docs/main/install.sh | DARI_DOCS_INSTALL_DIR="$HOME/bin" bash
 ```
 
 Install with Go:
@@ -43,6 +49,32 @@ Or build from this repo:
 ```bash
 go build ./cmd/dari-docs
 ./dari-docs --help
+```
+
+## Local web/service development with Docker Compose
+
+Run Postgres, the managed-service backend, and the Vite frontend together:
+
+```bash
+cp .env.example .env
+# Fill in SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY.
+docker compose up
+```
+
+Docker chooses open localhost ports by default. Find them with:
+
+```bash
+docker compose port frontend 5173
+docker compose port backend 8080
+docker compose port postgres 5432
+```
+
+The compose file supplies local placeholder service secrets so the backend can boot and run migrations. To exercise real Dari-managed runs, add real values to `.env` before starting compose:
+
+```bash
+DARI_API_KEY=...
+MANAGED_TESTER_AGENT_ID=...
+MANAGED_EDITOR_AGENT_ID=...
 ```
 
 ## Quickstart

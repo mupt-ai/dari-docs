@@ -1,7 +1,12 @@
 import { useOutletContext } from "react-router-dom";
 
-import { Button } from "@/components/ui/button";
-import { logoutManaged } from "@/lib/auth";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import type { AppContext } from "@/routes/AppLayout";
 
 export default function Settings() {
@@ -16,25 +21,28 @@ export default function Settings() {
         </p>
       </div>
 
-      <section className="max-w-xl border border-border bg-card p-6">
-        <div className="text-sm font-medium">Account</div>
-        <dl className="mt-4 flex flex-col gap-3 text-sm">
-          <div className="flex items-center justify-between gap-4 border-t border-border pt-3">
-            <dt className="text-muted-foreground">Email</dt>
-            <dd className="min-w-0 truncate">{profile.email}</dd>
-          </div>
-        </dl>
-        <Button
-          type="button"
-          variant="outline"
-          className="mt-6"
-          onClick={() => {
-            void logoutManaged();
-          }}
-        >
-          Log out
-        </Button>
-      </section>
+      <div className="flex flex-col gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Account</CardTitle>
+            <CardDescription>
+              The Dari Docs account you're currently signed in to.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2 text-xs text-muted-foreground">
+            <div>
+              <span className="uppercase tracking-widest">Email</span>{" "}
+              <span className="text-foreground">{profile.email}</span>
+            </div>
+            {profile.displayName && (
+              <div>
+                <span className="uppercase tracking-widest">Name</span>{" "}
+                <span className="text-foreground">{profile.displayName}</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

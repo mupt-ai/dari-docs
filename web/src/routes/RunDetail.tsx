@@ -5,8 +5,8 @@ import { Download, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { downloadUpdatedDocs, formatLLMID, getRun, isActiveRun, type RunSession, type RunStatus } from "@/lib/runs";
-import { formatCents, formatDate } from "@/lib/utils";
-import { LLMSummary, StatusBadge } from "@/routes/Runs";
+import { formatCents, formatDate, toTitleCase } from "@/lib/utils";
+import { StatusBadge } from "@/routes/Runs";
 
 export default function RunDetail() {
   const { runId } = useParams();
@@ -16,6 +16,8 @@ export default function RunDetail() {
   const [error, setError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const [selectedTaskIndex, setSelectedTaskIndex] = useState(1);
+  const [selectedResultKey, setSelectedResultKey] = useState("");
 
   const refresh = useCallback(async (quiet = false) => {
     if (!runId) return;
@@ -65,6 +67,19 @@ export default function RunDetail() {
     }
   };
 
+  useEffect(() => {
+    if (!run) return;
+    const groups = taskGroups(run);
+    const selectedGroup = groups.find((group) => group.taskIndex === selectedTaskIndex) ?? groups[0];
+    if (!selectedGroup) return;
+    if (selectedGroup.taskIndex !== selectedTaskIndex) {
+      setSelectedTaskIndex(selectedGroup.taskIndex);
+    }
+    if (selectedGroup.results.length > 0 && !selectedGroup.results.some((result) => result.key === selectedResultKey)) {
+      setSelectedResultKey(selectedGroup.results[0].key);
+    }
+  }, [run, selectedTaskIndex, selectedResultKey]);
+
   return (
     <div className="px-6 py-6">
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -78,7 +93,7 @@ export default function RunDetail() {
           {run?.updated_docs_available && (
             <Button type="button" variant="outline" size="sm" onClick={handleDownload} disabled={downloading}>
               <Download className="mr-1.5 h-3.5 w-3.5" />
-              {downloading ? "Downloading..." : "Updated docs"}
+              {downloading ? "Downloading..." : "Updated Docs"}
             </Button>
           )}
           <Button
@@ -106,87 +121,180 @@ export default function RunDetail() {
       )}
 
       {loading && run === null ? (
-        <div className="text-sm text-muted-foreground">loading run...</div>
+        <div className="text-sm text-muted-foreground">Loading Run...</div>
       ) : run ? (
         <div className="flex flex-col gap-6">
           <div className="grid gap-4 md:grid-cols-4">
             <Summary label="Status" value={<StatusBadge status={run.status} />} />
-            <Summary label="Type" value={<span className="capitalize">{run.mode}</span>} />
-            <Summary label="Cost" value={<span>{formatCents(run.charged_cents)}{run.estimated ? " est." : ""}</span>} />
+            <Summary label="Type" value={<span>{toTitleCase(run.mode)}</span>} />
+            <Summary label="Cost" value={<span>{formatCents(run.charged_cents)}{run.estimated ? " Est." : ""}</span>} />
             <Summary label="Completed" value={<span>{formatDate(run.completed_at)}</span>} />
           </div>
 
-          <section className="border border-border bg-card p-4">
-            <div className="mb-3 text-sm font-medium">Run context</div>
-            <div className="grid gap-4 text-sm md:grid-cols-3">
-              <div>
-                <div className="text-xs uppercase tracking-widest text-muted-foreground">Created</div>
-                <div className="mt-1">{formatDate(run.created_at)}</div>
-              </div>
-              <div>
-                <div className="text-xs uppercase tracking-widest text-muted-foreground">Reserved</div>
-                <div className="mt-1">{formatCents(run.reserved_cents)}</div>
-              </div>
-              <div>
-                <div className="text-xs uppercase tracking-widest text-muted-foreground">LLMs</div>
-                <div className="mt-1 text-muted-foreground">
-                  <LLMSummary llms={run.llms} />
-                </div>
-              </div>
-            </div>
-            {run.error && (
-              <div className="mt-4 border border-destructive/50 bg-destructive/10 p-3 text-xs text-destructive-foreground">
-                {run.error}
-              </div>
-            )}
-          </section>
+          {run.error && (
+            <section className="border border-destructive/50 bg-destructive/10 p-3 text-xs text-destructive-foreground">
+              {run.error}
+            </section>
+          )}
 
-          <section className="border border-border bg-card p-4">
-            <div className="mb-3 text-sm font-medium">Tasks</div>
-            <div className="flex flex-col gap-3">
-              {run.tasks?.map((task, index) => (
-                <div key={`${index}:${task}`} className="border border-border bg-background p-3 text-sm">
-                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-xs uppercase tracking-widest text-muted-foreground">
-                      Task {index + 1}
-                    </div>
-                    <SessionSummary session={sessionForTask(run.sessions, index + 1)} fallbackStatus={run.status} />
-                  </div>
-                  <div className="whitespace-pre-wrap">{task}</div>
-                  {run.feedback_reports?.[index] && (
-                    <div className="mt-4 border-t border-border pt-4">
-                      <div className="mb-2 text-xs uppercase tracking-widest text-muted-foreground">
-                        Feedback
-                      </div>
-                      <Markdown text={run.feedback_reports[index]} />
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </section>
+          <TaskResults
+            run={run}
+            selectedTaskIndex={selectedTaskIndex}
+            selectedResultKey={selectedResultKey}
+            onSelectTask={(taskIndex) => {
+              const group = taskGroups(run).find((item) => item.taskIndex === taskIndex);
+              setSelectedTaskIndex(taskIndex);
+              setSelectedResultKey(group?.results[0]?.key ?? "");
+            }}
+            onSelectResult={setSelectedResultKey}
+          />
 
           {run.mode === "optimize" && (
             <section className="border border-border bg-card p-4">
-              <div className="mb-3 text-sm font-medium">Editor session</div>
-              <SessionSummary session={editorSession(run.sessions)} fallbackStatus={editorFallbackStatus(run)} />
+              <SessionHeader
+                label="Editor Session"
+                session={editorSession(run.sessions)}
+                fallbackStatus={editorFallbackStatus(run)}
+              />
             </section>
           )}
 
-          {run.aggregate_feedback && (
-            <section className="border border-border bg-card p-4">
-              <div className="mb-3 text-sm font-medium">Aggregate feedback</div>
-              <Markdown text={run.aggregate_feedback} />
-            </section>
-          )}
         </div>
       ) : null}
     </div>
   );
 }
 
-function sessionForTask(sessions: RunSession[] | undefined, taskIndex: number): RunSession | undefined {
-  return sessions?.find((session) => session.kind === "tester" && session.task_index === taskIndex);
+type TaskResult = {
+  key: string;
+  session?: RunSession;
+  feedback?: string;
+};
+
+type TaskGroup = {
+  taskIndex: number;
+  task: string;
+  results: TaskResult[];
+};
+
+function taskGroups(run: RunStatus): TaskGroup[] {
+  const tasks = run.tasks ?? [];
+  const groups = new Map<number, TaskGroup>();
+
+  tasks.forEach((task, index) => {
+    const taskIndex = index + 1;
+    groups.set(taskIndex, { taskIndex, task, results: [] });
+  });
+
+  const testerSessions = (run.sessions ?? []).filter((session) => session.kind === "tester");
+  let completedFeedbackIndex = 0;
+  testerSessions.forEach((session, index) => {
+    const taskIndex = Math.max(1, session.task_index || 1);
+    const group = groups.get(taskIndex) ?? {
+      taskIndex,
+      task: tasks[taskIndex - 1] ?? `Task ${taskIndex}`,
+      results: [],
+    };
+    const feedback =
+      session.status === "completed" ? run.feedback_reports?.[completedFeedbackIndex++] : undefined;
+    group.results.push({
+      key: `tester:${taskIndex}:${index}:${session.llm_id}`,
+      session,
+      feedback,
+    });
+    groups.set(taskIndex, group);
+  });
+
+  return Array.from(groups.values()).sort((a, b) => a.taskIndex - b.taskIndex);
+}
+
+function TaskResults({
+  run,
+  selectedTaskIndex,
+  selectedResultKey,
+  onSelectTask,
+  onSelectResult,
+}: {
+  run: RunStatus;
+  selectedTaskIndex: number;
+  selectedResultKey: string;
+  onSelectTask: (taskIndex: number) => void;
+  onSelectResult: (key: string) => void;
+}) {
+  const groups = taskGroups(run);
+  const selectedGroup = groups.find((group) => group.taskIndex === selectedTaskIndex) ?? groups[0];
+  const selectedResult = selectedGroup?.results.find((result) => result.key === selectedResultKey) ?? selectedGroup?.results[0];
+
+  if (!selectedGroup) return null;
+
+  return (
+    <section className="border border-border bg-card p-4">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0 flex-1">
+          <label htmlFor="task-select" className="text-xs uppercase tracking-widest text-muted-foreground">
+            Task
+          </label>
+          <select
+            id="task-select"
+            value={selectedGroup.taskIndex}
+            onChange={(event) => onSelectTask(Number(event.target.value))}
+            className="mt-2 w-full border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors hover:border-muted-foreground/60 focus:border-brand"
+          >
+            {groups.map((group) => (
+              <option key={group.taskIndex} value={group.taskIndex}>
+                Task {group.taskIndex}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="mb-4 border border-border bg-background p-3 text-sm">
+        <div className="mb-2 text-xs uppercase tracking-widest text-muted-foreground">Prompt</div>
+        <div className="whitespace-pre-wrap">{selectedGroup.task}</div>
+      </div>
+
+      {selectedGroup.results.length > 0 ? (
+        <>
+          <div className="mb-4 flex gap-6 overflow-x-auto border-b border-border">
+            {selectedGroup.results.map((result) => {
+              const active = result.key === (selectedResult?.key ?? "");
+              return (
+                <button
+                  key={result.key}
+                  type="button"
+                  onClick={() => onSelectResult(result.key)}
+                  className={`-mb-px whitespace-nowrap border-b-2 px-1 pb-2 text-sm transition-colors ${
+                    active
+                      ? "border-brand text-foreground"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {formatLLMID(result.session?.llm_id)}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="border border-border bg-background p-3 text-sm">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="font-medium">{formatLLMID(selectedResult?.session?.llm_id)}</div>
+              <SessionMeta session={selectedResult?.session} fallbackStatus={run.status} />
+            </div>
+            {selectedResult?.feedback ? (
+              <Markdown text={selectedResult.feedback} />
+            ) : (
+              <div className="text-muted-foreground">No Feedback Available.</div>
+            )}
+          </div>
+        </>
+      ) : (
+        <div className="border border-border bg-background p-4 text-sm text-muted-foreground">
+          No Model Results For This Task Yet.
+        </div>
+      )}
+    </section>
+  );
 }
 
 function editorSession(sessions: RunSession[] | undefined): RunSession | undefined {
@@ -202,22 +310,49 @@ function editorFallbackStatus(run: RunStatus): string {
   return "queued";
 }
 
-function SessionSummary({
+function SessionHeader({
+  label,
+  session,
+  fallbackStatus,
+}: {
+  label: string;
+  session?: RunSession;
+  fallbackStatus: string;
+}) {
+  return (
+    <div className="flex min-h-8 flex-wrap items-center justify-between gap-2">
+      <div className="inline-flex min-w-0 items-center gap-2 text-sm font-medium">
+        <span>{label}</span>
+        <SessionModel session={session} />
+      </div>
+      <SessionMeta session={session} fallbackStatus={fallbackStatus} />
+    </div>
+  );
+}
+
+function SessionModel({ session }: { session?: RunSession }) {
+  const llmID = formatLLMID(session?.llm_id);
+  if (llmID === "-") return null;
+  return <span className="min-w-0 truncate text-muted-foreground">- {llmID}</span>;
+}
+
+function sessionStatus(session: RunSession | undefined, fallbackStatus: string): string {
+  return session?.status ?? fallbackStatus;
+}
+
+function SessionMeta({
   session,
   fallbackStatus,
 }: {
   session?: RunSession;
   fallbackStatus: string;
 }) {
-  const status = session?.status ?? fallbackStatus;
-  const llmID = formatLLMID(session?.llm_id);
   return (
-    <div className="flex flex-wrap items-center gap-2 text-xs">
-      <SessionStatus status={status} />
-      {llmID !== "-" && <span className="text-muted-foreground">{llmID}</span>}
+    <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
       {session?.completed_at && (
-        <span className="text-muted-foreground">completed {formatDate(session.completed_at)}</span>
+        <span className="text-muted-foreground">Completed {formatDate(session.completed_at)}</span>
       )}
+      <SessionStatus status={sessionStatus(session, fallbackStatus)} />
     </div>
   );
 }
@@ -238,7 +373,7 @@ function SessionStatus({ status }: { status: string }) {
               : "inline-flex min-w-20 justify-center border border-border bg-muted/40 px-2 py-1 text-xs text-muted-foreground"
       }
     >
-      {status}
+      {toTitleCase(status)}
     </span>
   );
 }

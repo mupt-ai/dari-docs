@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: dari_docs
       POSTGRES_DB: dari_docs_local
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-}:5432"
     volumes:
       - dari_docs_postgres:/var/lib/postgresql/data
     healthcheck:
@@ -15,5 +15,59 @@ services:
       timeout: 5s
       retries: 10
 
+  backend:
+    image: golang:1.25
+    working_dir: /app
+    command: go run ./cmd/dari-docs-service
+    environment:
+      ADDR: 0.0.0.0:8080
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      DARI_API_BASE_URL: ${DARI_API_BASE_URL:-https://dev-api.dari.dev}
+      DATABASE_URL: postgres://dari_docs:dari_docs@postgres:5432/dari_docs_local?sslmode=disable
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:-}
+      DARI_API_KEY: ${DARI_API_KEY:-local-dev-placeholder}
+      MANAGED_TESTER_AGENT_ID: ${MANAGED_TESTER_AGENT_ID:-local-dev-tester}
+      MANAGED_TESTER_VERSION_ID: ${MANAGED_TESTER_VERSION_ID:-}
+      MANAGED_EDITOR_AGENT_ID: ${MANAGED_EDITOR_AGENT_ID:-local-dev-editor}
+      MANAGED_EDITOR_VERSION_ID: ${MANAGED_EDITOR_VERSION_ID:-}
+      DARI_DOCS_RELEASE_ADMIN_TOKEN: ${DARI_DOCS_RELEASE_ADMIN_TOKEN:-local-dev-release-admin-token}
+      DARI_DOCS_SECRET_ENCRYPTION_KEY: ${DARI_DOCS_SECRET_ENCRYPTION_KEY:-MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-}:8080"
+    volumes:
+      - .:/app
+      - go_mod_cache:/go/pkg/mod
+      - go_build_cache:/root/.cache/go-build
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec 'exec 3<>/dev/tcp/127.0.0.1/8080'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  frontend:
+    image: node:24
+    working_dir: /app/web
+    command: sh -c "npm ci && npm run dev -- --host 0.0.0.0"
+    environment:
+      VITE_API_PROXY_TARGET: http://backend:8080
+      VITE_ALLOWED_HOSTS: ${VITE_ALLOWED_HOSTS:-}
+    ports:
+      - "127.0.0.1:${WEB_HOST_PORT:-}:5173"
+    volumes:
+      - .:/app
+      - web_node_modules:/app/web/node_modules
+    depends_on:
+      backend:
+        condition: service_healthy
+
 volumes:
   dari_docs_postgres:
+  go_mod_cache:
+  go_build_cache:
+  web_node_modules:

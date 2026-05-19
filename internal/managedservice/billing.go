@@ -157,8 +157,22 @@ func (s *Server) handleBillingCancel(w http.ResponseWriter, r *http.Request) {
 	writeHTML(w, http.StatusOK, "Dari Docs checkout canceled", "No payment was taken. You can return to the CLI and start checkout again.")
 }
 
+type creditSummary struct {
+	BalanceCents int64
+	GrantedCents int64
+	SpentCents   int64
+}
+
 func (s *Server) balanceCents(ctx context.Context, userID string) (int64, error) {
-	return balanceCentsQuery(ctx, s.db, userID)
+	summary, err := creditSummaryQuery(ctx, s.db, userID)
+	if err != nil {
+		return 0, err
+	}
+	return summary.BalanceCents, nil
+}
+
+func (s *Server) creditSummary(ctx context.Context, userID string) (creditSummary, error) {
+	return creditSummaryQuery(ctx, s.db, userID)
 }
 
 type balanceQuerier interface {
@@ -166,13 +180,30 @@ type balanceQuerier interface {
 }
 
 func balanceCentsTx(ctx context.Context, tx pgx.Tx, userID string) (int64, error) {
-	return balanceCentsQuery(ctx, tx, userID)
+	summary, err := creditSummaryQuery(ctx, tx, userID)
+	if err != nil {
+		return 0, err
+	}
+	return summary.BalanceCents, nil
 }
 
-func balanceCentsQuery(ctx context.Context, q balanceQuerier, userID string) (int64, error) {
-	var cents int64
-	err := q.QueryRow(ctx, `SELECT coalesce(sum(amount_cents),0) FROM credit_ledger WHERE user_id=$1`, userID).Scan(&cents)
-	return cents, err
+func creditSummaryQuery(ctx context.Context, q balanceQuerier, userID string) (creditSummary, error) {
+	var summary creditSummary
+	err := q.QueryRow(ctx, `
+SELECT
+	coalesce(sum(amount_cents),0),
+	coalesce(sum(amount_cents) FILTER (WHERE amount_cents > 0 AND kind <> 'run_reservation_release'),0)
+FROM credit_ledger
+WHERE user_id=$1
+`, userID).Scan(&summary.BalanceCents, &summary.GrantedCents)
+	if err != nil {
+		return creditSummary{}, err
+	}
+	summary.SpentCents = summary.GrantedCents - summary.BalanceCents
+	if summary.SpentCents < 0 {
+		summary.SpentCents = 0
+	}
+	return summary, nil
 }
 
 type stripeCheckout struct {

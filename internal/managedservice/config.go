@@ -3,6 +3,7 @@ package managedservice
 import (
 	"errors"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -12,6 +13,8 @@ type Config struct {
 	PublicBaseURL              string
 	DariAPIBaseURL             string
 	DariAPIKey                 string
+	SupabaseURL                string
+	SupabasePublishableKey     string
 	ManagedTesterAgentID       string
 	ManagedTesterVersionID     string
 	ManagedEditorAgentID       string
@@ -45,7 +48,7 @@ type Config struct {
 func ConfigFromEnv() (Config, error) {
 	cfg := Config{
 		Addr:                       env("ADDR", ":"+env("PORT", defaultPort)),
-		PublicBaseURL:              env("PUBLIC_BASE_URL", defaultPublicBaseURL),
+		PublicBaseURL:              env("PUBLIC_BASE_URL", env("RENDER_EXTERNAL_URL", defaultPublicBaseURL)),
 		DariAPIBaseURL:             env("DARI_API_BASE_URL", defaultDariAPIBaseURL),
 		FreeGrantCents:             managedFreeGrantCents,
 		TesterReserveCents:         managedTesterReserveCents,
@@ -69,6 +72,8 @@ func ConfigFromEnv() (Config, error) {
 		OutboundHTTPTimeout:        time.Duration(managedOutboundHTTPTimeoutSeconds) * time.Second,
 		DatabaseURL:                os.Getenv("DATABASE_URL"),
 		DariAPIKey:                 os.Getenv("DARI_API_KEY"),
+		SupabaseURL:                strings.TrimRight(strings.TrimSpace(os.Getenv("SUPABASE_URL")), "/"),
+		SupabasePublishableKey:     strings.TrimSpace(os.Getenv("SUPABASE_PUBLISHABLE_KEY")),
 		ManagedTesterAgentID:       os.Getenv("MANAGED_TESTER_AGENT_ID"),
 		ManagedTesterVersionID:     os.Getenv("MANAGED_TESTER_VERSION_ID"),
 		ManagedEditorAgentID:       os.Getenv("MANAGED_EDITOR_AGENT_ID"),
@@ -82,6 +87,12 @@ func ConfigFromEnv() (Config, error) {
 	}
 	if cfg.DariAPIKey == "" {
 		return Config{}, errors.New("DARI_API_KEY is required")
+	}
+	if cfg.SupabaseURL == "" {
+		return Config{}, errors.New("SUPABASE_URL is required")
+	}
+	if cfg.SupabasePublishableKey == "" {
+		return Config{}, errors.New("SUPABASE_PUBLISHABLE_KEY is required")
 	}
 	if cfg.ManagedTesterAgentID == "" {
 		return Config{}, errors.New("MANAGED_TESTER_AGENT_ID is required")

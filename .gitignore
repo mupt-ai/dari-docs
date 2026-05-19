@@ -1,4 +1,5 @@
 .DS_Store
+.env
 .env.local
 .dari-docs/
 agents/**/.dari/
@@ -6,5 +7,6 @@ bin/
 /dari-docs
 /dari-docs-service
 web/dist/
+web/node_modules
 web/node_modules/
 web/*.tsbuildinfo
