@@ -261,8 +261,13 @@ func globRegexp(pattern string) string {
 		switch ch {
 		case '*':
 			if i+1 < len(pattern) && pattern[i+1] == '*' {
-				sb.WriteString(".*")
-				i++
+				if i+2 < len(pattern) && pattern[i+2] == '/' {
+					sb.WriteString("(?:.*/)?")
+					i += 2
+				} else {
+					sb.WriteString(".*")
+					i++
+				}
 			} else {
 				sb.WriteString("[^/]*")
 			}

@@ -361,7 +361,8 @@ export default function NewRun() {
                         YAML, TOML, CSS, JavaScript, TypeScript, README.md,
                         docs.json, mint.json, OpenAPI files, and llms.txt.
                         Include patterns add files outside those defaults, but
-                        do not override skipped generated or dependency folders.
+                        do not override built-in skipped folders such as
+                        node_modules, .git, dist, and build.
                       </InfoTooltip>
                     </label>
                     <textarea
