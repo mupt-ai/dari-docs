@@ -109,7 +109,6 @@ func runCheckOrOptimize(cmd string, args []string) error {
 	var editorLLMID string
 	var outDir string
 	var parallel int
-	var apply bool
 	var liveVerify bool
 	var managedMode bool
 	var timeoutMinutes int
@@ -128,7 +127,6 @@ func runCheckOrOptimize(cmd string, args []string) error {
 	fs.StringVar(&editorLLMID, "editor-llm", "", "manifest LLM option ID for the editor session (overrides --llm)")
 	fs.StringVar(&outDir, "out", "", "output directory (default: <repo>/.dari-docs)")
 	fs.IntVar(&parallel, "parallel", 4, "number of feedback sessions per self-managed batch")
-	fs.BoolVar(&apply, "apply", false, "copy updated docs back into the repo after downloading")
 	fs.BoolVar(&liveVerify, "live-verify", false, "allow agents to run safe live verification using provided runtime secrets")
 	fs.BoolVar(&managedMode, "managed", false, "run through the managed dari-docs service instead of a self-managed Dari org")
 	fs.IntVar(&timeoutMinutes, "timeout-minutes", 30, "managed CLI wait timeout in minutes")
@@ -195,7 +193,7 @@ func runCheckOrOptimize(cmd string, args []string) error {
 		}
 		return runManagedCheckOrOptimize(context.Background(), managedRunConfig{
 			Command: cmd, RepoRoot: absRepo, OutDir: outDir,
-			Tasks: allTasks, FeedbackLLMIDs: feedbackLLMList, EditorLLMID: editorLLMID, Apply: apply,
+			Tasks: allTasks, FeedbackLLMIDs: feedbackLLMList, EditorLLMID: editorLLMID,
 			LiveVerify: liveVerify, RuntimeSecrets: secrets, Timeout: time.Duration(timeoutMinutes) * time.Minute,
 			BundleOptions: bundle.CreateOptions{Include: bundleIncludes, Exclude: bundleExcludes},
 		})
@@ -232,7 +230,7 @@ func runCheckOrOptimize(cmd string, args []string) error {
 	cfg := runner.Config{
 		RepoRoot: absRepo, OutDir: outDir, APIKey: apiKey, APIBaseURL: apiBaseURL,
 		FeedbackAgent: feedbackAgent, EditorAgent: editorAgent, FeedbackLLMIDs: feedbackLLMList, EditorLLMID: editorLLMID, Tasks: allTasks, LiveVerify: liveVerify,
-		RuntimeSecrets: secrets, Parallel: parallel, Apply: apply, SkipEditor: cmd == "check", Timeout: time.Duration(timeoutMinutes) * time.Minute,
+		RuntimeSecrets: secrets, Parallel: parallel, SkipEditor: cmd == "check", Timeout: time.Duration(timeoutMinutes) * time.Minute,
 		BundleOptions: bundle.CreateOptions{Include: bundleIncludes, Exclude: bundleExcludes},
 	}
 	res, err := runner.Run(context.Background(), cfg)
@@ -245,9 +243,7 @@ func runCheckOrOptimize(cmd string, args []string) error {
 	if cmd != "check" {
 		fmt.Printf("Editor session: %s\n", res.EditorSessionID)
 		fmt.Printf("Updated docs: %s\n", res.UpdatedDir)
-		if !apply {
-			fmt.Printf("Review and apply manually, or rerun with --apply.\n")
-		}
+		fmt.Printf("Review the updated docs and copy them into your repo when ready.\n")
 	}
 	return nil
 }
@@ -261,7 +257,6 @@ type managedRunConfig struct {
 	EditorLLMID    string
 	LiveVerify     bool
 	RuntimeSecrets map[string]string
-	Apply          bool
 	Timeout        time.Duration
 	BundleOptions  bundle.CreateOptions
 }
@@ -354,14 +349,7 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 			return err
 		}
 		fmt.Printf("Updated docs: %s\n", updatedDir)
-		if cfg.Apply {
-			if err := workspace.CopyTree(updatedDir, cfg.RepoRoot); err != nil {
-				return fmt.Errorf("apply updated docs: %w", err)
-			}
-			fmt.Fprintf(os.Stderr, "Applied updated docs into %s\n", cfg.RepoRoot)
-		} else {
-			fmt.Printf("Review and apply manually, or rerun with --apply.\n")
-		}
+		fmt.Printf("Review the updated docs and copy them into your repo when ready.\n")
 	}
 	return nil
 }
@@ -534,28 +522,7 @@ func downloadManagedUpdatedDocs(ctx context.Context, client *managed.Client, run
 	if err := dari.ExtractZip(zipPath, extractDir); err != nil {
 		return "", err
 	}
-	return workspace.UpdatedRoot(extractDir)
-}
-
-func applyManagedRunArtifacts(ctx context.Context, client *managed.Client, status managed.RunStatus, repoRoot, outDir string) error {
-	if status.Mode != "optimize" {
-		return fmt.Errorf("apply is only available for completed optimize runs")
-	}
-	if status.Status != "completed" {
-		return fmt.Errorf("apply is only available for completed optimize runs")
-	}
-	updatedDir, err := downloadManagedRunArtifacts(ctx, client, status, outDir)
-	if err != nil {
-		return err
-	}
-	if updatedDir == "" {
-		return fmt.Errorf("updated docs are not available for managed run %s", status.ID)
-	}
-	if err := workspace.CopyTree(updatedDir, repoRoot); err != nil {
-		return fmt.Errorf("apply updated docs: %w", err)
-	}
-	fmt.Fprintf(os.Stderr, "Applied updated docs into %s\n", repoRoot)
-	return nil
+	return workspace.FindUpdatedDocsFilesDir(extractDir)
 }
 
 func runAuth(args []string) error {
@@ -884,7 +851,7 @@ func runAuthTokenRevoke(args []string) error {
 
 func runRuns(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: dari-docs runs [status|wait|download|apply]")
+		return fmt.Errorf("usage: dari-docs runs [status|wait|download]")
 	}
 	switch args[0] {
 	case "status":
@@ -893,10 +860,8 @@ func runRuns(args []string) error {
 		return runRunsWait(args[1:])
 	case "download":
 		return runRunsDownload(args[1:])
-	case "apply":
-		return runRunsApply(args[1:])
 	default:
-		return fmt.Errorf("usage: dari-docs runs [status|wait|download|apply]")
+		return fmt.Errorf("usage: dari-docs runs [status|wait|download]")
 	}
 }
 
@@ -940,7 +905,6 @@ func runRunsWait(args []string) error {
 	if status.Status == "completed" {
 		if status.Mode == "optimize" && status.UpdatedDocsAvailable {
 			fmt.Printf("\nDownload updated docs:\n  dari-docs runs download %s\n", status.ID)
-			fmt.Printf("Apply updated docs:\n  dari-docs runs apply %s\n", status.ID)
 		} else {
 			fmt.Printf("\nDownload feedback:\n  dari-docs runs download %s\n", status.ID)
 		}
@@ -975,7 +939,7 @@ func parseRunsWaitArgs(args []string) (runsWaitArgs, error) {
 }
 
 func runRunsDownload(args []string) error {
-	runID, _, outDir, err := parseRunArtifactArgs("download", args)
+	runID, outDir, err := parseRunDownloadArgs(args)
 	if err != nil {
 		return err
 	}
@@ -998,35 +962,15 @@ func runRunsDownload(args []string) error {
 	return nil
 }
 
-func runRunsApply(args []string) error {
-	runID, repoRoot, outDir, err := parseRunArtifactArgs("apply", args)
-	if err != nil {
-		return err
-	}
-	client, err := managedClientWithToken()
-	if err != nil {
-		return err
-	}
-	status, err := client.GetRun(context.Background(), runID)
-	if err != nil {
-		return err
-	}
-	if err := applyManagedRunArtifacts(context.Background(), client, status, repoRoot, outDir); err != nil {
-		return err
-	}
-	fmt.Printf("Feedback: %s\n", filepath.Join(outDir, "aggregate-feedback.md"))
-	return nil
-}
-
-func parseRunArtifactArgs(command string, args []string) (string, string, string, error) {
+func parseRunDownloadArgs(args []string) (string, string, error) {
 	var outDir string
 	var err error
 	args, outDir, err = extractOutFlag(args)
 	if err != nil {
-		return "", "", "", err
+		return "", "", err
 	}
 	if len(args) < 1 || len(args) > 2 {
-		return "", "", "", fmt.Errorf("usage: dari-docs runs %s <run-id> [repo] [--out DIR]", command)
+		return "", "", fmt.Errorf("usage: dari-docs runs download <run-id> [repo] [--out DIR]")
 	}
 	repo := "."
 	if len(args) == 2 {
@@ -1034,12 +978,12 @@ func parseRunArtifactArgs(command string, args []string) (string, string, string
 	}
 	absRepo, err := filepath.Abs(repo)
 	if err != nil {
-		return "", "", "", err
+		return "", "", err
 	}
 	if outDir == "" {
 		outDir = filepath.Join(absRepo, ".dari-docs")
 	}
-	return args[0], absRepo, outDir, nil
+	return args[0], outDir, nil
 }
 
 func extractTimeoutMinutesFlag(args []string, defaultValue int) ([]string, int, error) {
@@ -1756,7 +1700,7 @@ func readTasksFile(path string) ([]string, error) {
 }
 
 func usage() {
-	fmt.Print(`dari-docs runs lightweight user-test sessions, feeds the results into a hosted editor, and pulls updated docs back to your repo.
+	fmt.Print(`dari-docs runs lightweight user-test sessions, feeds the results into a hosted editor, and downloads updated docs for review.
 
 Usage:
   dari-docs --version
@@ -1771,7 +1715,6 @@ Usage:
   dari-docs runs status <run-id>
   dari-docs runs wait <run-id>
   dari-docs runs download <run-id> [repo]
-  dari-docs runs apply <run-id> [repo]
   dari-docs optimize [repo] --task "Implement auth" [--task "Set up webhooks"] [flags]
   dari-docs check [repo] --task "Implement auth" [flags]
 
@@ -1790,7 +1733,6 @@ Important flags:
   --managed                   use the managed dari-docs service instead of your Dari org
   --bundle-include GLOB       include extra repo-relative docs bundle paths; repeatable
   --bundle-exclude GLOB       exclude repo-relative docs bundle paths; repeatable
-  --apply                     copy downloaded updated docs back into repo
   --api-base-url URL          Dari API base URL; self-managed only
   --parallel N                tester sessions per batch; self-managed only
   --llm ID                    select an LLM option for all sessions

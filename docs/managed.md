@@ -32,14 +32,7 @@ dari-docs optimize . \
   --task "Install the SDK and make a first API call"
 ```
 
-The edited files are downloaded into `.dari-docs/updated/` without changing your repo. To apply the edited docs directly, add `--apply`:
-
-```bash
-dari-docs optimize . \
-  --managed \
-  --task "Install the SDK and make a first API call" \
-  --apply
-```
+The edited files are downloaded into `.dari-docs/updated/` without changing your repo. Review that folder and copy changes into your repo when ready.
 
 ## Recover an existing run
 
@@ -54,12 +47,6 @@ dari-docs runs wait run_...
 
 ```bash
 dari-docs runs download run_...
-```
-
-For completed optimize runs, apply the downloaded revisions with:
-
-```bash
-dari-docs runs apply run_...
 ```
 
 ## Account and billing
