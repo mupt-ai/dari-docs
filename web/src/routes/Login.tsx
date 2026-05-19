@@ -77,7 +77,7 @@ export default function Login() {
           <span className="inline-flex h-9 w-9 items-center justify-center rounded-[50%] border border-white/40">
             <img src="/dari-logo.svg" alt="" className="h-7 w-7" />
           </span>
-          <span className="text-foreground">dari.dev</span>
+          <span className="text-foreground">dari-docs</span>
         </div>
 
         <div className="border border-border bg-card p-8">
@@ -98,7 +98,7 @@ export default function Login() {
 
           <div className="my-5 flex items-center gap-3 text-xs text-muted-foreground">
             <div className="h-px flex-1 bg-border" />
-            <span>or</span>
+            <span>Or</span>
             <div className="h-px flex-1 bg-border" />
           </div>
 

@@ -3,7 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuthState } from "@/lib/auth";
 import AppLayout from "@/routes/AppLayout";
 import AuthCallback from "@/routes/AuthCallback";
-import Billing from "@/routes/Billing";
+import Usage from "@/routes/Usage";
 import Login from "@/routes/Login";
 import RunDetail from "@/routes/RunDetail";
 import Runs from "@/routes/Runs";
@@ -16,7 +16,7 @@ export default function App() {
   if (auth.status === "loading") {
     return (
       <div className="flex h-screen items-center justify-center text-muted-foreground">
-        loading...
+        Loading...
       </div>
     );
   }
@@ -34,7 +34,8 @@ export default function App() {
           <Route index element={<Navigate to="/runs" replace />} />
           <Route path="/runs" element={<Runs />} />
           <Route path="/runs/:runId" element={<RunDetail />} />
-          <Route path="/billing" element={<Billing />} />
+          <Route path="/usage" element={<Usage />} />
+          <Route path="/billing" element={<Navigate to="/usage" replace />} />
           <Route path="/api-keys" element={<ApiKeys />} />
           <Route path="/tokens" element={<Navigate to="/api-keys" replace />} />
           <Route path="/settings" element={<Settings />} />

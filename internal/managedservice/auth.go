@@ -661,14 +661,16 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u user) {
 	if !requireScope(w, u, scopeManagedRead) {
 		return
 	}
-	bal, err := s.balanceCents(r.Context(), u.ID)
+	credits, err := s.creditSummary(r.Context(), u.ID)
 	if err != nil {
 		writeLoggedError(w, http.StatusInternalServerError, "could not load account balance", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"email":         u.Email,
-		"balance_cents": bal,
+		"email":                u.Email,
+		"balance_cents":        credits.BalanceCents,
+		"credit_granted_cents": credits.GrantedCents,
+		"credit_spent_cents":   credits.SpentCents,
 		"token": map[string]any{
 			"id":           u.TokenID,
 			"name":         u.TokenName,
