@@ -41,6 +41,27 @@ dari-docs optimize . \
   --apply
 ```
 
+## Recover an existing run
+
+If a managed run is still running after the original CLI command exits, use the run ID printed by the command:
+
+```bash
+dari-docs runs status run_...
+dari-docs runs wait run_...
+```
+
+`status` prints the current state without waiting. `wait` polls until the run finishes, but does not write files locally. To fetch completed run artifacts from the repo where you want them written:
+
+```bash
+dari-docs runs download run_...
+```
+
+For completed optimize runs, apply the downloaded revisions with:
+
+```bash
+dari-docs runs apply run_...
+```
+
 ## Account and billing
 
 New accounts start with five dollars worth of free credits. After logging in, check your balance with:

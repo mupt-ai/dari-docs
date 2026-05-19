@@ -141,15 +141,37 @@ type CreateRunOptions struct {
 }
 
 type RunStatus struct {
-	ID                   string   `json:"id"`
-	Mode                 string   `json:"mode"`
-	Status               string   `json:"status"`
-	Error                string   `json:"error,omitempty"`
-	FeedbackReports      []string `json:"feedback_reports,omitempty"`
-	AggregateFeedback    string   `json:"aggregate_feedback,omitempty"`
-	UpdatedDocsAvailable bool     `json:"updated_docs_available"`
-	ReservedCents        int64    `json:"reserved_cents"`
-	ChargedCents         int64    `json:"charged_cents"`
+	ID                   string              `json:"id"`
+	Mode                 string              `json:"mode"`
+	Status               string              `json:"status"`
+	Error                string              `json:"error,omitempty"`
+	Tasks                []string            `json:"tasks,omitempty"`
+	TaskCount            int                 `json:"task_count"`
+	CreatedAt            time.Time           `json:"created_at"`
+	CompletedAt          *time.Time          `json:"completed_at,omitempty"`
+	LLMs                 []RunLLMSummary     `json:"llms"`
+	Sessions             []RunSessionSummary `json:"sessions"`
+	FeedbackReports      []string            `json:"feedback_reports,omitempty"`
+	AggregateFeedback    string              `json:"aggregate_feedback,omitempty"`
+	UpdatedDocsAvailable bool                `json:"updated_docs_available"`
+	ReservedCents        int64               `json:"reserved_cents"`
+	ChargedCents         int64               `json:"charged_cents"`
+	Estimated            bool                `json:"estimated"`
+}
+
+type RunLLMSummary struct {
+	Kind  string `json:"kind"`
+	LLMID string `json:"llm_id"`
+	Count int    `json:"count"`
+}
+
+type RunSessionSummary struct {
+	Kind        string     `json:"kind"`
+	TaskIndex   int        `json:"task_index"`
+	Status      string     `json:"status"`
+	LLMID       string     `json:"llm_id"`
+	CreatedAt   time.Time  `json:"created_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
 }
 
 type RunConfig struct {

@@ -61,7 +61,7 @@ func run() error {
 	args := os.Args[1:]
 	if len(args) > 0 {
 		switch args[0] {
-		case "init", "optimize", "check", "auth", "billing", "agents", "help", "-h", "--help", "version", "-v", "--version":
+		case "init", "optimize", "check", "auth", "billing", "agents", "runs", "help", "-h", "--help", "version", "-v", "--version":
 			cmd = args[0]
 			args = args[1:]
 		}
@@ -85,6 +85,9 @@ func run() error {
 	}
 	if cmd == "agents" {
 		return runAgents(args)
+	}
+	if cmd == "runs" {
+		return runRuns(args)
 	}
 	return runCheckOrOptimize(cmd, args)
 }
@@ -322,27 +325,9 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 	}
 	fmt.Fprintf(os.Stderr, "Managed run: %s\n", created.RunID)
 	fmt.Fprintf(os.Stderr, "Reserved: %s\n", formatCents(reserve))
-	deadline := time.Now().Add(managedRunTimeout(cfg.Timeout))
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	var status managed.RunStatus
-	for {
-		status, err = client.GetRun(ctx, created.RunID)
-		if err != nil {
-			return err
-		}
-		if status.Status == "completed" || status.Status == "failed" {
-			break
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("timeout waiting for managed run %s status=%q", created.RunID, status.Status)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
+	status, err := waitForManagedRun(ctx, client, created.RunID, managedRunTimeout(cfg.Timeout))
+	if err != nil {
+		return err
 	}
 	if err := writeManagedFeedback(cfg.OutDir, status.FeedbackReports, status.AggregateFeedback); err != nil {
 		return err
@@ -364,16 +349,7 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 		fmt.Printf("Balance: %s\n", formatCents(finalBalance.BalanceCents))
 	}
 	if cfg.Command != "check" {
-		zipPath := filepath.Join(cfg.OutDir, "updated-docs-workspace.zip")
-		if err := client.DownloadUpdatedDocs(ctx, status.ID, zipPath); err != nil {
-			return err
-		}
-		extractDir := filepath.Join(cfg.OutDir, "updated")
-		_ = os.RemoveAll(extractDir)
-		if err := dari.ExtractZip(zipPath, extractDir); err != nil {
-			return err
-		}
-		updatedDir, err := workspace.UpdatedRoot(extractDir)
+		updatedDir, err := downloadManagedUpdatedDocs(ctx, client, status.ID, cfg.OutDir)
 		if err != nil {
 			return err
 		}
@@ -427,6 +403,34 @@ func managedSessionSummary(command string, taskCount int, testerLLMCount int) st
 
 func managedRunTimeout(base time.Duration) time.Duration {
 	return base
+}
+
+func waitForManagedRun(ctx context.Context, client *managed.Client, runID string, timeout time.Duration) (managed.RunStatus, error) {
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		status, err := client.GetRun(ctx, runID)
+		if err != nil {
+			return managed.RunStatus{}, err
+		}
+		if isTerminalManagedRunStatus(status.Status) {
+			return status, nil
+		}
+		if time.Now().After(deadline) {
+			return managed.RunStatus{}, fmt.Errorf("timeout waiting for managed run %s status=%q", runID, status.Status)
+		}
+		select {
+		case <-ctx.Done():
+			return managed.RunStatus{}, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func isTerminalManagedRunStatus(status string) bool {
+	return status == "completed" || status == "failed"
 }
 
 func managedLLMSelection(feedbackLLMIDs []string, editorLLMID string, cfg managed.RunConfig) ([]string, string, error) {
@@ -499,6 +503,56 @@ func writeManagedFeedback(outDir string, reports []string, aggregate string) err
 		}
 	}
 	return os.WriteFile(filepath.Join(outDir, "aggregate-feedback.md"), []byte(aggregate), 0o644)
+}
+
+func downloadManagedRunArtifacts(ctx context.Context, client *managed.Client, status managed.RunStatus, outDir string) (string, error) {
+	if status.Status != "completed" {
+		return "", fmt.Errorf("managed run %s is %s; artifacts are available after completion", status.ID, status.Status)
+	}
+	if err := writeManagedFeedback(outDir, status.FeedbackReports, status.AggregateFeedback); err != nil {
+		return "", err
+	}
+	if status.Mode == "check" {
+		return "", nil
+	}
+	if status.Mode != "optimize" {
+		return "", fmt.Errorf("managed run %s has unsupported mode %q", status.ID, status.Mode)
+	}
+	if !status.UpdatedDocsAvailable {
+		return "", fmt.Errorf("updated docs are not available for managed run %s", status.ID)
+	}
+	return downloadManagedUpdatedDocs(ctx, client, status.ID, outDir)
+}
+
+func downloadManagedUpdatedDocs(ctx context.Context, client *managed.Client, runID, outDir string) (string, error) {
+	zipPath := filepath.Join(outDir, "updated-docs-workspace.zip")
+	if err := client.DownloadUpdatedDocs(ctx, runID, zipPath); err != nil {
+		return "", err
+	}
+	extractDir := filepath.Join(outDir, "updated")
+	_ = os.RemoveAll(extractDir)
+	if err := dari.ExtractZip(zipPath, extractDir); err != nil {
+		return "", err
+	}
+	return workspace.UpdatedRoot(extractDir)
+}
+
+func applyManagedRunArtifacts(ctx context.Context, client *managed.Client, status managed.RunStatus, repoRoot, outDir string) error {
+	if status.Mode != "optimize" {
+		return fmt.Errorf("apply is only available for completed optimize runs")
+	}
+	updatedDir, err := downloadManagedRunArtifacts(ctx, client, status, outDir)
+	if err != nil {
+		return err
+	}
+	if updatedDir == "" {
+		return fmt.Errorf("updated docs are not available for managed run %s", status.ID)
+	}
+	if err := workspace.CopyTree(updatedDir, repoRoot); err != nil {
+		return fmt.Errorf("apply updated docs: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Applied updated docs into %s\n", repoRoot)
+	return nil
 }
 
 func runAuth(args []string) error {
@@ -823,6 +877,226 @@ func runAuthTokenRevoke(args []string) error {
 	}
 	fmt.Printf("Revoked token %s\n", tokenID)
 	return nil
+}
+
+func runRuns(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: dari-docs runs [status|wait|download|apply]")
+	}
+	switch args[0] {
+	case "status":
+		return runRunsStatus(args[1:])
+	case "wait":
+		return runRunsWait(args[1:])
+	case "download":
+		return runRunsDownload(args[1:])
+	case "apply":
+		return runRunsApply(args[1:])
+	default:
+		return fmt.Errorf("usage: dari-docs runs [status|wait|download|apply]")
+	}
+}
+
+func runRunsStatus(args []string) error {
+	fs := flag.NewFlagSet("dari-docs runs status", flag.ExitOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: dari-docs runs status <run-id>")
+	}
+	client, err := managedClientWithToken()
+	if err != nil {
+		return err
+	}
+	status, err := client.GetRun(context.Background(), fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	printManagedRunStatus(status)
+	return nil
+}
+
+func runRunsWait(args []string) error {
+	fs := flag.NewFlagSet("dari-docs runs wait", flag.ExitOnError)
+	var timeoutMinutes int
+	fs.IntVar(&timeoutMinutes, "timeout-minutes", 30, "managed CLI wait timeout in minutes")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: dari-docs runs wait <run-id>")
+	}
+	client, err := managedClientWithToken()
+	if err != nil {
+		return err
+	}
+	status, err := waitForManagedRun(context.Background(), client, fs.Arg(0), time.Duration(timeoutMinutes)*time.Minute)
+	if err != nil {
+		return err
+	}
+	printManagedRunStatus(status)
+	if status.Status == "failed" {
+		return fmt.Errorf("managed run %s failed: %s", status.ID, status.Error)
+	}
+	if status.Status == "completed" {
+		if status.Mode == "optimize" && status.UpdatedDocsAvailable {
+			fmt.Printf("\nDownload updated docs:\n  dari-docs runs download %s\n", status.ID)
+			fmt.Printf("Apply updated docs:\n  dari-docs runs apply %s\n", status.ID)
+		} else {
+			fmt.Printf("\nDownload feedback:\n  dari-docs runs download %s\n", status.ID)
+		}
+	}
+	return nil
+}
+
+func runRunsDownload(args []string) error {
+	runID, _, outDir, err := parseRunArtifactArgs("download", args)
+	if err != nil {
+		return err
+	}
+	client, err := managedClientWithToken()
+	if err != nil {
+		return err
+	}
+	status, err := client.GetRun(context.Background(), runID)
+	if err != nil {
+		return err
+	}
+	updatedDir, err := downloadManagedRunArtifacts(context.Background(), client, status, outDir)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Feedback: %s\n", filepath.Join(outDir, "aggregate-feedback.md"))
+	if updatedDir != "" {
+		fmt.Printf("Updated docs: %s\n", updatedDir)
+	}
+	return nil
+}
+
+func runRunsApply(args []string) error {
+	runID, repoRoot, outDir, err := parseRunArtifactArgs("apply", args)
+	if err != nil {
+		return err
+	}
+	client, err := managedClientWithToken()
+	if err != nil {
+		return err
+	}
+	status, err := client.GetRun(context.Background(), runID)
+	if err != nil {
+		return err
+	}
+	if err := applyManagedRunArtifacts(context.Background(), client, status, repoRoot, outDir); err != nil {
+		return err
+	}
+	fmt.Printf("Feedback: %s\n", filepath.Join(outDir, "aggregate-feedback.md"))
+	return nil
+}
+
+func parseRunArtifactArgs(command string, args []string) (string, string, string, error) {
+	var outDir string
+	var err error
+	args, outDir, err = extractOutFlag(args)
+	if err != nil {
+		return "", "", "", err
+	}
+	if len(args) < 1 || len(args) > 2 {
+		return "", "", "", fmt.Errorf("usage: dari-docs runs %s <run-id> [repo] [--out DIR]", command)
+	}
+	repo := "."
+	if len(args) == 2 {
+		repo = args[1]
+	}
+	absRepo, err := filepath.Abs(repo)
+	if err != nil {
+		return "", "", "", err
+	}
+	if outDir == "" {
+		outDir = filepath.Join(absRepo, ".dari-docs")
+	}
+	return args[0], absRepo, outDir, nil
+}
+
+func extractOutFlag(args []string) ([]string, string, error) {
+	var outDir string
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--out" {
+			if i+1 >= len(args) {
+				return nil, "", fmt.Errorf("--out requires a directory")
+			}
+			outDir = args[i+1]
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "--out=") {
+			outDir = strings.TrimSpace(strings.TrimPrefix(arg, "--out="))
+			if outDir == "" {
+				return nil, "", fmt.Errorf("--out requires a directory")
+			}
+			continue
+		}
+		out = append(out, arg)
+	}
+	return out, outDir, nil
+}
+
+func printManagedRunStatus(status managed.RunStatus) {
+	fmt.Printf("Run: %s\n", status.ID)
+	fmt.Printf("Status: %s\n", status.Status)
+	fmt.Printf("Type: %s\n", status.Mode)
+	if status.TaskCount > 0 {
+		fmt.Printf("Tasks: %d\n", status.TaskCount)
+	} else if len(status.Tasks) > 0 {
+		fmt.Printf("Tasks: %d\n", len(status.Tasks))
+	}
+	if len(status.LLMs) > 0 {
+		var parts []string
+		for _, summary := range status.LLMs {
+			if summary.LLMID == "" {
+				continue
+			}
+			label := summary.Kind + ": " + summary.LLMID
+			if summary.Count > 1 {
+				label += fmt.Sprintf(" (%d)", summary.Count)
+			}
+			parts = append(parts, label)
+		}
+		if len(parts) > 0 {
+			fmt.Printf("LLMs: %s\n", strings.Join(parts, ", "))
+		}
+	}
+	if !status.CreatedAt.IsZero() {
+		fmt.Printf("Created: %s\n", formatCLITime(status.CreatedAt))
+	}
+	if status.CompletedAt != nil {
+		fmt.Printf("Completed: %s\n", formatCLITime(*status.CompletedAt))
+	}
+	fmt.Printf("Reserved: %s\n", formatCents(status.ReservedCents))
+	if status.Status == "completed" || status.Status == "failed" {
+		charged := formatCents(status.ChargedCents)
+		if status.Estimated {
+			charged += " estimated"
+		}
+		fmt.Printf("Charged: %s\n", charged)
+	}
+	if status.Error != "" {
+		fmt.Printf("Error: %s\n", status.Error)
+	}
+	if isTerminalManagedRunStatus(status.Status) {
+		if len(status.FeedbackReports) > 0 || status.AggregateFeedback != "" {
+			fmt.Println("Feedback: available")
+		}
+		if status.UpdatedDocsAvailable {
+			fmt.Println("Updated docs: available")
+		}
+	}
+}
+
+func formatCLITime(t time.Time) string {
+	return t.Local().Format("2006-01-02 15:04")
 }
 
 func runBilling(args []string) error {
@@ -1439,6 +1713,10 @@ Usage:
   dari-docs auth logout [--all] [--interactive-only|--automation-only]
   dari-docs init [repo]
   dari-docs billing balance
+  dari-docs runs status <run-id>
+  dari-docs runs wait <run-id>
+  dari-docs runs download <run-id> [repo]
+  dari-docs runs apply <run-id> [repo]
   dari-docs optimize [repo] --task "Implement auth" [--task "Set up webhooks"] [flags]
   dari-docs check [repo] --task "Implement auth" [flags]
 
@@ -1466,9 +1744,11 @@ Important flags:
   --anthropic-api-key-secret  stored Dari credential name for Anthropic BYOK deploys
   --openai-api-key-secret     stored Dari credential name for OpenAI BYOK deploys
 
-Outputs:
+Init outputs:
   .dari-docs/config.json
   .dari-docs/agents/
+
+Run outputs:
   .dari-docs/input-docs-bundle.tar.gz
   .dari-docs/runs/feedback-*.md
   .dari-docs/aggregate-feedback.md
