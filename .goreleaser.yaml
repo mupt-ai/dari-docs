@@ -58,5 +58,6 @@ release:
     name: dari-docs
   extra_files:
     - glob: ./install.sh
+  replace_existing_artifacts: true
   draft: false
   prerelease: auto
