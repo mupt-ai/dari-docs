@@ -85,20 +85,20 @@ Managed runs currently support up to three tasks per run and three active runs p
 Managed mode supports the hosted Claude and GPT LLM options:
 
 - `claude-haiku-4-5`
-- `claude-sonnet-4-7`
-- `claude-opus-4-6`
+- `claude-sonnet-4-6`
+- `claude-opus-4-7`
 - `gpt-5-mini`
 - `gpt-5.1`
 - `gpt-5.5`
 
-By default, managed tester sessions run each task across all three Claude options. The editor uses `claude-sonnet-4-7`.
+By default, managed tester sessions run each task across all three Claude options. The editor uses `claude-sonnet-4-6`.
 
 Use one model for every managed session:
 
 ```bash
 dari-docs check . \
   --managed \
-  --llm claude-opus-4-6 \
+  --llm claude-opus-4-7 \
   --task "Install the SDK and make a first API call"
 ```
 
@@ -107,14 +107,14 @@ Or choose the tester and editor models separately:
 ```bash
 dari-docs optimize . \
   --managed \
-  --feedback-llm claude-haiku-4-5,claude-opus-4-6 \
-  --editor-llm claude-opus-4-6 \
+  --feedback-llm claude-haiku-4-5,claude-opus-4-7 \
+  --editor-llm claude-opus-4-7 \
   --task "Install the SDK and make a first API call"
 ```
 
 For tester sessions, `--feedback-llm` also accepts groups:
 
-- `claude` expands to `claude-haiku-4-5`, `claude-sonnet-4-7`, and `claude-opus-4-6`
+- `claude` expands to `claude-haiku-4-5`, `claude-sonnet-4-6`, and `claude-opus-4-7`
 - `gpt` expands to `gpt-5-mini`, `gpt-5.1`, and `gpt-5.5`
 - `all` expands to all six hosted options
 
