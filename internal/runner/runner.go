@@ -55,7 +55,6 @@ type Config struct {
 	LiveVerify     bool
 	RuntimeSecrets map[string]string
 	Parallel       int
-	Apply          bool
 	SkipEditor     bool
 	Timeout        time.Duration
 	BundleOptions  bundle.CreateOptions
@@ -151,12 +150,6 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		return res, err
 	}
 	fmt.Fprintf(os.Stderr, "Downloaded updated docs to: %s\n", res.UpdatedDir)
-	if cfg.Apply {
-		if err := workspace.CopyTree(res.UpdatedDir, cfg.RepoRoot); err != nil {
-			return res, fmt.Errorf("apply updated docs: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "Applied updated docs into %s\n", cfg.RepoRoot)
-	}
 	return res, nil
 }
 

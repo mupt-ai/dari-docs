@@ -103,7 +103,7 @@ dari-docs optimize . \
   --task "Install the SDK and make a first API call"
 ```
 
-The edited files are downloaded into `.dari-docs/updated/` without changing your repo. Add `--apply` if you want `dari-docs` to apply the revisions directly.
+The edited files are downloaded into `.dari-docs/updated/` without changing your repo. Review that folder and copy changes into your repo when ready.
 
 ## How it works
 

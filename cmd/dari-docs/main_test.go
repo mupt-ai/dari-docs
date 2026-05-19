@@ -284,7 +284,7 @@ func TestDownloadManagedRunArtifactsForFailedRunWritesFeedback(t *testing.T) {
 	}
 }
 
-func TestApplyManagedRunArtifactsDownloadsAndAppliesOptimizeOutput(t *testing.T) {
+func TestDownloadManagedRunArtifactsDownloadsOptimizeOutput(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/runs/run_opt/updated-docs.zip" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
@@ -296,7 +296,6 @@ func TestApplyManagedRunArtifactsDownloadsAndAppliesOptimizeOutput(t *testing.T)
 	}))
 	defer server.Close()
 
-	repo := t.TempDir()
 	outDir := t.TempDir()
 	client := managed.New(server.URL, "token")
 	status := managed.RunStatus{
@@ -306,15 +305,16 @@ func TestApplyManagedRunArtifactsDownloadsAndAppliesOptimizeOutput(t *testing.T)
 		UpdatedDocsAvailable: true,
 		FeedbackReports:      []string{"feedback"},
 	}
-	if err := applyManagedRunArtifacts(context.Background(), client, status, repo, outDir); err != nil {
+	updatedDir, err := downloadManagedRunArtifacts(context.Background(), client, status, outDir)
+	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.ReadFile(filepath.Join(repo, "README.md"))
+	got, err := os.ReadFile(filepath.Join(updatedDir, "README.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(got) != "updated docs\n" {
-		t.Fatalf("applied README = %q", got)
+		t.Fatalf("downloaded README = %q", got)
 	}
 }
 
