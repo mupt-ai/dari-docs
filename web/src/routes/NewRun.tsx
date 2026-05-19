@@ -360,7 +360,8 @@ export default function NewRun() {
                         By default, docs/source files are included: Markdown, JSON,
                         YAML, TOML, CSS, JavaScript, TypeScript, README.md,
                         docs.json, mint.json, OpenAPI files, and llms.txt.
-                        Include patterns add files outside those defaults.
+                        Include patterns add files outside those defaults, but
+                        do not override skipped generated or dependency folders.
                       </InfoTooltip>
                     </label>
                     <textarea
