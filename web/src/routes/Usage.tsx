@@ -29,6 +29,8 @@ const fallbackBillingConfig: BillingConfig = {
 
 export default function Usage() {
   const [balance, setBalance] = useState<number | null>(null);
+  const [granted, setGranted] = useState<number | null>(null);
+  const [spent, setSpent] = useState<number | null>(null);
   const [config, setConfig] = useState<RunConfig | null>(null);
   const [billingConfig, setBillingConfig] = useState<BillingConfig | null>(null);
   const [loading, setLoading] = useState(true);
@@ -44,6 +46,8 @@ export default function Usage() {
       .then(([bal, cfg, billingCfg]) => {
         if (cancelled) return;
         setBalance(bal.balance_cents);
+        setGranted(bal.credit_granted_cents ?? null);
+        setSpent(bal.credit_spent_cents ?? null);
         setConfig(cfg);
         setBillingConfig(billingCfg);
         setAmount(centsToDollars(billingCfg.default_checkout_cents));
@@ -67,8 +71,8 @@ export default function Usage() {
 
   const activeBillingConfig = billingConfig ?? fallbackBillingConfig;
   const balanceCents = balance ?? 0;
-  const grantedCents = Math.max(config?.free_credit_cents ?? 0, balanceCents);
-  const spentCents = Math.max(0, grantedCents - balanceCents);
+  const grantedCents = granted ?? balanceCents;
+  const spentCents = spent ?? 0;
   const usedPct = grantedCents > 0 ? Math.min(100, Math.max(0, (spentCents / grantedCents) * 100)) : 0;
   const exhausted = !loading && !error && balanceCents <= 0;
   const invalid =
@@ -225,8 +229,13 @@ function BuyCreditsDialog({
   checkoutError: string | null;
   onCheckout: () => void;
 }) {
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (checkingOut && !nextOpen) return;
+    onOpenChange(nextOpen);
+  };
+
   return (
-    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
+    <DialogPrimitive.Root open={open} onOpenChange={handleOpenChange}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay
           className={cn(

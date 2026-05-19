@@ -3,6 +3,8 @@ import { apiFetch } from "@/lib/api";
 export type BalanceResponse = {
   email: string;
   balance_cents: number;
+  credit_granted_cents?: number;
+  credit_spent_cents?: number;
   token: {
     id: string;
     name?: string;
