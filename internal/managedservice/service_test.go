@@ -44,6 +44,46 @@ func TestUSDStringToCentsCeil(t *testing.T) {
 	}
 }
 
+func TestParseAdminUSDToCents(t *testing.T) {
+	tests := map[string]int64{
+		"0.01":    1,
+		"1":       100,
+		"1.20":    120,
+		"$500.00": 50000,
+	}
+	for in, want := range tests {
+		got, err := parseAdminUSDToCents(in)
+		if err != nil {
+			t.Fatalf("parseAdminUSDToCents(%q): %v", in, err)
+		}
+		if got != want {
+			t.Fatalf("parseAdminUSDToCents(%q) = %d, want %d", in, got, want)
+		}
+	}
+	for _, in := range []string{"", "0", "-1", "1.234", "abc"} {
+		if _, err := parseAdminUSDToCents(in); err == nil {
+			t.Fatalf("parseAdminUSDToCents(%q) expected error", in)
+		}
+	}
+}
+
+func TestRequireAdminRequiresBrowserSession(t *testing.T) {
+	s := &Server{}
+	for _, kind := range []string{tokenKindAutomation, tokenKindInteractive} {
+		rec := httptest.NewRecorder()
+		if s.requireAdmin(rec, user{Email: "ben@mupt.ai", TokenKind: kind}) {
+			t.Fatalf("requireAdmin allowed token kind %q", kind)
+		}
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+		}
+	}
+	rec := httptest.NewRecorder()
+	if !s.requireAdmin(rec, user{Email: "BEN@MUPT.ai", TokenKind: tokenKindBrowserSession}) {
+		t.Fatal("requireAdmin rejected browser admin session")
+	}
+}
+
 func TestConfigFromEnvUsesManagedConstants(t *testing.T) {
 	setRequiredManagedConfigEnv(t)
 	clearManagedConfigOptionalEnv(t)
