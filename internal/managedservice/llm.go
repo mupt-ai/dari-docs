@@ -4,11 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-)
 
-var (
-	managedDefaultTesterLLMIDs = []string{"dumb-claude", "medium-claude", "smart-claude"}
-	managedAllowedLLMIDs       = []string{"dumb-claude", "medium-claude", "smart-claude", "dumb-gpt", "medium-gpt", "smart-gpt"}
+	"github.com/mupt-ai/dari-docs/internal/llmoptions"
 )
 
 func managedLLMIDOrDefault(llmID string) string {
@@ -19,11 +16,11 @@ func managedLLMIDOrDefault(llmID string) string {
 }
 
 func allowedManagedLLMIDs() []string {
-	return append([]string{}, managedAllowedLLMIDs...)
+	return llmoptions.ManagedAllowedLLMIDs()
 }
 
 func defaultManagedTesterLLMIDs() []string {
-	return append([]string{}, managedDefaultTesterLLMIDs...)
+	return llmoptions.ManagedDefaultFeedbackLLMIDs()
 }
 
 func normalizeManagedLLMID(llmID string) (string, error) {
@@ -31,12 +28,13 @@ func normalizeManagedLLMID(llmID string) (string, error) {
 	if llmID == "" {
 		return managedDefaultLLMID, nil
 	}
-	for _, allowed := range managedAllowedLLMIDs {
+	allowedIDs := allowedManagedLLMIDs()
+	for _, allowed := range allowedIDs {
 		if llmID == allowed {
 			return llmID, nil
 		}
 	}
-	return "", fmt.Errorf("managed mode supports only these LLM IDs: %s", strings.Join(managedAllowedLLMIDs, ", "))
+	return "", fmt.Errorf("managed mode supports only these LLM IDs: %s", strings.Join(allowedIDs, ", "))
 }
 
 func normalizeManagedLLMIDs(llmIDs []string) ([]string, error) {
