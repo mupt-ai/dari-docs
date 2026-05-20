@@ -4,6 +4,7 @@ import {
   CreditCard,
   KeyRound,
   ListChecks,
+  Shield,
   Settings as SettingsIcon,
 } from "lucide-react";
 
@@ -55,6 +56,16 @@ export default function AppLayout({ profile }: { profile: ManagedProfile }) {
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
+          {profile.isAdmin ? (
+            <SidebarGroup>
+              <SidebarGroupLabel>Platform</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  <SidebarNavItem to="/admin" label="Admin" icon={Shield} />
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          ) : null}
           <SidebarGroup>
             <SidebarGroupLabel>Resources</SidebarGroupLabel>
             <SidebarGroupContent>

@@ -22,8 +22,8 @@ SET tester_llm_ids = COALESCE(
       SELECT 1 FROM run_sessions
       WHERE run_sessions.run_id = runs.id
         AND kind = 'tester'
-    ) THEN '["medium-claude"]'::jsonb
-    ELSE '["dumb-claude","medium-claude","smart-claude"]'::jsonb
+    ) THEN '["claude-sonnet-4-7"]'::jsonb
+    ELSE '["claude-haiku-4-5","claude-sonnet-4-7","claude-opus-4-6"]'::jsonb
   END
 )
 WHERE tester_llm_ids IS NULL;
@@ -39,7 +39,7 @@ SET editor_llm_id = COALESCE(
     ORDER BY created_at DESC
     LIMIT 1
   ),
-  'medium-claude'
+  'claude-sonnet-4-7'
 )
 WHERE editor_llm_id IS NULL;
 

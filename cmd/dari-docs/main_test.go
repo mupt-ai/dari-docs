@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mupt-ai/dari-docs/internal/managed"
+	"github.com/mupt-ai/dari-docs/internal/runner"
 )
 
 func TestParseDollarsToCents(t *testing.T) {
@@ -91,130 +92,58 @@ func TestManagedSessionSummary(t *testing.T) {
 
 func TestManagedLLMSelectionDefaultsToAllowedClaudeMatrix(t *testing.T) {
 	cfg := managed.RunConfig{
-		DefaultLLMID:          "medium-claude",
-		DefaultFeedbackLLMIDs: []string{"dumb-claude", "medium-claude", "smart-claude"},
-		AllowedLLMIDs:         []string{"dumb-claude", "medium-claude", "smart-claude", "dumb-gpt", "medium-gpt", "smart-gpt"},
+		DefaultLLMID:          "claude-sonnet-4-6",
+		DefaultFeedbackLLMIDs: []string{"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"},
+		AllowedLLMIDs:         []string{"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7", "gpt-5-mini", "gpt-5.1", "gpt-5.5"},
 	}
 	feedback, editor, err := managedLLMSelection(nil, "", cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(feedback, ",") != "dumb-claude,medium-claude,smart-claude" {
+	if strings.Join(feedback, ",") != "claude-haiku-4-5,claude-sonnet-4-6,claude-opus-4-7" {
 		t.Fatalf("feedback = %#v", feedback)
 	}
-	if editor != "medium-claude" {
+	if editor != "claude-sonnet-4-6" {
 		t.Fatalf("editor = %q", editor)
 	}
 }
 
 func TestManagedLLMSelectionAllowsGPT(t *testing.T) {
 	cfg := managed.RunConfig{
-		DefaultLLMID:          "medium-claude",
-		DefaultFeedbackLLMIDs: []string{"dumb-claude", "medium-claude", "smart-claude"},
-		AllowedLLMIDs:         []string{"dumb-claude", "medium-claude", "smart-claude", "dumb-gpt", "medium-gpt", "smart-gpt"},
+		DefaultLLMID:          "claude-sonnet-4-6",
+		DefaultFeedbackLLMIDs: []string{"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"},
+		AllowedLLMIDs:         []string{"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7", "gpt-5-mini", "gpt-5.1", "gpt-5.5"},
 	}
-	feedback, editor, err := managedLLMSelection([]string{"smart-gpt"}, "medium-gpt", cfg)
+	feedback, editor, err := managedLLMSelection([]string{"gpt-5.5"}, "gpt-5.1", cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(feedback, ",") != "smart-gpt" || editor != "medium-gpt" {
+	if strings.Join(feedback, ",") != "gpt-5.5" || editor != "gpt-5.1" {
 		t.Fatalf("feedback/editor = %#v/%q", feedback, editor)
 	}
 }
 
 func TestDefaultFeedbackLLMIDsIncludesBundledMatrix(t *testing.T) {
-	got := defaultFeedbackLLMIDs()
-	want := []string{"dumb-claude", "medium-claude", "smart-claude", "dumb-gpt", "medium-gpt", "smart-gpt"}
+	got := runner.DefaultFeedbackLLMIDs()
+	want := []string{"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7", "gpt-5-mini", "gpt-5.1", "gpt-5.5"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("defaultFeedbackLLMIDs = %#v, want %#v", got, want)
 	}
 }
 
-func TestExpandCSVListTrimsDeduplicatesAndSplits(t *testing.T) {
-	got := expandCSVList([]string{"dumb-claude, medium-claude", "smart-gpt", "medium-claude"})
-	want := []string{"dumb-claude", "medium-claude", "smart-gpt"}
+func TestUniqueTrimmedListDeduplicates(t *testing.T) {
+	got := uniqueTrimmedList([]string{"claude-haiku-4-5", " claude-sonnet-4-6", "gpt-5.5", "claude-sonnet-4-6"})
+	want := []string{"claude-haiku-4-5", "claude-sonnet-4-6", "gpt-5.5"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("expandCSVList = %#v, want %#v", got, want)
+		t.Fatalf("uniqueTrimmedList = %#v, want %#v", got, want)
 	}
 }
 
 func TestExpandFeedbackLLMListSupportsGroups(t *testing.T) {
-	got := expandFeedbackLLMList([]string{"claude, medium-gpt", "gpt", "smart-claude"})
-	want := []string{"dumb-claude", "medium-claude", "smart-claude", "medium-gpt", "dumb-gpt", "smart-gpt"}
+	got := expandFeedbackLLMList([]string{"claude", "gpt-5.1", "gpt", "claude-opus-4-7"})
+	want := []string{"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7", "gpt-5.1", "gpt-5-mini", "gpt-5.5"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("expandFeedbackLLMList = %#v, want %#v", got, want)
-	}
-}
-
-func TestExtractOutFlagAllowsOutAfterRunID(t *testing.T) {
-	args, outDir, err := extractOutFlag([]string{"run_test", "--out", "/tmp/dari-docs-out"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(args, ",") != "run_test" || outDir != "/tmp/dari-docs-out" {
-		t.Fatalf("args/out = %#v/%q", args, outDir)
-	}
-}
-
-func TestExtractOutFlagRejectsMissingValue(t *testing.T) {
-	if _, _, err := extractOutFlag([]string{"run_test", "--out"}); err == nil {
-		t.Fatal("expected missing --out value error")
-	}
-}
-
-func TestExtractTimeoutMinutesFlagAllowsTimeoutAfterRunID(t *testing.T) {
-	args, timeout, err := extractTimeoutMinutesFlag([]string{"run_test", "--timeout-minutes", "30"}, 15)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(args, ",") != "run_test" || timeout != 30 {
-		t.Fatalf("args/timeout = %#v/%d", args, timeout)
-	}
-}
-
-func TestExtractTimeoutMinutesFlagAllowsEqualsSyntax(t *testing.T) {
-	args, timeout, err := extractTimeoutMinutesFlag([]string{"--timeout-minutes=0", "run_test"}, 15)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(args, ",") != "run_test" || timeout != 0 {
-		t.Fatalf("args/timeout = %#v/%d", args, timeout)
-	}
-}
-
-func TestExtractTimeoutMinutesFlagRejectsMissingValue(t *testing.T) {
-	if _, _, err := extractTimeoutMinutesFlag([]string{"run_test", "--timeout-minutes"}, 15); err == nil {
-		t.Fatal("expected missing --timeout-minutes value error")
-	}
-}
-
-func TestParseRunsWaitArgsAllowsTimeoutAfterRunID(t *testing.T) {
-	got, err := parseRunsWaitArgs([]string{"run_test", "--timeout-minutes", "17"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.RunID != "run_test" || got.TimeoutMinutes != 17 {
-		t.Fatalf("runs wait args = %#v", got)
-	}
-}
-
-func TestParseRunsWaitArgsAllowsTimeoutBeforeRunID(t *testing.T) {
-	got, err := parseRunsWaitArgs([]string{"--timeout-minutes", "9", "run_test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.RunID != "run_test" || got.TimeoutMinutes != 9 {
-		t.Fatalf("runs wait args = %#v", got)
-	}
-}
-
-func TestParseRunsWaitArgsUsesDefaultTimeout(t *testing.T) {
-	got, err := parseRunsWaitArgs([]string{"run_test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.RunID != "run_test" || got.TimeoutMinutes != 30 {
-		t.Fatalf("runs wait args = %#v", got)
 	}
 }
 
@@ -284,7 +213,7 @@ func TestDownloadManagedRunArtifactsForFailedRunWritesFeedback(t *testing.T) {
 	}
 }
 
-func TestApplyManagedRunArtifactsDownloadsAndAppliesOptimizeOutput(t *testing.T) {
+func TestDownloadManagedRunArtifactsDownloadsOptimizeOutput(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/runs/run_opt/updated-docs.zip" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
@@ -296,7 +225,6 @@ func TestApplyManagedRunArtifactsDownloadsAndAppliesOptimizeOutput(t *testing.T)
 	}))
 	defer server.Close()
 
-	repo := t.TempDir()
 	outDir := t.TempDir()
 	client := managed.New(server.URL, "token")
 	status := managed.RunStatus{
@@ -306,15 +234,16 @@ func TestApplyManagedRunArtifactsDownloadsAndAppliesOptimizeOutput(t *testing.T)
 		UpdatedDocsAvailable: true,
 		FeedbackReports:      []string{"feedback"},
 	}
-	if err := applyManagedRunArtifacts(context.Background(), client, status, repo, outDir); err != nil {
+	updatedDir, err := downloadManagedRunArtifacts(context.Background(), client, status, outDir)
+	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.ReadFile(filepath.Join(repo, "README.md"))
+	got, err := os.ReadFile(filepath.Join(updatedDir, "README.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(got) != "updated docs\n" {
-		t.Fatalf("applied README = %q", got)
+		t.Fatalf("downloaded README = %q", got)
 	}
 }
 
@@ -341,7 +270,9 @@ func TestManagedCheckRequiresLoginBeforeRunConfig(t *testing.T) {
 	repo := t.TempDir()
 	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
 
-	err := runCheckOrOptimize("check", []string{repo, "--managed", "--task", "Run echo ok"})
+	cmd := newCheckOptimizeCommand("check")
+	cmd.SetArgs([]string{repo, "--managed", "--task", "Run echo ok"})
+	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected missing login error")
 	}
@@ -354,9 +285,11 @@ func TestManagedCheckRequiresLoginBeforeRunConfig(t *testing.T) {
 }
 
 func TestManagedApplyRequiresWait(t *testing.T) {
-	repo := t.TempDir()
-
-	err := runCheckOrOptimize("optimize", []string{repo, "--managed", "--apply", "--task", "Run echo ok"})
+	err := runManagedCheckOrOptimizeFromOptions(context.Background(), checkOptimizeOptions{
+		Command: "optimize",
+		Managed: true,
+		Apply:   true,
+	})
 	if err == nil {
 		t.Fatal("expected --apply without --wait error")
 	}
@@ -369,7 +302,9 @@ func TestManagedAgentDeployManagedNoops(t *testing.T) {
 	repo := t.TempDir()
 	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
 
-	err := runAgents([]string{"deploy", "--managed", repo})
+	cmd := newAgentsCommand()
+	cmd.SetArgs([]string{"deploy", "--managed", repo})
+	err := cmd.Execute()
 	if err != nil {
 		t.Fatalf("managed agent deploy should be a no-op: %v", err)
 	}
@@ -379,7 +314,8 @@ func TestAuthLogoutWithoutTokenSucceeds(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	t.Setenv("HOME", home)
 
-	if err := runAuthLogout(nil); err != nil {
+	cmd := newAuthLogoutCommand()
+	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".dari-docs", "credentials.json")); !os.IsNotExist(err) {
@@ -430,12 +366,12 @@ func TestSetLLMAPIKeySecretRejectsMultipleProviders(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dari.yml")
 	original := `name: test
 llm:
-  default: medium-claude
+  default: claude-sonnet-4-6
   options:
-    medium-claude:
+    claude-sonnet-4-6:
       provider: anthropic
-      model: claude-sonnet-4-7
-    smart-gpt:
+      model: claude-sonnet-4-6
+    gpt-5.5:
       provider: openai
       model: gpt-5.5
 `
@@ -452,12 +388,12 @@ func TestSetLLMAPIKeySecretsByProviderUpdatesMatchingOptions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dari.yml")
 	original := `name: test
 llm:
-  default: medium-claude
+  default: claude-sonnet-4-6
   options:
-    medium-claude:
+    claude-sonnet-4-6:
       provider: anthropic
-      model: claude-sonnet-4-7
-    smart-gpt:
+      model: claude-sonnet-4-6
+    gpt-5.5:
       provider: openai
       model: gpt-5.5
 `
@@ -481,11 +417,11 @@ func TestSetLLMAPIKeySecretReplacesExistingSecret(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dari.yml")
 	original := `name: test
 llm:
-  default: medium-claude
+  default: claude-sonnet-4-6
   options:
-    medium-claude:
+    claude-sonnet-4-6:
       provider: anthropic
-      model: claude-sonnet-4-7
+      model: claude-sonnet-4-6
       api_key_secret: OLD_KEY
 `
 	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
@@ -509,7 +445,7 @@ llm:
 
 func TestSetLLMAPIKeySecretPreservesModel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dari.yml")
-	original := "name: test\nllm:\n  model: anthropic/claude-sonnet-4.7\n"
+	original := "name: test\nllm:\n  model: anthropic/claude-sonnet-4.6\n"
 	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -521,7 +457,7 @@ func TestSetLLMAPIKeySecretPreservesModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(b)
-	if !strings.Contains(got, "model: anthropic/claude-sonnet-4.7") {
+	if !strings.Contains(got, "model: anthropic/claude-sonnet-4.6") {
 		t.Fatalf("model was not preserved:\n%s", got)
 	}
 	if !strings.Contains(got, "api_key_secret: MY_KEY") {

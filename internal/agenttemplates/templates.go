@@ -9,6 +9,12 @@ import (
 	"github.com/mupt-ai/dari-docs/agents"
 )
 
+const (
+	dirMode        os.FileMode = 0o755
+	templateMode   os.FileMode = 0o644
+	executableMode os.FileMode = 0o755
+)
+
 func Extract(dest string) error {
 	return fs.WalkDir(agents.FS, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -17,21 +23,26 @@ func Extract(dest string) error {
 		if path == "." {
 			return nil
 		}
+
 		out := filepath.Join(dest, filepath.FromSlash(path))
 		if d.IsDir() {
-			return os.MkdirAll(out, 0o755)
+			return os.MkdirAll(out, dirMode)
 		}
+
 		b, err := agents.FS.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(out), dirMode); err != nil {
 			return err
 		}
-		mode := os.FileMode(0o644)
-		if strings.HasSuffix(out, ".sh") {
-			mode = 0o755
-		}
-		return os.WriteFile(out, b, mode)
+		return os.WriteFile(out, b, templateFileMode(path))
 	})
+}
+
+func templateFileMode(path string) os.FileMode {
+	if strings.HasSuffix(path, ".sh") {
+		return executableMode
+	}
+	return templateMode
 }

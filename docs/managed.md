@@ -43,7 +43,7 @@ dari-docs optimize . \
   --task "Install the SDK and make a first API call"
 ```
 
-To apply edited docs directly after the run finishes, use `--wait --apply`:
+Review `.dari-docs/updated/` and copy changes into your repo when ready. To apply edited docs directly after the run finishes, use `--wait --apply`:
 
 ```bash
 dari-docs optimize . \
@@ -68,12 +68,6 @@ dari-docs runs wait run_...
 dari-docs runs download run_...
 ```
 
-For completed optimize runs, apply the downloaded revisions with:
-
-```bash
-dari-docs runs apply run_...
-```
-
 ## Account and billing
 
 New accounts start with five dollars worth of free credits. After logging in, check your balance with:
@@ -96,21 +90,21 @@ Managed runs currently support up to three tasks per run and three active runs p
 
 Managed mode supports the hosted Claude and GPT LLM options:
 
-- `dumb-claude`
-- `medium-claude`
-- `smart-claude`
-- `dumb-gpt`
-- `medium-gpt`
-- `smart-gpt`
+- `claude-haiku-4-5`
+- `claude-sonnet-4-6`
+- `claude-opus-4-7`
+- `gpt-5-mini`
+- `gpt-5.1`
+- `gpt-5.5`
 
-By default, managed tester sessions run each task across all three Claude options. The editor uses `medium-claude`.
+By default, managed tester sessions run each task across all three Claude options. The editor uses `claude-sonnet-4-6`.
 
 Use one model for every managed session:
 
 ```bash
 dari-docs check . \
   --managed \
-  --llm smart-claude \
+  --llm claude-opus-4-7 \
   --task "Install the SDK and make a first API call"
 ```
 
@@ -119,15 +113,15 @@ Or choose the tester and editor models separately:
 ```bash
 dari-docs optimize . \
   --managed \
-  --feedback-llm dumb-claude,smart-claude \
-  --editor-llm smart-claude \
+  --feedback-llm claude-haiku-4-5,claude-opus-4-7 \
+  --editor-llm claude-opus-4-7 \
   --task "Install the SDK and make a first API call"
 ```
 
 For tester sessions, `--feedback-llm` also accepts groups:
 
-- `claude` expands to `dumb-claude`, `medium-claude`, and `smart-claude`
-- `gpt` expands to `dumb-gpt`, `medium-gpt`, and `smart-gpt`
+- `claude` expands to `claude-haiku-4-5`, `claude-sonnet-4-6`, and `claude-opus-4-7`
+- `gpt` expands to `gpt-5-mini`, `gpt-5.1`, and `gpt-5.5`
 - `all` expands to all six hosted options
 
 You can mix groups and explicit IDs:
@@ -135,7 +129,7 @@ You can mix groups and explicit IDs:
 ```bash
 dari-docs check . \
   --managed \
-  --feedback-llm claude,medium-gpt \
+  --feedback-llm claude,gpt-5.1 \
   --task "Install the SDK and make a first API call"
 ```
 

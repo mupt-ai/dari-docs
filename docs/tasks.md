@@ -35,4 +35,4 @@ dari-docs optimize . \
   --task "Install the SDK and make a first API call"
 ```
 
-When `--out` is used with `--apply`, the CLI still applies the downloaded revisions back into the target repo.
+When `--out` is used, downloaded revisions are written under that output directory for review.

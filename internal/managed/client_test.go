@@ -147,10 +147,10 @@ func TestCreateRunDoesNotSendAgentSetID(t *testing.T) {
 				t.Fatalf("missing multipart field %q; seen=%#v", want, seen)
 			}
 		}
-		if fields["feedback_llm_ids_json"] != `["dumb-claude","smart-claude"]` {
+		if fields["feedback_llm_ids_json"] != `["claude-haiku-4-5","claude-opus-4-7"]` {
 			t.Fatalf("feedback_llm_ids_json = %q", fields["feedback_llm_ids_json"])
 		}
-		if fields["editor_llm_id"] != "smart-claude" {
+		if fields["editor_llm_id"] != "claude-opus-4-7" {
 			t.Fatalf("editor_llm_id = %q", fields["editor_llm_id"])
 		}
 		_ = json.NewEncoder(w).Encode(CreateRunResponse{RunID: "run_test", Status: "queued"})
@@ -158,8 +158,8 @@ func TestCreateRunDoesNotSendAgentSetID(t *testing.T) {
 	defer server.Close()
 
 	got, err := New(server.URL, "managed-token").CreateRun(context.Background(), "check", []string{"task"}, bundlePath, CreateRunOptions{
-		FeedbackLLMIDs: []string{"dumb-claude", "smart-claude"},
-		EditorLLMID:    "smart-claude",
+		FeedbackLLMIDs: []string{"claude-haiku-4-5", "claude-opus-4-7"},
+		EditorLLMID:    "claude-opus-4-7",
 	})
 	if err != nil {
 		t.Fatal(err)

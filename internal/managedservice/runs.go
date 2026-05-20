@@ -1242,7 +1242,7 @@ ORDER BY task_index, llm_id, created_at
 		if err != nil {
 			return nil, fmt.Errorf("%w: get transcript %s: %v", errRunFeedbackLoad, session.id, err)
 		}
-		reports = append(reports, formatManagedFeedbackReport(session.taskIndex, session.llmID, dari.FinalAssistantText(tr)))
+		reports = append(reports, dari.FinalAssistantText(tr))
 	}
 	return reports, nil
 }

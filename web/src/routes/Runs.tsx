@@ -254,27 +254,20 @@ export function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function abbreviateLLMID(id: string): string {
-  const s = id.replace(/^(anthropic|openai)\//, "");
-  const claude = s.match(/^claude-(opus|sonnet|haiku)-(\d+)-(\d+)/i);
-  if (claude) {
-    return `${claude[1].charAt(0).toUpperCase()}${claude[1].slice(1)} ${claude[2]}.${claude[3]}`;
-  }
-  const gpt = s.match(/^gpt-(.+)/i);
-  if (gpt) return `GPT-${gpt[1]}`;
-  return s.length > 14 ? `${s.slice(0, 13)}…` : s;
+function displayLLMID(id: string): string {
+  return id.replace(/^(anthropic|openai)\//, "");
 }
 
 function LLMBadges({ llms }: { llms: RunLLM[] }) {
   if (!llms || llms.length === 0) return <span className="text-muted-foreground">-</span>;
   const unique = [...new Set(llms.map((l) => l.llm_id))];
-  const visible = unique.slice(0, 2);
+  const visible = unique.slice(0, 6);
   const overflow = unique.length - visible.length;
   return (
     <div className="flex flex-wrap items-center gap-1">
       {visible.map((id) => (
         <span key={id} className="border border-border bg-muted/40 px-1.5 py-0.5 text-xs text-muted-foreground">
-          {abbreviateLLMID(id)}
+          {displayLLMID(id)}
         </span>
       ))}
       {overflow > 0 && (
