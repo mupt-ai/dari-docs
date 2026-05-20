@@ -184,11 +184,11 @@ export default function Usage() {
             <CardContent className="flex flex-col gap-2 text-xs text-muted-foreground">
               <Row
                 label="Active Runs"
-                value={`${config?.max_active_runs_per_user ?? "—"} Per Account`}
+                value={`${formatLimit(config?.max_active_runs_per_user)} Per Account`}
               />
               <Row
                 label="Tasks Per Run"
-                value={`${config?.max_tasks_per_run ?? "—"} Max`}
+                value={`${formatLimit(config?.max_tasks_per_run)} Max`}
               />
               <Row
                 label="Tester Reserve"
@@ -204,6 +204,11 @@ export default function Usage() {
       )}
     </div>
   );
+}
+
+function formatLimit(value: number | undefined): string {
+  if (value === undefined) return "—";
+  return value === 0 ? "Unlimited" : String(value);
 }
 
 function BuyCreditsDialog({

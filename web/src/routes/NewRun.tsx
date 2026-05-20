@@ -86,6 +86,7 @@ export default function NewRun() {
   const excludeGlobs = useMemo(() => parsePatternLines(excludeText), [excludeText]);
   const publicDocURLs = useMemo(() => parsePatternLines(publicDocsURL), [publicDocsURL]);
   const taskLimit = config?.max_tasks_per_run ?? 3;
+  const taskLimitUnlimited = taskLimit === 0;
   const taskByteLimit = config?.max_task_bytes ?? 10000;
   const liveVerify = runtimeSecrets.length > 0;
   const selectedFolder = useMemo(() => selectedFolderLabel(browserFiles), [browserFiles]);
@@ -134,7 +135,7 @@ export default function NewRun() {
 
   const confirmTaskDraft = () => {
     const nextTask = taskDraft.trim();
-    if (!nextTask || taskItems.length >= taskLimit) {
+    if (!nextTask || (!taskLimitUnlimited && taskItems.length >= taskLimit)) {
       setTaskDraft("");
       resetTextareaHeight(taskDraftRef.current);
       return;
@@ -415,7 +416,9 @@ export default function NewRun() {
                 <div>
                   <h2 className="text-sm font-medium">Tasks</h2>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Add up to {config.max_tasks_per_run} tasks.
+                    {config.max_tasks_per_run === 0
+                      ? "Add any number of tasks."
+                      : `Add up to ${config.max_tasks_per_run} tasks.`}
                   </p>
                 </div>
               </div>
@@ -477,7 +480,7 @@ export default function NewRun() {
                     )}
                   </div>
                 ))}
-                {taskItems.length < config.max_tasks_per_run && (
+                {(config.max_tasks_per_run === 0 || taskItems.length < config.max_tasks_per_run) && (
                   <div className="border border-border bg-background p-3">
                     <div className="mb-2 flex items-center justify-between gap-3">
                       <label htmlFor="task-draft" className="text-xs uppercase tracking-widest text-muted-foreground">
@@ -772,7 +775,7 @@ function validateRunForm({
   if (tasks.length === 0) {
     return "Add at least one task.";
   }
-  if (tasks.length > config.max_tasks_per_run) {
+  if (config.max_tasks_per_run > 0 && tasks.length > config.max_tasks_per_run) {
     return `Managed runs support at most ${config.max_tasks_per_run} tasks.`;
   }
   const encoder = new TextEncoder();

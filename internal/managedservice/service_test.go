@@ -1686,6 +1686,16 @@ func TestActiveRunLimitErrorMessageUsesLimit(t *testing.T) {
 	}
 }
 
+func TestParseManagedTasksJSONZeroMaxAllowsMultipleTasks(t *testing.T) {
+	tasks, err := parseManagedTasksJSON(`["one","two","three","four"]`, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 4 {
+		t.Fatalf("tasks = %v, want 4 tasks", tasks)
+	}
+}
+
 func TestRunStatusResponseDoesNotExposeEditorSessionID(t *testing.T) {
 	b, err := json.Marshal(runStatusResponse{
 		ID:                   "run_test",

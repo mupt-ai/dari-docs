@@ -24,17 +24,21 @@ type adminUserDetailResponse struct {
 }
 
 type adminUserSummary struct {
-	ID                  string     `json:"id"`
-	Email               string     `json:"email"`
-	DisplayName         *string    `json:"display_name"`
-	CreatedAt           time.Time  `json:"created_at"`
-	FreeCreditGrantedAt *time.Time `json:"free_credit_granted_at"`
-	BalanceCents        int64      `json:"balance_cents"`
-	CreditGrantedCents  int64      `json:"credit_granted_cents"`
-	CreditSpentCents    int64      `json:"credit_spent_cents"`
-	RunCount            int64      `json:"run_count"`
-	ActiveRunCount      int64      `json:"active_run_count"`
-	TokenCount          int64      `json:"token_count"`
+	ID                            string     `json:"id"`
+	Email                         string     `json:"email"`
+	DisplayName                   *string    `json:"display_name"`
+	CreatedAt                     time.Time  `json:"created_at"`
+	FreeCreditGrantedAt           *time.Time `json:"free_credit_granted_at"`
+	BalanceCents                  int64      `json:"balance_cents"`
+	CreditGrantedCents            int64      `json:"credit_granted_cents"`
+	CreditSpentCents              int64      `json:"credit_spent_cents"`
+	RunCount                      int64      `json:"run_count"`
+	ActiveRunCount                int64      `json:"active_run_count"`
+	TokenCount                    int64      `json:"token_count"`
+	MaxTasksPerRunOverride        *int       `json:"max_tasks_per_run_override"`
+	MaxActiveRunsPerUserOverride  *int       `json:"max_active_runs_per_user_override"`
+	EffectiveMaxTasksPerRun       int        `json:"effective_max_tasks_per_run"`
+	EffectiveMaxActiveRunsPerUser int        `json:"effective_max_active_runs_per_user"`
 }
 
 type adminRunSummary struct {
@@ -83,7 +87,9 @@ SELECT
 	greatest(coalesce(credits.granted_cents, 0) - coalesce(credits.balance_cents, 0), 0),
 	coalesce(runs.run_count, 0),
 	coalesce(runs.active_run_count, 0),
-	coalesce(tokens.token_count, 0)
+	coalesce(tokens.token_count, 0),
+	u.max_tasks_per_run_override,
+	u.max_active_runs_per_user_override
 FROM users u
 LEFT JOIN (
 	SELECT
@@ -158,7 +164,7 @@ LIMIT $2
 	defer rows.Close()
 	users := []adminUserSummary{}
 	for rows.Next() {
-		user, err := scanAdminUserSummary(rows)
+		user, err := scanAdminUserSummary(rows, s.cfg.MaxTasksPerRun, s.maxActiveRunsPerUser())
 		if err != nil {
 			writeLoggedError(w, http.StatusInternalServerError, "could not search users", err)
 			return
@@ -173,16 +179,25 @@ LIMIT $2
 }
 
 func (s *Server) handleAdminUserByID(w http.ResponseWriter, r *http.Request, u user) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
 	if !s.requireAdmin(w, u) {
 		return
 	}
-	userID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/admin/users/"), "/")
-	if userID == "" || strings.Contains(userID, "/") {
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/admin/users/"), "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
 		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	userID := parts[0]
+	if len(parts) == 2 && parts[1] == "limits" {
+		s.handleAdminUserLimits(w, r, userID)
+		return
+	}
+	if len(parts) != 1 {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	summary, err := s.getAdminUserSummary(r.Context(), userID)
@@ -205,6 +220,46 @@ func (s *Server) handleAdminUserByID(w http.ResponseWriter, r *http.Request, u u
 		return
 	}
 	writeJSON(w, http.StatusOK, adminUserDetailResponse{User: summary, Tokens: tokens, Runs: runs})
+}
+
+func (s *Server) handleAdminUserLimits(w http.ResponseWriter, r *http.Request, userID string) {
+	if r.Method != http.MethodPatch {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var raw map[string]*int
+	if err := readJSON(r, &raw); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	maxTasks, ok := raw["max_tasks_per_run"]
+	if !ok {
+		writeError(w, http.StatusBadRequest, "max_tasks_per_run is required")
+		return
+	}
+	maxActive, ok := raw["max_active_runs_per_user"]
+	if !ok {
+		writeError(w, http.StatusBadRequest, "max_active_runs_per_user is required")
+		return
+	}
+	if maxTasks != nil && *maxTasks < 0 {
+		writeError(w, http.StatusBadRequest, "max_tasks_per_run must be null or a non-negative integer")
+		return
+	}
+	if maxActive != nil && *maxActive < 0 {
+		writeError(w, http.StatusBadRequest, "max_active_runs_per_user must be null or a non-negative integer")
+		return
+	}
+	summary, err := s.updateAdminUserLimits(r.Context(), userID, maxTasks, maxActive)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if err != nil {
+		writeLoggedError(w, http.StatusInternalServerError, "could not update user limits", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
 }
 
 func (s *Server) handleAdminCredits(w http.ResponseWriter, r *http.Request, u user) {
@@ -268,7 +323,33 @@ RETURNING created_at
 }
 
 func (s *Server) getAdminUserSummary(ctx context.Context, userID string) (adminUserSummary, error) {
-	return scanAdminUserSummary(s.db.QueryRow(ctx, adminUserSummarySelect+`WHERE u.id=$1`, userID))
+	return scanAdminUserSummary(
+		s.db.QueryRow(ctx, adminUserSummarySelect+`WHERE u.id=$1`, userID),
+		s.cfg.MaxTasksPerRun,
+		s.maxActiveRunsPerUser(),
+	)
+}
+
+func (s *Server) updateAdminUserLimits(ctx context.Context, userID string, maxTasks, maxActive *int) (adminUserSummary, error) {
+	var updatedID string
+	var maxTasksValue, maxActiveValue sql.NullInt64
+	if maxTasks != nil {
+		maxTasksValue = sql.NullInt64{Int64: int64(*maxTasks), Valid: true}
+	}
+	if maxActive != nil {
+		maxActiveValue = sql.NullInt64{Int64: int64(*maxActive), Valid: true}
+	}
+	err := s.db.QueryRow(ctx, `
+UPDATE users
+SET max_tasks_per_run_override=$2,
+    max_active_runs_per_user_override=$3
+WHERE id=$1
+RETURNING id
+`, userID, maxTasksValue, maxActiveValue).Scan(&updatedID)
+	if err != nil {
+		return adminUserSummary{}, err
+	}
+	return s.getAdminUserSummary(ctx, updatedID)
 }
 
 func (s *Server) listAdminUserTokens(ctx context.Context, userID string) ([]adminAPITokenSummary, error) {
@@ -323,9 +404,10 @@ type scanRow interface {
 	Scan(dest ...any) error
 }
 
-func scanAdminUserSummary(row scanRow) (adminUserSummary, error) {
+func scanAdminUserSummary(row scanRow, defaultMaxTasksPerRun, defaultMaxActiveRunsPerUser int) (adminUserSummary, error) {
 	var summary adminUserSummary
 	var displayName sql.NullString
+	var maxTasksOverride, maxActiveOverride sql.NullInt64
 	err := row.Scan(
 		&summary.ID,
 		&summary.Email,
@@ -338,12 +420,26 @@ func scanAdminUserSummary(row scanRow) (adminUserSummary, error) {
 		&summary.RunCount,
 		&summary.ActiveRunCount,
 		&summary.TokenCount,
+		&maxTasksOverride,
+		&maxActiveOverride,
 	)
 	if err != nil {
 		return adminUserSummary{}, err
 	}
 	if displayName.Valid {
 		summary.DisplayName = &displayName.String
+	}
+	summary.EffectiveMaxTasksPerRun = defaultMaxTasksPerRun
+	if maxTasksOverride.Valid {
+		v := int(maxTasksOverride.Int64)
+		summary.MaxTasksPerRunOverride = &v
+		summary.EffectiveMaxTasksPerRun = v
+	}
+	summary.EffectiveMaxActiveRunsPerUser = defaultMaxActiveRunsPerUser
+	if maxActiveOverride.Valid {
+		v := int(maxActiveOverride.Int64)
+		summary.MaxActiveRunsPerUserOverride = &v
+		summary.EffectiveMaxActiveRunsPerUser = v
 	}
 	return summary, nil
 }
