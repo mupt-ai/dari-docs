@@ -7,8 +7,10 @@ import { Input } from "@/components/ui/input";
 import { getRunConfig, type RunConfig } from "@/lib/billing";
 import {
   createRunFromFolder,
+  previewSourceFiles,
   type BrowserSourceFile,
   type RuntimeSecretInput,
+  type SourcePreviewResponse,
 } from "@/lib/runs";
 import { cn, formatCents } from "@/lib/utils";
 
@@ -17,23 +19,6 @@ type RunMode = "check" | "optimize";
 type SelectedSourceFile = BrowserSourceFile & {
   size: number;
 };
-
-type SkippedUploadFile = {
-  path: string;
-  reason: string;
-  size: number;
-};
-
-const skipUploadDirs = new Set([
-  ".git",
-  "node_modules",
-  ".dari-docs",
-  ".next",
-  "dist",
-  "build",
-  "coverage",
-  ".turbo",
-]);
 
 const defaultTask =
   "Install the SDK and make a first API call based only on these docs.";
@@ -55,6 +40,9 @@ export default function NewRun() {
   const [runtimeSecrets, setRuntimeSecrets] = useState<RuntimeSecretInput[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [sourcePreview, setSourcePreview] = useState<SourcePreviewResponse | null>(null);
+  const [sourcePreviewLoading, setSourcePreviewLoading] = useState(false);
+  const [sourcePreviewError, setSourcePreviewError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const taskDraftRef = useRef<HTMLTextAreaElement | null>(null);
   const editingTaskRef = useRef<HTMLTextAreaElement | null>(null);
@@ -83,21 +71,41 @@ export default function NewRun() {
   const tasks = useMemo(() => parseTaskInputs(taskItems), [taskItems]);
   const includeGlobs = useMemo(() => parsePatternLines(includeText), [includeText]);
   const excludeGlobs = useMemo(() => parsePatternLines(excludeText), [excludeText]);
+  const sourceCandidates = useMemo(() => browserSourceFiles(browserFiles), [browserFiles]);
+  const sourcePreviewKey = useMemo(
+    () => sourceCandidates.map((item) => `${item.path}\0${item.size}`).join("\n"),
+    [sourceCandidates]
+  );
+  const sourceFileByPath = useMemo(() => {
+    const files = new Map<string, SelectedSourceFile>();
+    for (const item of sourceCandidates) {
+      if (!files.has(item.path)) {
+        files.set(item.path, item);
+      }
+    }
+    return files;
+  }, [sourceCandidates]);
   const taskLimit = config?.max_tasks_per_run ?? 3;
   const taskByteLimit = config?.max_task_bytes ?? 10000;
   const liveVerify = runtimeSecrets.length > 0;
   const selectedFolder = useMemo(() => selectedFolderLabel(browserFiles), [browserFiles]);
-  const { selected: selectedFiles, skipped: skippedFiles } = useMemo(
+  const selectedFiles = useMemo(
     () =>
-      config
-        ? selectBrowserFiles(browserFiles, config, includeGlobs, excludeGlobs)
-        : { selected: [], skipped: [] },
-    [browserFiles, config, excludeGlobs, includeGlobs]
+      (sourcePreview?.selected ?? [])
+        .map((item) => sourceFileByPath.get(item.path))
+        .filter((item): item is SelectedSourceFile => Boolean(item)),
+    [sourceFileByPath, sourcePreview]
   );
-  const selectedBytes = useMemo(
-    () => selectedFiles.reduce((sum, item) => sum + item.size, 0),
-    [selectedFiles]
+  const skippedFiles = useMemo(
+    () =>
+      (sourcePreview?.skipped ?? []).map((item) => ({
+        path: item.path,
+        reason: sourceSkipReasonLabel(item.reason, config?.bundle_max_file_bytes),
+        size: item.size_bytes,
+      })),
+    [config?.bundle_max_file_bytes, sourcePreview]
   );
+  const selectedBytes = sourcePreview?.selected_bytes ?? 0;
   const testerSessionCount = tasks.length * testerLLMIDs.length;
   const estimatedReserve = config
     ? testerSessionCount * config.tester_session_reserve_cents +
@@ -105,14 +113,64 @@ export default function NewRun() {
     : 0;
   const startRunDisabledReason = submitting
     ? ""
-    : selectedFiles.length === 0
-      ? "Choose a docs folder with at least one uploadable file."
-      : tasks.length === 0
-        ? "Add at least one task."
-        : testerLLMIDs.length === 0
-          ? "Select at least one tester model."
-          : "";
+    : sourcePreviewLoading
+      ? "Previewing docs selection."
+      : sourcePreviewError
+        ? "Resolve the docs selection preview error."
+        : selectedFiles.length === 0
+          ? "Choose a docs folder with at least one uploadable file."
+          : config && selectedBytes > config.bundle_max_uncompressed_bytes
+            ? `Selected files exceed the ${formatBytes(config.bundle_max_uncompressed_bytes)} upload limit.`
+            : tasks.length === 0
+              ? "Add at least one task."
+              : testerLLMIDs.length === 0
+                ? "Select at least one tester model."
+                : "";
   const canStartRun = !submitting && startRunDisabledReason === "";
+
+  useEffect(() => {
+    let canceled = false;
+    const include = includeGlobs;
+    const exclude = excludeGlobs;
+    if (sourceCandidates.length === 0) {
+      setSourcePreview(null);
+      setSourcePreviewError(null);
+      setSourcePreviewLoading(false);
+      return () => {
+        canceled = true;
+      };
+    }
+    setSourcePreview(null);
+    setSourcePreviewError(null);
+    setSourcePreviewLoading(true);
+    const timeout = window.setTimeout(() => {
+      void previewSourceFiles({
+        files: sourceCandidates.map((item) => ({
+          path: item.path,
+          size_bytes: item.size,
+        })),
+        includeGlobs: include,
+        excludeGlobs: exclude,
+      })
+        .then((preview) => {
+          if (canceled) return;
+          setSourcePreview(preview);
+        })
+        .catch((error) => {
+          if (canceled) return;
+          setSourcePreviewError(error instanceof Error ? error.message : String(error));
+        })
+        .finally(() => {
+          if (!canceled) {
+            setSourcePreviewLoading(false);
+          }
+        });
+    }, 250);
+    return () => {
+      canceled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [excludeGlobs, includeGlobs, sourceCandidates, sourcePreviewKey]);
 
   const onFolderChange = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.currentTarget.files ?? []);
@@ -323,7 +381,7 @@ export default function NewRun() {
               )}
               <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
                 <span className="border border-border bg-background px-2 py-1">
-                  {selectedFiles.length} Selected
+                  {sourcePreviewLoading ? "Previewing..." : `${selectedFiles.length} Selected`}
                 </span>
                 <span className="border border-border bg-background px-2 py-1">
                   {formatBytes(selectedBytes)} / {formatBytes(config.bundle_max_uncompressed_bytes)}
@@ -332,6 +390,11 @@ export default function NewRun() {
                   {skippedFiles.length} Skipped
                 </span>
               </div>
+              {sourcePreviewError && (
+                <div className="mt-3 border border-destructive/50 bg-destructive/10 p-3 text-xs text-destructive-foreground">
+                  {sourcePreviewError}
+                </div>
+              )}
               {skippedFiles.length > 0 && (
                 <details className="mt-3 border border-border bg-background p-3 text-xs">
                   <summary className="cursor-pointer text-muted-foreground">
@@ -357,12 +420,11 @@ export default function NewRun() {
                     <label className="mb-2 flex items-center gap-1.5 text-xs uppercase tracking-widest text-muted-foreground">
                       <span>Include Patterns</span>
                       <InfoTooltip>
-                        By default, docs/source files are included: Markdown, JSON,
-                        YAML, TOML, CSS, JavaScript, TypeScript, README.md,
-                        docs.json, mint.json, OpenAPI files, and llms.txt.
+                        By default, docs/source files are included by extension
+                        ({formatDefaultList(config.bundle_defaults.extensions)}) and
+                        common docs names ({formatDefaultList(config.bundle_defaults.names)}).
                         Include patterns add files outside those defaults, but
-                        do not override built-in skipped folders such as
-                        node_modules, .git, dist, and build.
+                        do not override built-in skipped folders.
                       </InfoTooltip>
                     </label>
                     <textarea
@@ -377,9 +439,8 @@ export default function NewRun() {
                       <span>Exclude Patterns</span>
                       <InfoTooltip>
                         By default, generated or dependency-heavy folders are
-                        skipped: .git, node_modules, .dari-docs, .next, dist,
-                        build, coverage, and .turbo. Exclude patterns win over
-                        defaults and include patterns.
+                        skipped: {formatDefaultList(config.bundle_defaults.skip_dirs)}.
+                        Exclude patterns win over defaults and include patterns.
                       </InfoTooltip>
                     </label>
                     <textarea
@@ -825,39 +886,20 @@ function resetTextareaHeight(el: HTMLTextAreaElement | null) {
   });
 }
 
-function selectBrowserFiles(
-  files: File[],
-  config: RunConfig,
-  includeGlobs: string[],
-  excludeGlobs: string[]
-): { selected: SelectedSourceFile[]; skipped: SkippedUploadFile[] } {
+function browserSourceFiles(files: File[]): SelectedSourceFile[] {
   const withPaths = stripCommonRoot(
     files.map((file) => ({
       file,
       path: browserFilePath(file),
     }))
   );
-  const selected: SelectedSourceFile[] = [];
-  const skipped: SkippedUploadFile[] = [];
-  const seen = new Set<string>();
-
-  for (const item of withPaths) {
-    const path = normalizeBrowserPath(item.path);
-    if (!path || seen.has(path)) {
-      skipped.push({ path: item.path || item.file.name, reason: "duplicate", size: item.file.size });
-      continue;
-    }
-    seen.add(path);
-    const skipReason = uploadSkipReason(path, item.file, config, includeGlobs, excludeGlobs);
-    if (skipReason) {
-      skipped.push({ path, reason: skipReason, size: item.file.size });
-      continue;
-    }
-    selected.push({ path, file: item.file, size: item.file.size });
-  }
-  selected.sort((a, b) => a.path.localeCompare(b.path));
-  skipped.sort((a, b) => a.path.localeCompare(b.path));
-  return { selected, skipped };
+  return withPaths
+    .map((item) => ({
+      path: normalizeBrowserPath(item.path),
+      file: item.file,
+      size: item.file.size,
+    }))
+    .sort((a, b) => a.path.localeCompare(b.path));
 }
 
 function browserFilePath(file: File): string {
@@ -883,52 +925,24 @@ function normalizeBrowserPath(path: string): string {
   return path.replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/^\/+/, "").trim();
 }
 
-function uploadSkipReason(
-  path: string,
-  file: File,
-  config: RunConfig,
-  includeGlobs: string[],
-  excludeGlobs: string[]
-): string | null {
-  const segments = path.split("/").filter(Boolean);
-  if (segments.length === 0) return "invalid path";
-  if (segments.some((segment) => segment === ".." || segment === ".")) return "invalid path";
-  if (segments.some((segment) => skipUploadDirs.has(segment))) return "ignored directory";
-  if (file.size > config.bundle_max_file_bytes) {
-    return `over ${formatBytes(config.bundle_max_file_bytes)}`;
+function sourceSkipReasonLabel(reason: string, maxFileBytes?: number): string {
+  switch (reason) {
+    case "invalid_path":
+      return "invalid path";
+    case "duplicate":
+      return "duplicate";
+    case "ignored_directory":
+      return "ignored directory";
+    case "excluded":
+      return "excluded";
+    case "unsupported":
+      return "unsupported";
+    case "oversized":
+      return maxFileBytes ? `over ${formatBytes(maxFileBytes)}` : "oversized";
+    default:
+      return reason.replace(/_/g, " ");
   }
-  if (matchesAnyPattern(excludeGlobs, path)) return "excluded";
-  if (!looksLikeDocsPath(path) && !matchesAnyPattern(includeGlobs, path)) {
-    return "unsupported";
-  }
-  return null;
 }
-
-const defaultDocsExts = new Set([
-  ".md",
-  ".mdx",
-  ".txt",
-  ".json",
-  ".yml",
-  ".yaml",
-  ".toml",
-  ".css",
-  ".js",
-  ".jsx",
-  ".ts",
-  ".tsx",
-]);
-
-const defaultDocsNames = new Set([
-  "mint.json",
-  "docs.json",
-  "openapi.json",
-  "openapi.yaml",
-  "README",
-  "README.md",
-  "llms.txt",
-  "llms-full.txt",
-]);
 
 const defaultClaudeTesterLLMIDs = ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"];
 
@@ -939,59 +953,9 @@ function defaultTesterLLMIDs(config: RunConfig): string[] {
   return defaultClaudeTesterLLMIDs.filter((llmID) => allowed.has(llmID));
 }
 
-function looksLikeDocsPath(filePath: string): boolean {
-  const name = filePath.split("/").pop() ?? filePath;
-  if (defaultDocsNames.has(name)) return true;
-  const dot = name.lastIndexOf(".");
-  return dot >= 0 && defaultDocsExts.has(name.slice(dot).toLowerCase());
-}
-
-function matchesAnyPattern(patterns: string[], rel: string): boolean {
-  const normalized = normalizeBrowserPath(rel);
-  return patterns.some((pattern) => matchesPattern(pattern, normalized));
-}
-
-function matchesPattern(pattern: string, rel: string): boolean {
-  const normalized = normalizeBundlePattern(pattern);
-  if (!normalized) return false;
-  if (normalized.endsWith("/**")) {
-    const prefix = normalized.slice(0, -3);
-    if (rel === prefix || rel.startsWith(`${prefix}/`)) return true;
-  }
-  const rx = new RegExp(`^${globRegExp(normalized)}$`);
-  if (normalized.includes("/")) {
-    return rx.test(rel);
-  }
-  return rel.split("/").some((segment) => rx.test(segment));
-}
-
-function normalizeBundlePattern(pattern: string): string {
-  return normalizeBrowserPath(pattern).replace(/\/+$/, "");
-}
-
-function globRegExp(pattern: string): string {
-  let out = "";
-  for (let i = 0; i < pattern.length; i++) {
-    const char = pattern[i];
-    if (char === "*") {
-      if (pattern[i + 1] === "*") {
-        if (pattern[i + 2] === "/") {
-          out += "(?:.*/)?";
-          i += 2;
-        } else {
-          out += ".*";
-          i++;
-        }
-      } else {
-        out += "[^/]*";
-      }
-    } else if (char === "?") {
-      out += "[^/]";
-    } else {
-      out += char.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&");
-    }
-  }
-  return out;
+function formatDefaultList(values: string[]): string {
+  if (values.length <= 8) return values.join(", ");
+  return `${values.slice(0, 8).join(", ")}, ...`;
 }
 
 function formatBytes(bytes: number): string {

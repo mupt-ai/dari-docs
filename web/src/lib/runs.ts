@@ -51,6 +51,21 @@ export type BrowserSourceFile = {
   file: File;
 };
 
+export type SourcePreviewFile = {
+  path: string;
+  size_bytes: number;
+};
+
+export type SourcePreviewSkippedFile = SourcePreviewFile & {
+  reason: string;
+};
+
+export type SourcePreviewResponse = {
+  selected: SourcePreviewFile[];
+  skipped: SourcePreviewSkippedFile[];
+  selected_bytes: number;
+};
+
 export type RuntimeSecretInput = {
   name: string;
   value: string;
@@ -72,6 +87,21 @@ export type CreateRunResponse = {
   run_id: string;
   status: string;
 };
+
+export async function previewSourceFiles(input: {
+  files: SourcePreviewFile[];
+  includeGlobs?: string[];
+  excludeGlobs?: string[];
+}): Promise<SourcePreviewResponse> {
+  return apiFetch<SourcePreviewResponse>("/v1/runs/source-preview", {
+    method: "POST",
+    body: {
+      files: input.files,
+      include: input.includeGlobs ?? [],
+      exclude: input.excludeGlobs ?? [],
+    },
+  });
+}
 
 export async function listRuns(params: {
   sort: RunSort;

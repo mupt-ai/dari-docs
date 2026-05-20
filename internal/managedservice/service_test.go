@@ -1112,6 +1112,57 @@ func TestStageManagedSourceBundleUsesBundlerRules(t *testing.T) {
 	}
 }
 
+func TestHandleRunSourcePreviewUsesBundlerRules(t *testing.T) {
+	s := &Server{cfg: Config{BundleMaxFileBytes: 32}}
+	body := strings.NewReader(`{
+		"files": [
+			{"path": "README.md", "size_bytes": 10},
+			{"path": "demo.py", "size_bytes": 10},
+			{"path": "examples/demo.py", "size_bytes": 10},
+			{"path": "drafts/intro.md", "size_bytes": 10},
+			{"path": "docs/generated/api.md", "size_bytes": 10},
+			{"path": "build/docs.md", "size_bytes": 10},
+			{"path": "large.md", "size_bytes": 64}
+		],
+		"include": ["**/*.py", "build/**"],
+		"exclude": ["drafts", "docs/generated"]
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/source-preview", body)
+	rec := httptest.NewRecorder()
+
+	s.handleRunSourcePreview(rec, req, user{ID: "usr_test", TokenScopes: []string{scopeManagedCheck}})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var got bundle.SelectionResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	var selected []string
+	for _, rec := range got.Selected {
+		selected = append(selected, rec.Path)
+	}
+	wantSelected := []string{"README.md", "demo.py", "examples/demo.py"}
+	if strings.Join(selected, ",") != strings.Join(wantSelected, ",") {
+		t.Fatalf("selected = %v, want %v; body=%s", selected, wantSelected, rec.Body.String())
+	}
+	reasons := map[string]string{}
+	for _, rec := range got.Skipped {
+		reasons[rec.Path] = rec.Reason
+	}
+	for path, want := range map[string]string{
+		"build/docs.md":         bundle.SkipReasonIgnoredDir,
+		"docs/generated/api.md": bundle.SkipReasonExcluded,
+		"drafts/intro.md":       bundle.SkipReasonExcluded,
+		"large.md":              bundle.SkipReasonOversized,
+	} {
+		if got := reasons[path]; got != want {
+			t.Fatalf("reason for %s = %q, want %q; reasons=%v", path, got, want, reasons)
+		}
+	}
+}
+
 func TestParseManagedSourceManifestRejectsUnsafePaths(t *testing.T) {
 	for _, raw := range []string{
 		`{"files":[{"path":"../secret.txt"}]}`,

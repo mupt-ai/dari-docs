@@ -3,6 +3,7 @@ module github.com/mupt-ai/dari-docs
 go 1.25.7
 
 require (
+	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/pressly/goose/v3 v3.27.1
 	github.com/stripe/stripe-go/v82 v82.5.1

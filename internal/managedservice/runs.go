@@ -35,6 +35,7 @@ const (
 
 	managedMaxSourceManifestBytes = 1 << 20
 	managedMaxBundlePatternBytes  = 64 * 1024
+	managedMaxSourcePreviewFiles  = 20000
 )
 
 type managedSourceManifest struct {
@@ -42,7 +43,14 @@ type managedSourceManifest struct {
 }
 
 type managedSourceManifestFile struct {
-	Path string `json:"path"`
+	Path      string `json:"path"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+}
+
+type managedSourcePreviewRequest struct {
+	Files   []managedSourceManifestFile `json:"files"`
+	Include []string                    `json:"include"`
+	Exclude []string                    `json:"exclude"`
 }
 
 type activeRunLimitError struct {
@@ -64,6 +72,52 @@ type insufficientCreditsError struct {
 
 func (e *insufficientCreditsError) Error() string {
 	return fmt.Sprintf("insufficient credits: need %s, balance %s", formatCents(e.Need), formatCents(e.Balance))
+}
+
+func (s *Server) handleRunSourcePreview(w http.ResponseWriter, r *http.Request, u user) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !u.hasScope(scopeManagedCheck) && !u.hasScope(scopeManagedOptimize) {
+		writeError(w, http.StatusForbidden, fmt.Sprintf("token missing required scope %s or %s", scopeManagedCheck, scopeManagedOptimize))
+		return
+	}
+	var req managedSourcePreviewRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(req.Files) == 0 {
+		writeError(w, http.StatusBadRequest, "files must include at least one source file")
+		return
+	}
+	if len(req.Files) > managedMaxSourcePreviewFiles {
+		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("source preview supports at most %d files", managedMaxSourcePreviewFiles))
+		return
+	}
+	if encodedStringListBytes(req.Include) > managedMaxBundlePatternBytes {
+		writeError(w, http.StatusBadRequest, "include patterns are too large")
+		return
+	}
+	if encodedStringListBytes(req.Exclude) > managedMaxBundlePatternBytes {
+		writeError(w, http.StatusBadRequest, "exclude patterns are too large")
+		return
+	}
+	candidates := make([]bundle.CandidateFile, 0, len(req.Files))
+	for _, file := range req.Files {
+		candidates = append(candidates, bundle.CandidateFile{Path: file.Path, SizeBytes: file.SizeBytes})
+	}
+	selection, err := bundle.SelectFiles(candidates, bundle.CreateOptions{
+		Include:      req.Include,
+		Exclude:      req.Exclude,
+		MaxFileBytes: s.cfg.BundleMaxFileBytes,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, selection)
 }
 
 func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
@@ -892,6 +946,14 @@ func parseStringListJSON(raw string, field string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+func encodedStringListBytes(values []string) int64 {
+	b, err := json.Marshal(values)
+	if err != nil {
+		return int64(managedMaxBundlePatternBytes + 1)
+	}
+	return int64(len(b))
 }
 
 func normalizeRunSource(source string) string {

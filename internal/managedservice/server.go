@@ -97,6 +97,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/v1/billing/config", s.withUserAuth(s.handleBillingConfig))
 	mux.HandleFunc("/v1/billing/checkout", s.withUserAuth(s.handleCheckout))
 	mux.HandleFunc("/v1/runs/config", s.withUserAuth(s.handleRunConfig))
+	mux.HandleFunc("/v1/runs/source-preview", s.withUserAuth(s.handleRunSourcePreview))
 	mux.HandleFunc("/v1/stripe/webhook", s.handleStripeWebhook)
 	mux.HandleFunc("/billing/success", s.handleBillingSuccess)
 	mux.HandleFunc("/billing/cancel", s.handleBillingCancel)

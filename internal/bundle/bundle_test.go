@@ -106,6 +106,66 @@ func TestCreateWithOptionsDoubleStarIncludeMatchesRootFiles(t *testing.T) {
 	}
 }
 
+func TestSelectFilesAppliesBundleSelectionSemantics(t *testing.T) {
+	selected, err := SelectFiles([]CandidateFile{
+		{Path: "README.md", SizeBytes: 10},
+		{Path: "guide.MD", SizeBytes: 10},
+		{Path: "demo.py", SizeBytes: 10},
+		{Path: "examples/demo.py", SizeBytes: 10},
+		{Path: "schemas/user.proto", SizeBytes: 10},
+		{Path: "drafts/intro.md", SizeBytes: 10},
+		{Path: "docs/generated/api.md", SizeBytes: 10},
+		{Path: "build/docs.md", SizeBytes: 10},
+		{Path: "notes.tmp", SizeBytes: 10},
+		{Path: "large.md", SizeBytes: 64},
+		{Path: "README.md", SizeBytes: 10},
+		{Path: "../secret.md", SizeBytes: 10},
+	}, CreateOptions{
+		Include:      []string{"**/*.py", "*.proto", "examples", "build/**"},
+		Exclude:      []string{"drafts", "docs/generated"},
+		MaxFileBytes: 32,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var gotPaths []string
+	for _, rec := range selected.Selected {
+		gotPaths = append(gotPaths, rec.Path)
+	}
+	wantPaths := []string{"README.md", "demo.py", "examples/demo.py", "guide.MD", "schemas/user.proto"}
+	if strings.Join(gotPaths, ",") != strings.Join(wantPaths, ",") {
+		t.Fatalf("selected paths = %v, want %v", gotPaths, wantPaths)
+	}
+
+	reasons := map[string]string{}
+	for _, rec := range selected.Skipped {
+		reasons[rec.Path] = rec.Reason
+	}
+	for path, want := range map[string]string{
+		"../secret.md":          SkipReasonInvalidPath,
+		"README.md":             SkipReasonDuplicate,
+		"build/docs.md":         SkipReasonIgnoredDir,
+		"docs/generated/api.md": SkipReasonExcluded,
+		"drafts/intro.md":       SkipReasonExcluded,
+		"large.md":              SkipReasonOversized,
+		"notes.tmp":             SkipReasonUnsupportedFile,
+	} {
+		if got := reasons[path]; got != want {
+			t.Fatalf("reason for %s = %q, want %q; all reasons=%v", path, got, want, reasons)
+		}
+	}
+}
+
+func TestSelectFilesRejectsInvalidGlob(t *testing.T) {
+	_, err := SelectFiles([]CandidateFile{{Path: "README.md", SizeBytes: 10}}, CreateOptions{
+		Include: []string{"["},
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid bundle glob") {
+		t.Fatalf("err = %v, want invalid bundle glob", err)
+	}
+}
+
 func TestCreateSkipsSymlinks(t *testing.T) {
 	repo := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "secret.md")

@@ -25,6 +25,11 @@ export type RunConfig = {
   max_bundle_bytes: number;
   bundle_max_uncompressed_bytes: number;
   bundle_max_file_bytes: number;
+  bundle_defaults: {
+    skip_dirs: string[];
+    extensions: string[];
+    names: string[];
+  };
   default_llm_id: string;
   default_feedback_llm_ids: string[];
   allowed_llm_ids: string[];

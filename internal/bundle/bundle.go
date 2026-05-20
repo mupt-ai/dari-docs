@@ -11,7 +11,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -83,13 +82,6 @@ var defaultNames = map[string]bool{
 	"README": true, "README.md": true, "llms.txt": true, "llms-full.txt": true,
 }
 
-type compiledPattern struct {
-	raw      string
-	rx       *regexp.Regexp
-	basename bool
-	prefix   string
-}
-
 func Create(repoRoot, outPath string) (Result, error) {
 	return CreateWithOptions(repoRoot, outPath, CreateOptions{})
 }
@@ -103,7 +95,7 @@ func CreateWithOptions(repoRoot, outPath string, opts CreateOptions) (Result, er
 	if err != nil {
 		return Result{}, err
 	}
-	var files []FileRecord
+	var candidates []CandidateFile
 	var skipped SkipSummary
 	if err := filepath.WalkDir(absRoot, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -119,28 +111,23 @@ func CreateWithOptions(repoRoot, outPath string, opts CreateOptions) (Result, er
 			rel = ""
 		}
 		if d.IsDir() {
-			if path != absRoot && defaultSkipDirs[name] {
-				skipped.IgnoredDirs++
-				return filepath.SkipDir
+			if path != absRoot {
+				skip, reason := shouldSkipDirectory(name, rel, exclude)
+				if skip {
+					if reason == SkipReasonIgnoredDir {
+						skipped.IgnoredDirs++
+					} else {
+						skipped.ExcludedFiles++
+					}
+					return filepath.SkipDir
+				}
 			}
-			if path != absRoot && matchesAny(exclude, rel) {
-				skipped.ExcludedFiles++
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if matchesAny(exclude, rel) {
-			skipped.ExcludedFiles++
 			return nil
 		}
 		if strings.HasPrefix(rel, "../") || strings.HasPrefix(rel, "/") {
 			return nil
 		}
 		if d.Type()&os.ModeSymlink != 0 {
-			skipped.UnsupportedFiles++
-			return nil
-		}
-		if !looksLikeDocsFile(name) && !matchesAny(include, rel) {
 			skipped.UnsupportedFiles++
 			return nil
 		}
@@ -152,18 +139,31 @@ func CreateWithOptions(repoRoot, outPath string, opts CreateOptions) (Result, er
 			skipped.UnsupportedFiles++
 			return nil
 		}
-		if info.Size() > opts.MaxFileBytes {
-			skipped.OversizedFiles = append(skipped.OversizedFiles, SkippedFile{Path: rel, SizeBytes: info.Size()})
-			return nil
-		}
-		h, err := fileSHA256(path)
-		if err != nil {
-			return err
-		}
-		files = append(files, FileRecord{Path: rel, SizeBytes: info.Size(), SHA256: h, ContentType: contentType(name)})
+		candidates = append(candidates, CandidateFile{Path: rel, SizeBytes: info.Size()})
 		return nil
 	}); err != nil {
 		return Result{}, err
+	}
+	selected := selectFilesWithPatterns(candidates, opts, include, exclude)
+	files := make([]FileRecord, 0, len(selected.Selected))
+	for _, rec := range selected.Selected {
+		h, err := fileSHA256(filepath.Join(absRoot, filepath.FromSlash(rec.Path)))
+		if err != nil {
+			return Result{}, err
+		}
+		files = append(files, FileRecord{Path: rec.Path, SizeBytes: rec.SizeBytes, SHA256: h, ContentType: rec.ContentType})
+	}
+	for _, rec := range selected.Skipped {
+		switch rec.Reason {
+		case SkipReasonIgnoredDir:
+			skipped.IgnoredDirs++
+		case SkipReasonExcluded:
+			skipped.ExcludedFiles++
+		case SkipReasonOversized:
+			skipped.OversizedFiles = append(skipped.OversizedFiles, SkippedFile{Path: rec.Path, SizeBytes: rec.SizeBytes})
+		default:
+			skipped.UnsupportedFiles++
+		}
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	manifest := Manifest{SchemaVersion: 1, CreatedAt: time.Now().UTC().Format(time.RFC3339), RepoRoot: filepath.Base(absRoot), Files: files}
@@ -202,99 +202,6 @@ func CreateWithOptions(repoRoot, outPath string, opts CreateOptions) (Result, er
 	}
 	sort.Slice(skipped.OversizedFiles, func(i, j int) bool { return skipped.OversizedFiles[i].Path < skipped.OversizedFiles[j].Path })
 	return Result{Path: outPath, Manifest: manifest, SHA256: hex.EncodeToString(hash.Sum(nil)), Bytes: info.Size(), MaxFileBytes: opts.MaxFileBytes, Skipped: skipped}, nil
-}
-
-func normalizeCreateOptions(opts CreateOptions) (CreateOptions, []compiledPattern, []compiledPattern, error) {
-	if opts.MaxFileBytes <= 0 {
-		opts.MaxFileBytes = DefaultMaxFileBytes
-	}
-	include, err := compilePatterns(opts.Include)
-	if err != nil {
-		return CreateOptions{}, nil, nil, err
-	}
-	exclude, err := compilePatterns(opts.Exclude)
-	if err != nil {
-		return CreateOptions{}, nil, nil, err
-	}
-	return opts, include, exclude, nil
-}
-
-func compilePatterns(patterns []string) ([]compiledPattern, error) {
-	compiled := make([]compiledPattern, 0, len(patterns))
-	for _, pattern := range patterns {
-		pattern = normalizePattern(pattern)
-		if pattern == "" {
-			continue
-		}
-		cp := compiledPattern{raw: pattern, basename: !strings.Contains(pattern, "/")}
-		if strings.HasSuffix(pattern, "/**") {
-			cp.prefix = strings.TrimSuffix(pattern, "/**")
-		}
-		rx, err := regexp.Compile("^" + globRegexp(pattern) + "$")
-		if err != nil {
-			return nil, fmt.Errorf("invalid bundle glob %q: %w", pattern, err)
-		}
-		cp.rx = rx
-		compiled = append(compiled, cp)
-	}
-	return compiled, nil
-}
-
-func normalizePattern(pattern string) string {
-	pattern = strings.TrimSpace(filepath.ToSlash(pattern))
-	pattern = strings.TrimPrefix(pattern, "./")
-	pattern = strings.TrimPrefix(pattern, "/")
-	if pattern == "" {
-		return ""
-	}
-	pattern = path.Clean(pattern)
-	if pattern == "." {
-		return ""
-	}
-	return pattern
-}
-
-func globRegexp(pattern string) string {
-	var sb strings.Builder
-	for i := 0; i < len(pattern); i++ {
-		ch := pattern[i]
-		switch ch {
-		case '*':
-			if i+1 < len(pattern) && pattern[i+1] == '*' {
-				if i+2 < len(pattern) && pattern[i+2] == '/' {
-					sb.WriteString("(?:.*/)?")
-					i += 2
-				} else {
-					sb.WriteString(".*")
-					i++
-				}
-			} else {
-				sb.WriteString("[^/]*")
-			}
-		case '?':
-			sb.WriteString("[^/]")
-		default:
-			sb.WriteString(regexp.QuoteMeta(string(ch)))
-		}
-	}
-	return sb.String()
-}
-
-func matchesAny(patterns []compiledPattern, rel string) bool {
-	rel = strings.TrimPrefix(filepath.ToSlash(rel), "./")
-	for _, pattern := range patterns {
-		if pattern.prefix != "" && (rel == pattern.prefix || strings.HasPrefix(rel, pattern.prefix+"/")) {
-			return true
-		}
-		target := rel
-		if pattern.basename {
-			target = path.Base(rel)
-		}
-		if pattern.rx.MatchString(target) {
-			return true
-		}
-	}
-	return false
 }
 
 func WriteSummary(w io.Writer, r Result) {

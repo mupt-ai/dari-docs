@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/mupt-ai/dari-docs/internal/bundle"
 	"github.com/stripe/stripe-go/v82"
 	"github.com/stripe/stripe-go/v82/webhook"
 )
@@ -53,6 +54,7 @@ func (s *Server) handleRunConfig(w http.ResponseWriter, r *http.Request, u user)
 		"max_bundle_bytes":              s.cfg.MaxBundleBytes,
 		"bundle_max_uncompressed_bytes": s.cfg.BundleMaxUncompressedBytes,
 		"bundle_max_file_bytes":         s.cfg.BundleMaxFileBytes,
+		"bundle_defaults":               bundle.DefaultSelectionDefaults(),
 		"default_llm_id":                defaultManagedEditorLLMID(),
 		"default_feedback_llm_ids":      defaultManagedTesterLLMIDs(),
 		"allowed_llm_ids":               allowedManagedLLMIDs(),
