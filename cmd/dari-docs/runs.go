@@ -19,7 +19,7 @@ func newRunsCommand() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("usage: dari-docs runs [status|wait|download|apply]")
+			return cmd.Help()
 		},
 	}
 	cmd.AddCommand(
@@ -52,6 +52,12 @@ func newRunsWaitCommand() *cobra.Command {
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if timeoutMinutes < 0 {
+				return fmt.Errorf("--timeout-minutes must be a non-negative integer")
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runRunsWait(cmd.Context(), args[0], timeoutMinutes)
 		},
@@ -68,6 +74,7 @@ func newRunsDownloadCommand() *cobra.Command {
 		Args:          cobra.RangeArgs(1, 2),
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		PreRunE:       validateOutFlag,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repo := "."
 			if len(args) == 2 {
@@ -88,6 +95,7 @@ func newRunsApplyCommand() *cobra.Command {
 		Args:          cobra.RangeArgs(1, 2),
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		PreRunE:       validateOutFlag,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repo := "."
 			if len(args) == 2 {
@@ -98,6 +106,13 @@ func newRunsApplyCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&outDir, "out", "", "output directory (default: <repo>/.dari-docs)")
 	return cmd
+}
+
+func validateOutFlag(cmd *cobra.Command, args []string) error {
+	if flag := cmd.Flags().Lookup("out"); flag != nil && flag.Changed && strings.TrimSpace(flag.Value.String()) == "" {
+		return fmt.Errorf("--out requires a directory")
+	}
+	return nil
 }
 
 func runRunsStatus(ctx context.Context, runID string) error {

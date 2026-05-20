@@ -49,6 +49,7 @@ func newBillingCheckoutCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&amount, "amount", "", "credit purchase amount in dollars, for example 20 or 20.00")
+	_ = cmd.MarkFlagRequired("amount")
 	return cmd
 }
 
@@ -92,7 +93,7 @@ func newAgentsCommand() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("managed mode uses hosted Dari Docs agents automatically. For self-managed agents, run `dari-docs init --deploy`")
+			return cmd.Help()
 		},
 	}
 	cmd.AddCommand(newAgentsDeployCommand())

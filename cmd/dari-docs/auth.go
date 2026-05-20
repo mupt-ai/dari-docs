@@ -21,7 +21,7 @@ func newAuthCommand() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("usage: dari-docs auth [login|logout|status|api-key]")
+			return cmd.Help()
 		},
 	}
 	cmd.AddCommand(
@@ -56,6 +56,12 @@ func newAuthLogoutCommand() *cobra.Command {
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if (interactiveOnly || automationOnly) && !all {
+				return fmt.Errorf("--interactive-only and --automation-only require --all")
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAuthLogoutOptions(cmd.Context(), all, interactiveOnly, automationOnly)
 		},
@@ -63,6 +69,7 @@ func newAuthLogoutCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&all, "all", false, "revoke all managed service credentials for this account")
 	cmd.Flags().BoolVar(&interactiveOnly, "interactive-only", false, "with --all, revoke only browser-login sessions")
 	cmd.Flags().BoolVar(&automationOnly, "automation-only", false, "with --all, revoke only API keys")
+	cmd.MarkFlagsMutuallyExclusive("interactive-only", "automation-only")
 	return cmd
 }
 
@@ -87,7 +94,7 @@ func newAuthAPIKeyCommand() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("usage: dari-docs auth api-key [create|list|revoke]")
+			return cmd.Help()
 		},
 	}
 	cmd.AddCommand(
@@ -193,12 +200,6 @@ func exchangeManagedBrowserLogin(ctx context.Context) (managed.DariExchangeRespo
 }
 
 func runAuthLogoutOptions(ctx context.Context, all bool, interactiveOnly bool, automationOnly bool) error {
-	if interactiveOnly && automationOnly {
-		return fmt.Errorf("--interactive-only cannot be combined with --automation-only")
-	}
-	if (interactiveOnly || automationOnly) && !all {
-		return fmt.Errorf("--interactive-only and --automation-only require --all")
-	}
 	if all {
 		kind := ""
 		switch {

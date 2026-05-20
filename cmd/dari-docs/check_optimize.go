@@ -103,6 +103,7 @@ func bindCheckOptimizeFlags(cmd *cobra.Command, opts *checkOptimizeOptions) {
 	if opts.Command == "check" {
 		flags.Bool("remote-editor", false, "ignored for check")
 	}
+	cmd.MarkFlagsOneRequired("task", "tasks-file")
 }
 
 func checkOptimizeShort(command string) string {
@@ -169,7 +170,7 @@ func (opts *checkOptimizeOptions) loadTasks() error {
 		tasks = append(tasks, more...)
 	}
 	if len(tasks) == 0 {
-		return fmt.Errorf("provide at least one --task or --tasks-file")
+		return fmt.Errorf("provide at least one non-empty --task or --tasks-file")
 	}
 	opts.Tasks = tasks
 	return nil
