@@ -48,6 +48,13 @@ type CreateOptions struct {
 	Include      []string
 	Exclude      []string
 	MaxFileBytes int64
+	ExtraFiles   []ExtraFile
+}
+
+type ExtraFile struct {
+	Path        string
+	Content     []byte
+	ContentType string
 }
 
 type SkipSummary struct {
@@ -96,6 +103,7 @@ func CreateWithOptions(repoRoot, outPath string, opts CreateOptions) (Result, er
 		return Result{}, err
 	}
 	var files []FileRecord
+	fileSources := map[string]*ExtraFile{}
 	var skipped SkipSummary
 	if err := filepath.WalkDir(absRoot, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -157,6 +165,9 @@ func CreateWithOptions(repoRoot, outPath string, opts CreateOptions) (Result, er
 	}); err != nil {
 		return Result{}, err
 	}
+	if err := appendExtraFiles(&files, fileSources, opts.ExtraFiles, exclude, opts.MaxFileBytes, &skipped); err != nil {
+		return Result{}, err
+	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	manifest := Manifest{SchemaVersion: 1, CreatedAt: time.Now().UTC().Format(time.RFC3339), RepoRoot: filepath.Base(absRoot), Files: files}
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
@@ -175,6 +186,12 @@ func CreateWithOptions(repoRoot, outPath string, opts CreateOptions) (Result, er
 		return Result{}, err
 	}
 	for _, rec := range files {
+		if vf := fileSources[rec.Path]; vf != nil {
+			if err := writeExtraFile(tw, rec.Path, vf.Content); err != nil {
+				return Result{}, err
+			}
+			continue
+		}
 		if err := writeFile(tw, absRoot, rec.Path); err != nil {
 			return Result{}, err
 		}
@@ -194,6 +211,40 @@ func CreateWithOptions(repoRoot, outPath string, opts CreateOptions) (Result, er
 	}
 	sort.Slice(skipped.OversizedFiles, func(i, j int) bool { return skipped.OversizedFiles[i].Path < skipped.OversizedFiles[j].Path })
 	return Result{Path: outPath, Manifest: manifest, SHA256: hex.EncodeToString(hash.Sum(nil)), Bytes: info.Size(), MaxFileBytes: opts.MaxFileBytes, Skipped: skipped}, nil
+}
+
+func appendExtraFiles(files *[]FileRecord, sources map[string]*ExtraFile, extra []ExtraFile, exclude []string, maxFileBytes int64, skipped *SkipSummary) error {
+	seen := make(map[string]bool, len(*files)+len(extra))
+	for _, rec := range *files {
+		seen[rec.Path] = true
+	}
+	for i := range extra {
+		vf := extra[i]
+		rel := strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(vf.Path)), "./")
+		if err := ValidateRelativePath(rel); err != nil {
+			return err
+		}
+		if matchesAny(exclude, rel) {
+			skipped.ExcludedFiles++
+			continue
+		}
+		if seen[rel] {
+			return fmt.Errorf("duplicate bundle file path %q", rel)
+		}
+		if int64(len(vf.Content)) > maxFileBytes {
+			skipped.OversizedFiles = append(skipped.OversizedFiles, SkippedFile{Path: rel, SizeBytes: int64(len(vf.Content))})
+			continue
+		}
+		h := sha256.Sum256(vf.Content)
+		ct := vf.ContentType
+		if ct == "" {
+			ct = contentType(rel)
+		}
+		*files = append(*files, FileRecord{Path: rel, SizeBytes: int64(len(vf.Content)), SHA256: hex.EncodeToString(h[:]), ContentType: ct})
+		sources[rel] = &extra[i]
+		seen[rel] = true
+	}
+	return nil
 }
 
 func normalizeCreateOptions(opts CreateOptions) (CreateOptions, []string, []string, error) {
@@ -490,6 +541,15 @@ func writeManifest(tw *tar.Writer, manifest Manifest) error {
 		return err
 	}
 	_, err = tw.Write(b)
+	return err
+}
+
+func writeExtraFile(tw *tar.Writer, rel string, content []byte) error {
+	hdr := &tar.Header{Name: "files/" + rel, Mode: 0o644, Size: int64(len(content)), ModTime: time.Now()}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+	_, err := tw.Write(content)
 	return err
 }
 

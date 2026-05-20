@@ -17,3 +17,24 @@ dari-docs check . \
 ```
 
 `--bundle-include` adds files in addition to the defaults. `--bundle-exclude` wins over both defaults and include patterns.
+
+## Public Docs URLs
+
+Use `--docs-url` to test public docs without checking out a repo. The URL is passed to the tester agent as a public docs source, and internet access is required. For `llms.txt` or `llms-full.txt`, the agent reads the manifest and decides which linked docs are relevant to the task.
+
+```bash
+dari-docs check \
+  --managed \
+  --docs-url https://www.kernel.sh/docs/llms.txt \
+  --task "Create a browser session"
+```
+
+You can also pass the URL as the source argument:
+
+```bash
+dari-docs check https://www.kernel.sh/docs/llms.txt \
+  --managed \
+  --task "Create a browser session"
+```
+
+Public docs URLs support `check` only. Use local docs files for `optimize`, because the editor needs concrete files to modify and download.

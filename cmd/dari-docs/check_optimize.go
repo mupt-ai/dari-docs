@@ -9,6 +9,7 @@ import (
 
 	"github.com/mupt-ai/dari-docs/internal/bundle"
 	"github.com/mupt-ai/dari-docs/internal/projectconfig"
+	"github.com/mupt-ai/dari-docs/internal/publicdocs"
 	"github.com/mupt-ai/dari-docs/internal/runner"
 	"github.com/mupt-ai/dari-docs/internal/workspace"
 	"github.com/spf13/cobra"
@@ -30,6 +31,8 @@ type checkOptimizeOptions struct {
 
 	BundleIncludes []string
 	BundleExcludes []string
+	PublicDocURLs  []string
+	PublicDocsOnly bool
 	BundleOptions  bundle.CreateOptions
 
 	APIKeyEnv     string
@@ -55,7 +58,7 @@ type checkOptimizeOptions struct {
 func newCheckOptimizeCommand(command string) *cobra.Command {
 	opts := defaultCheckOptimizeOptions(command)
 	cmd := &cobra.Command{
-		Use:           command + " [repo]",
+		Use:           command + " [repo|docs-url]",
 		Short:         checkOptimizeShort(command),
 		Args:          cobra.ArbitraryArgs,
 		SilenceUsage:  true,
@@ -88,6 +91,7 @@ func bindCheckOptimizeFlags(cmd *cobra.Command, opts *checkOptimizeOptions) {
 	flags.StringArrayVar(&opts.SecretEnvs, "secret-env", nil, "runtime product/API secret env var to pass to sessions; repeatable")
 	flags.StringArrayVar(&opts.BundleIncludes, "bundle-include", nil, "repo-relative glob to include in the docs bundle in addition to defaults; repeatable")
 	flags.StringArrayVar(&opts.BundleExcludes, "bundle-exclude", nil, "repo-relative glob to exclude from the docs bundle; repeatable")
+	flags.StringArrayVar(&opts.PublicDocURLs, "docs-url", nil, "public docs URL for agents to inspect with internet access; repeatable")
 	flags.StringVar(&opts.APIKeyEnv, "api-key-env", opts.APIKeyEnv, "env var containing Dari API key")
 	flags.StringVar(&opts.APIKey, "api-key", "", "Dari API key (prefer --api-key-env)")
 	flags.StringVar(&opts.APIBaseURL, "api-base-url", opts.APIBaseURL, "Dari API base URL (defaults to production)")
@@ -137,11 +141,51 @@ func (opts *checkOptimizeOptions) prepare() error {
 		return err
 	}
 	opts.resolveLLMFlags()
+	if opts.Command == "optimize" && len(opts.PublicDocURLs) > 0 {
+		return fmt.Errorf("public docs URLs support check only; optimize requires local docs files")
+	}
+	if opts.Apply && len(opts.PublicDocURLs) > 0 {
+		return fmt.Errorf("--apply cannot be used with public docs URLs; review downloaded updated docs manually")
+	}
 	opts.BundleOptions = bundle.CreateOptions{Include: opts.BundleIncludes, Exclude: opts.BundleExcludes}
+	if len(opts.PublicDocURLs) > 0 {
+		files, summary, err := publicdocs.SourceFiles(opts.PublicDocURLs)
+		if err != nil {
+			return err
+		}
+		opts.BundleOptions.ExtraFiles = files
+		fmt.Fprintf(os.Stderr, "Added public docs source: %s\n", summary.SeedURLs[0])
+	}
 	return nil
 }
 
 func (opts *checkOptimizeOptions) resolveRepoAndOutput() error {
+	if publicdocs.IsURL(opts.RepoArg) {
+		opts.PublicDocURLs = append([]string{opts.RepoArg}, opts.PublicDocURLs...)
+		opts.PublicDocsOnly = true
+		opts.RepoArg = ""
+	}
+	if len(opts.PublicDocURLs) > 0 && opts.RepoArg == "" {
+		opts.PublicDocsOnly = true
+	}
+	if opts.PublicDocsOnly {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		if opts.OutDir == "" {
+			opts.OutDir = filepath.Join(cwd, ".dari-docs")
+		}
+		sourceRoot := filepath.Join(opts.OutDir, "public-source")
+		if err := os.RemoveAll(sourceRoot); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(sourceRoot, 0o755); err != nil {
+			return err
+		}
+		opts.RepoRoot = sourceRoot
+		return nil
+	}
 	repo := opts.RepoArg
 	if repo == "" {
 		repo = "."

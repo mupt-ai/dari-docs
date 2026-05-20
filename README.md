@@ -64,8 +64,8 @@ With `--wait`, edited files are downloaded into `.dari-docs/updated/` without ch
 
 ## How it works
 
-1. You point `dari-docs` at a docs directory and give it one or more tasks.
-2. The CLI bundles your docs and submits a run to hosted Dari Docs tester/editor agents.
+1. You point `dari-docs` at a docs directory or public docs URL and give it one or more tasks.
+2. The CLI bundles your local docs, or passes public docs URLs for checker agents to inspect with internet access, then submits a run to hosted Dari Docs agents.
 3. Tester agents try to complete the task and report where the docs blocked progress.
 4. Use `dari-docs runs wait`, `dari-docs runs download`, or pass `--wait` to collect local run artifacts.
 5. If you run `optimize`, an editor agent proposes documentation changes.

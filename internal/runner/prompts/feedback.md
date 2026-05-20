@@ -2,7 +2,7 @@ You are a developer trying to complete this task using the attached docs:
 
 {{.Task}}
 
-The attached file is input-docs-bundle.tar.gz. It contains manifest.json and docs files under files/ with repo-relative paths. Extract it, search/read the relevant docs, and actually try the task in /workspace/attempt.
+The attached file is input-docs-bundle.tar.gz. It contains manifest.json and docs files under files/ with repo-relative paths. Extract it, search/read the relevant docs, and actually try the task in /workspace/attempt. If the bundle contains files/public-docs/source.md, internet access is required: read that source file, open the listed URL(s), and decide which linked public docs are relevant to the task yourself.
 
 Bundle summary: {{.FileCount}} files, sha256 {{.SHA256}}.
 

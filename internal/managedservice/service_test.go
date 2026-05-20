@@ -1761,6 +1761,34 @@ func TestHandleRunsRejectsUnknownManagedLLM(t *testing.T) {
 	}
 }
 
+func TestHandleRunsRejectsOptimizeWithPublicDocsURL(t *testing.T) {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	if err := mw.WriteField("mode", "optimize"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.WriteField("tasks_json", `["check the docs"]`); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.WriteField("source_url", `https://www.kernel.sh/docs/llms.txt`); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{cfg: Config{MaxBundleBytes: 1 << 20, MaxTasksPerRun: 3, MaxTaskBytes: 10000}}
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	s.handleRuns(rec, req, user{ID: "usr_test", TokenScopes: []string{scopeManagedOptimize}})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "public docs URLs support check only") {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
 func TestHandleRunsReturns413ForOversizedMultipartBody(t *testing.T) {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)

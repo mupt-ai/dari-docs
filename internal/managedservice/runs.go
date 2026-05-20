@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/mupt-ai/dari-docs/internal/bundle"
 	"github.com/mupt-ai/dari-docs/internal/dari"
+	"github.com/mupt-ai/dari-docs/internal/publicdocs"
 	"github.com/mupt-ai/dari-docs/internal/runner"
 )
 
@@ -101,6 +102,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		tmpPath            string
 		sourceRoot         string
 		sourcePaths        []string
+		sourceURLs         []string
 		sourceFilesSeen    int
 		sourceUploadBytes  int64
 		sourceInclude      []string
@@ -212,6 +214,21 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
+		case "source_url":
+			if tmpPath != "" {
+				writeError(w, http.StatusBadRequest, "source URLs cannot be sent with a prebuilt bundle")
+				return
+			}
+			v, err := readTextPart(part, 4096)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "source_url field is too large")
+				return
+			}
+			if !publicdocs.IsURL(v) {
+				writeError(w, http.StatusBadRequest, "source_url must be an http or https URL")
+				return
+			}
+			sourceURLs = append(sourceURLs, strings.TrimSpace(v))
 		case "source_files_json":
 			if sourceRoot != "" {
 				writeError(w, http.StatusBadRequest, "source_files_json must be sent before source_file")
@@ -270,7 +287,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 			}
 			sourceFilesSeen++
 		case "bundle":
-			if sourceRoot != "" || len(sourcePaths) > 0 || len(sourceInclude) > 0 || len(sourceExclude) > 0 {
+			if sourceRoot != "" || len(sourcePaths) > 0 || len(sourceURLs) > 0 || len(sourceInclude) > 0 || len(sourceExclude) > 0 {
 				writeError(w, http.StatusBadRequest, "send either bundle or source files, not both")
 				return
 			}
@@ -313,8 +330,12 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusBadRequest, "tasks_json must be a JSON string array")
 		return
 	}
-	if sourceRoot != "" || len(sourcePaths) > 0 {
-		if sourceRoot == "" {
+	if mode == "optimize" && len(sourceURLs) > 0 {
+		writeError(w, http.StatusBadRequest, "public docs URLs support check only; optimize requires local docs files")
+		return
+	}
+	if sourceRoot != "" || len(sourcePaths) > 0 || len(sourceURLs) > 0 {
+		if sourceRoot == "" && len(sourcePaths) > 0 {
 			writeError(w, http.StatusBadRequest, "source_file is required")
 			return
 		}
@@ -322,11 +343,29 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 			writeError(w, http.StatusBadRequest, "source_file parts do not match source_files_json")
 			return
 		}
+		if sourceRoot == "" {
+			sourceRoot, err = os.MkdirTemp("", "dari-docs-source-*")
+			if err != nil {
+				writeLoggedError(w, http.StatusInternalServerError, "could not stage source files", err)
+				return
+			}
+			defer os.RemoveAll(sourceRoot)
+		}
+		extraFiles := []bundle.ExtraFile(nil)
+		if len(sourceURLs) > 0 {
+			files, _, err := publicdocs.SourceFiles(sourceURLs)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			extraFiles = files
+		}
 		var err error
 		tmpPath, b, err = s.stageManagedSourceBundle(sourceRoot, bundle.CreateOptions{
 			Include:      sourceInclude,
 			Exclude:      sourceExclude,
 			MaxFileBytes: s.cfg.BundleMaxFileBytes,
+			ExtraFiles:   extraFiles,
 		})
 		if err != nil {
 			if errors.Is(err, errBundleTooLarge) {

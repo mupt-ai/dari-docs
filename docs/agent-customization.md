@@ -8,7 +8,7 @@
 
 These are regular dari.dev agent projects. A dari.dev agent is just a folder with prompts, skills, optional setup scripts, and a `dari.yml` manifest. The same agent folder can be inspected, edited, versioned, and reused outside `dari-docs`; deploying it to your dari.dev org gives it a hosted endpoint that can run many isolated sessions without you managing the runtime infrastructure.
 
-The bundled tester agent enables sandbox internet access by default so it can install packages and try docs that call external services. You can turn this off in `.dari-docs/agents/docs-user-tester-agent/dari.yml` before deploying if you want tests to run without network access.
+The bundled tester agent enables sandbox internet access by default so it can install packages, inspect public docs URLs, and try docs that call external services. You can turn this off in `.dari-docs/agents/docs-user-tester-agent/dari.yml` before deploying if you want tests to run without network access.
 
 For customized agents, network access is controlled in each agent's `dari.yml`:
 
