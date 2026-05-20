@@ -10,6 +10,7 @@ import (
 	"github.com/mupt-ai/dari-docs/internal/bundle"
 	appconfig "github.com/mupt-ai/dari-docs/internal/config"
 	"github.com/mupt-ai/dari-docs/internal/runner"
+	"github.com/mupt-ai/dari-docs/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -237,13 +238,18 @@ func runSelfManagedCheckOrOptimize(ctx context.Context, opts checkOptimizeOption
 		LiveVerify:     opts.LiveVerify,
 		RuntimeSecrets: opts.RuntimeSecrets,
 		Parallel:       opts.Parallel,
-		Apply:          opts.Apply,
 		SkipEditor:     opts.Command == "check",
 		Timeout:        time.Duration(opts.TimeoutMinutes) * time.Minute,
 		BundleOptions:  opts.BundleOptions,
 	})
 	if err != nil {
 		return err
+	}
+	if opts.Command != "check" && opts.Apply {
+		if err := workspace.CopyTree(res.UpdatedDir, opts.RepoRoot); err != nil {
+			return fmt.Errorf("apply updated docs: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "Applied updated docs into %s\n", opts.RepoRoot)
 	}
 	printCheckOptimizeResult(opts.Command, opts.OutDir, opts.Apply, res)
 	return nil

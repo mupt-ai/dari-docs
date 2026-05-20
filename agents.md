@@ -46,12 +46,12 @@ For BYOK at publish time, create provider-specific dari.dev credentials and pass
 
 The bundled agents define these LLM option IDs for runtime selection:
 
-- `dumb-claude`
-- `medium-claude`
-- `smart-claude`
-- `dumb-gpt`
-- `medium-gpt`
-- `smart-gpt`
+- `claude-haiku-4-5`
+- `claude-sonnet-4-6`
+- `claude-opus-4-7`
+- `gpt-5-mini`
+- `gpt-5.1`
+- `gpt-5.5`
 
 Self-managed runs use all of these tester LLM options per task by default. Pass one option to all sessions with `--llm`, or override the tester matrix with repeated/comma-separated `--feedback-llm`.
 

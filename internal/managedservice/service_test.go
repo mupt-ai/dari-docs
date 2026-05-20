@@ -44,6 +44,62 @@ func TestUSDStringToCentsCeil(t *testing.T) {
 	}
 }
 
+func TestParseAdminUSDToCents(t *testing.T) {
+	tests := map[string]int64{
+		"0.01":    1,
+		"1":       100,
+		"1.20":    120,
+		"$500.00": 50000,
+	}
+	for in, want := range tests {
+		got, err := parseAdminUSDToCents(in)
+		if err != nil {
+			t.Fatalf("parseAdminUSDToCents(%q): %v", in, err)
+		}
+		if got != want {
+			t.Fatalf("parseAdminUSDToCents(%q) = %d, want %d", in, got, want)
+		}
+	}
+	for _, in := range []string{"", "0", "-1", "1.234", "abc"} {
+		if _, err := parseAdminUSDToCents(in); err == nil {
+			t.Fatalf("parseAdminUSDToCents(%q) expected error", in)
+		}
+	}
+}
+
+func TestEscapeAdminSearchPattern(t *testing.T) {
+	tests := map[string]string{
+		"":        "",
+		"ben":     "ben",
+		"usr_abc": `usr\_abc`,
+		"50%":     `50\%`,
+		`c:\dir`:  `c:\\dir`,
+		"_%\\":    `\_\%\\`,
+	}
+	for in, want := range tests {
+		if got := escapeAdminSearchPattern(in); got != want {
+			t.Fatalf("escapeAdminSearchPattern(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestRequireAdminRequiresBrowserSession(t *testing.T) {
+	s := &Server{}
+	for _, kind := range []string{tokenKindAutomation, tokenKindInteractive} {
+		rec := httptest.NewRecorder()
+		if s.requireAdmin(rec, user{Email: "ben@mupt.ai", TokenKind: kind}) {
+			t.Fatalf("requireAdmin allowed token kind %q", kind)
+		}
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+		}
+	}
+	rec := httptest.NewRecorder()
+	if !s.requireAdmin(rec, user{Email: "BEN@MUPT.ai", TokenKind: tokenKindBrowserSession}) {
+		t.Fatal("requireAdmin rejected browser admin session")
+	}
+}
+
 func TestConfigFromEnvUsesManagedConstants(t *testing.T) {
 	setRequiredManagedConfigEnv(t)
 	clearManagedConfigOptionalEnv(t)
@@ -575,10 +631,10 @@ func TestHandleRunConfigReturnsLaunchPricingAndLimits(t *testing.T) {
 	if got.DefaultLLMID != defaultManagedEditorLLMID() {
 		t.Fatalf("default_llm_id = %q, want %q", got.DefaultLLMID, defaultManagedEditorLLMID())
 	}
-	if strings.Join(got.DefaultFeedbackLLMIDs, ",") != "dumb-claude,medium-claude,smart-claude" {
+	if strings.Join(got.DefaultFeedbackLLMIDs, ",") != "claude-haiku-4-5,claude-sonnet-4-6,claude-opus-4-7" {
 		t.Fatalf("default_feedback_llm_ids = %#v", got.DefaultFeedbackLLMIDs)
 	}
-	if strings.Join(got.AllowedLLMIDs, ",") != "dumb-claude,medium-claude,smart-claude,dumb-gpt,medium-gpt,smart-gpt" {
+	if strings.Join(got.AllowedLLMIDs, ",") != "claude-haiku-4-5,claude-sonnet-4-6,claude-opus-4-7,gpt-5-mini,gpt-5.1,gpt-5.5" {
 		t.Fatalf("allowed_llm_ids = %#v", got.AllowedLLMIDs)
 	}
 }
@@ -955,7 +1011,7 @@ func TestReserveRunStoresConfiguredHostedAgents(t *testing.T) {
 			{Path: "README.md", SizeBytes: 12, SHA256: "file_sha"},
 		}},
 	}
-	if err := s.reserveRun(ctx, userID, runID, "check", []byte(`["task"]`), []byte(`["dumb-claude","smart-claude"]`), "smart-claude", runSourceCLI, result, 150, false, []byte(`[]`), nil, nil); err != nil {
+	if err := s.reserveRun(ctx, userID, runID, "check", []byte(`["task"]`), []byte(`["claude-haiku-4-5","claude-opus-4-7"]`), "claude-opus-4-7", runSourceCLI, result, 150, false, []byte(`[]`), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -978,10 +1034,10 @@ FROM runs WHERE id=$1
 	if err := json.Unmarshal(testerLLMIDsJSON, &testerLLMIDs); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(testerLLMIDs, ",") != "dumb-claude,smart-claude" {
+	if strings.Join(testerLLMIDs, ",") != "claude-haiku-4-5,claude-opus-4-7" {
 		t.Fatalf("tester_llm_ids = %#v", testerLLMIDs)
 	}
-	if editorLLMID != "smart-claude" {
+	if editorLLMID != "claude-opus-4-7" {
 		t.Fatalf("editor_llm_id = %q", editorLLMID)
 	}
 	if source != runSourceCLI {

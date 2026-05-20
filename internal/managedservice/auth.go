@@ -668,6 +668,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"email":                u.Email,
+		"is_admin":             s.isAdminEmail(u.Email),
 		"balance_cents":        credits.BalanceCents,
 		"credit_granted_cents": credits.GrantedCents,
 		"credit_spent_cents":   credits.SpentCents,

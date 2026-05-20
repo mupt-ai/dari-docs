@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import ReactMarkdown from "react-markdown";
-import { Download, RefreshCw } from "lucide-react";
+import { ChevronDown, Download, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { downloadUpdatedDocs, formatLLMID, getRun, isActiveRun, type RunSession, type RunStatus } from "@/lib/runs";
-import { formatCents, formatDate, toTitleCase } from "@/lib/utils";
+import { formatCents, formatDate, formatDuration, toTitleCase } from "@/lib/utils";
 import { StatusBadge } from "@/routes/Runs";
 
 export default function RunDetail() {
@@ -289,6 +288,7 @@ function TaskResults({
   const groups = taskGroups(run);
   const selectedGroup = groups.find((group) => group.taskIndex === selectedTaskIndex) ?? groups[0];
   const selectedResult = selectedGroup?.results.find((result) => result.key === selectedResultKey) ?? selectedGroup?.results[0];
+  const selectedResultStatus = sessionStatus(selectedResult?.session, run.status);
 
   if (!selectedGroup) return null;
 
@@ -299,18 +299,21 @@ function TaskResults({
           <label htmlFor="task-select" className="text-xs uppercase tracking-widest text-muted-foreground">
             Task
           </label>
-          <select
-            id="task-select"
-            value={selectedGroup.taskIndex}
-            onChange={(event) => onSelectTask(Number(event.target.value))}
-            className="mt-2 w-full border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors hover:border-muted-foreground/60 focus:border-brand"
-          >
-            {groups.map((group) => (
-              <option key={group.taskIndex} value={group.taskIndex}>
-                Task {group.taskIndex}
-              </option>
-            ))}
-          </select>
+          <div className="relative mt-2">
+            <select
+              id="task-select"
+              value={selectedGroup.taskIndex}
+              onChange={(event) => onSelectTask(Number(event.target.value))}
+              className="w-full appearance-none border border-border bg-background py-2 pl-3 pr-10 text-sm text-foreground outline-none transition-colors hover:border-muted-foreground/60 focus:border-brand"
+            >
+              {groups.map((group) => (
+                <option key={group.taskIndex} value={group.taskIndex}>
+                  Task {group.taskIndex}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          </div>
         </div>
       </div>
 
@@ -341,16 +344,23 @@ function TaskResults({
             })}
           </div>
 
-          <div className="border border-border bg-background p-3 text-sm">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <div className="font-medium">{formatLLMID(selectedResult?.llmID)}</div>
-              <SessionMeta session={selectedResult?.session} fallbackStatus={run.status} />
+          <div className="border border-border bg-background text-sm">
+            <div className="border-b border-border bg-card/40 px-3 py-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate font-medium">{formatLLMID(selectedResult?.llmID)} Feedback</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{runMetaLine(run)}</div>
+                </div>
+                <SessionStatus status={selectedResultStatus} />
+              </div>
             </div>
-            {selectedResult?.feedback ? (
-              <Markdown text={selectedResult.feedback} />
-            ) : (
-              <div className="text-muted-foreground">No Feedback Available.</div>
-            )}
+            <div className="p-3">
+              {selectedResult?.feedback ? (
+                <RawFeedback text={selectedResult.feedback} />
+              ) : (
+                <div className="text-muted-foreground">No Feedback Available.</div>
+              )}
+            </div>
           </div>
         </>
       ) : (
@@ -373,6 +383,17 @@ function editorFallbackStatus(run: RunStatus): string {
   if (taskCount === 0 || testers.length < taskCount) return "waiting";
   if (testers.some((session) => session.status !== "completed")) return "waiting";
   return "queued";
+}
+
+function runMetaLine(run: RunStatus): string {
+  const parts = [formatDate(run.completed_at ?? run.created_at)];
+  parts.push(`${formatCents(run.charged_cents)}${run.estimated ? " Est." : ""}`);
+  const end = run.completed_at ?? (isActiveRun(run.status) ? new Date().toISOString() : null);
+  if (end) {
+    const duration = formatDuration(run.created_at, end);
+    if (duration) parts.push(`${duration} Total`);
+  }
+  return parts.join(" · ");
 }
 
 function SessionHeader({
@@ -452,10 +473,6 @@ function Summary({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-function Markdown({ text }: { text: string }) {
-  return (
-    <div className="prose prose-invert max-w-none text-sm prose-p:my-2 prose-pre:border prose-pre:border-border prose-pre:bg-background prose-pre:p-3">
-      <ReactMarkdown skipHtml>{text}</ReactMarkdown>
-    </div>
-  );
+function RawFeedback({ text }: { text: string }) {
+  return <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-foreground">{text}</pre>;
 }
