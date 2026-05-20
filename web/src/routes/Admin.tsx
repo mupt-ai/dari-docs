@@ -625,19 +625,11 @@ function LimitSheet({
 
   useEffect(() => {
     if (open) {
-      setMaxTasks(
-        target.maxTasksPerRunOverride === null
-          ? ""
-          : String(target.maxTasksPerRunOverride)
-      );
-      setMaxActiveRuns(
-        target.maxActiveRunsPerUserOverride === null
-          ? ""
-          : String(target.maxActiveRunsPerUserOverride)
-      );
+      setMaxTasks(String(target.effectiveMaxTasksPerRun));
+      setMaxActiveRuns(String(target.effectiveMaxActiveRunsPerUser));
       setSheetError(null);
     }
-  }, [open, target.maxActiveRunsPerUserOverride, target.maxTasksPerRunOverride]);
+  }, [open, target.effectiveMaxActiveRunsPerUser, target.effectiveMaxTasksPerRun]);
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -672,7 +664,8 @@ function LimitSheet({
         <SheetHeader>
           <SheetTitle>Update Run Limits</SheetTitle>
           <SheetDescription>
-            Override managed run guardrails for {displayUser(target)}.
+            Set how many tasks per run and active runs {displayUser(target)} can
+            have at once.
           </SheetDescription>
         </SheetHeader>
 
@@ -689,13 +682,7 @@ function LimitSheet({
             </div>
           </Field>
 
-          <Field label="Current Tasks Per Run">
-            <div className="text-sm tabular-nums">
-              {formatRunLimit(target.effectiveMaxTasksPerRun)}
-            </div>
-          </Field>
-
-          <Field label="Max Tasks Per Run" htmlFor="max-tasks-per-run" optional>
+          <Field label="Tasks Per Run Limit" htmlFor="max-tasks-per-run">
             <Input
               id="max-tasks-per-run"
               value={maxTasks}
@@ -705,20 +692,12 @@ function LimitSheet({
               min={0}
               step={1}
               type="number"
+              required
               autoFocus
             />
-            <div className="text-xs text-muted-foreground">
-              Empty uses the service default. 0 means Unlimited.
-            </div>
           </Field>
 
-          <Field label="Current Active Runs">
-            <div className="text-sm tabular-nums">
-              {formatRunLimit(target.effectiveMaxActiveRunsPerUser)}
-            </div>
-          </Field>
-
-          <Field label="Max Active Runs" htmlFor="max-active-runs" optional>
+          <Field label="Active Runs Limit" htmlFor="max-active-runs">
             <Input
               id="max-active-runs"
               value={maxActiveRuns}
@@ -728,10 +707,8 @@ function LimitSheet({
               min={0}
               step={1}
               type="number"
+              required
             />
-            <div className="text-xs text-muted-foreground">
-              Empty uses the service default. 0 means Unlimited.
-            </div>
           </Field>
 
           {sheetError ? (
@@ -906,14 +883,16 @@ function displayUser(user: GrantTarget): string {
 function parseLimitDraft(
   draft: string,
   label: string
-): { value: number | null; error: string | null } {
+): { value: number; error: string | null } {
   const trimmed = draft.trim();
-  if (!trimmed) return { value: null, error: null };
+  if (!trimmed) {
+    return { value: 0, error: `${label} is required.` };
+  }
   const parsed = Number.parseInt(trimmed, 10);
   if (!Number.isFinite(parsed) || String(parsed) !== trimmed || parsed < 0) {
     return {
-      value: null,
-      error: `${label} must be empty or a non-negative integer.`,
+      value: 0,
+      error: `${label} must be a non-negative integer.`,
     };
   }
   return { value: parsed, error: null };
