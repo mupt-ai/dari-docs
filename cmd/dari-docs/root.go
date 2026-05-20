@@ -96,15 +96,6 @@ func newAuthCommand() *cobra.Command {
 	return cmd
 }
 
-func newBillingCommand() *cobra.Command {
-	cmd := passthroughCommand("billing", "Manage managed-service billing", runBilling)
-	cmd.AddCommand(
-		passthroughCommand("balance", "Show credit balance", func(args []string) error { return runBilling(append([]string{"balance"}, args...)) }),
-		passthroughCommand("checkout", "Buy credits", func(args []string) error { return runBilling(append([]string{"checkout"}, args...)) }),
-	)
-	return cmd
-}
-
 func newAgentsCommand() *cobra.Command {
 	cmd := passthroughCommand("agents", "Agent helper commands", runAgents)
 	cmd.AddCommand(passthroughCommand("deploy", "Deploy or select docs agents", func(args []string) error {
