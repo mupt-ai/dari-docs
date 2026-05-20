@@ -5,8 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
-	"runtime"
+
+	"github.com/mupt-ai/dari-docs/internal/browser"
 )
 
 func runBilling(args []string) error {
@@ -48,7 +48,7 @@ func runBilling(args []string) error {
 		if err != nil {
 			return err
 		}
-		if err := openBrowserURL(checkout.CheckoutURL); err != nil {
+		if err := browser.Open(checkout.CheckoutURL); err != nil {
 			fmt.Fprintf(os.Stderr, "Could not open browser automatically: %v\n", err)
 		}
 		fmt.Printf("Checkout URL: %s\n", checkout.CheckoutURL)
@@ -73,15 +73,4 @@ func runAgents(args []string) error {
 	}
 	fmt.Println("Managed mode uses hosted Dari Docs agents automatically.")
 	return nil
-}
-
-func openBrowserURL(url string) error {
-	switch runtime.GOOS {
-	case "darwin":
-		return exec.Command("open", url).Start()
-	case "windows":
-		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
-	default:
-		return exec.Command("xdg-open", url).Start()
-	}
 }
