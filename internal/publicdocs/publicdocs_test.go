@@ -8,7 +8,7 @@ import (
 )
 
 func TestSourceFilesWritesPublicDocsSource(t *testing.T) {
-	files, summary, err := SourceFiles([]string{"https://www.kernel.sh/docs/llms.txt", "https://www.kernel.sh/docs/llms.txt#ignored"})
+	files, summary, err := SourceFiles([]string{"https://docs.dari.dev/llms.txt", "https://docs.dari.dev/llms.txt#ignored"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +25,7 @@ func TestSourceFilesWritesPublicDocsSource(t *testing.T) {
 		t.Fatalf("invalid bundle path: %v", err)
 	}
 	content := string(files[0].Content)
-	for _, want := range []string{"https://www.kernel.sh/docs/llms.txt", "Internet access is required", "llms.txt manifest"} {
+	for _, want := range []string{"https://docs.dari.dev/llms.txt", "Internet access is required", "llms.txt manifest"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("content missing %q:\n%s", want, content)
 		}

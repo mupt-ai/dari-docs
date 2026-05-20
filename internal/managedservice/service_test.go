@@ -1780,7 +1780,7 @@ func TestHandleRunsRejectsOptimizeWithPublicDocsURL(t *testing.T) {
 	if err := mw.WriteField("tasks_json", `["check the docs"]`); err != nil {
 		t.Fatal(err)
 	}
-	if err := mw.WriteField("source_url", `https://www.kernel.sh/docs/llms.txt`); err != nil {
+	if err := mw.WriteField("source_url", `https://docs.dari.dev/llms.txt`); err != nil {
 		t.Fatal(err)
 	}
 	if err := mw.Close(); err != nil {

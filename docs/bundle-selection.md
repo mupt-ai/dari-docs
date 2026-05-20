@@ -25,14 +25,14 @@ Use `--docs-url` to test public docs without checking out a repo. The URL is pas
 ```bash
 dari-docs check \
   --managed \
-  --docs-url https://www.kernel.sh/docs/llms.txt \
+  --docs-url https://docs.dari.dev/llms.txt \
   --task "Create a browser session"
 ```
 
 You can also pass the URL as the source argument:
 
 ```bash
-dari-docs check https://www.kernel.sh/docs/llms.txt \
+dari-docs check https://docs.dari.dev/llms.txt \
   --managed \
   --task "Create a browser session"
 ```
