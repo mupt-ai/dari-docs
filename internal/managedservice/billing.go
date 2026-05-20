@@ -42,14 +42,19 @@ func (s *Server) handleRunConfig(w http.ResponseWriter, r *http.Request, u user)
 	if !requireScope(w, u, scopeManagedRead) {
 		return
 	}
+	limits, err := s.managedRunLimitsForUser(r.Context(), u.ID)
+	if err != nil {
+		writeLoggedError(w, http.StatusInternalServerError, "could not load managed run limits", err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"free_credit_cents":             s.cfg.FreeGrantCents,
 		"tester_session_reserve_cents":  s.cfg.TesterReserveCents,
 		"editor_session_reserve_cents":  s.cfg.EditorReserveCents,
 		"service_fee_cents":             s.cfg.ServiceFeeCents,
-		"max_tasks_per_run":             s.cfg.MaxTasksPerRun,
-		"max_task_bytes":                s.cfg.MaxTaskBytes,
-		"max_active_runs_per_user":      s.maxActiveRunsPerUser(),
+		"max_tasks_per_run":             limits.MaxTasksPerRun,
+		"max_task_bytes":                limits.MaxTaskBytes,
+		"max_active_runs_per_user":      limits.MaxActiveRunsPerUser,
 		"max_bundle_bytes":              s.cfg.MaxBundleBytes,
 		"bundle_max_uncompressed_bytes": s.cfg.BundleMaxUncompressedBytes,
 		"bundle_max_file_bytes":         s.cfg.BundleMaxFileBytes,

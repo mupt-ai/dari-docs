@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState, type ReactNode } from "react";
-import { ArrowLeft, ListChecks, Plus, Search, UserRound } from "lucide-react";
+import { ArrowLeft, ListChecks, Plus, Search, SlidersHorizontal, UserRound } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +22,7 @@ import {
   getAdminUserDetail,
   grantAdminCredits,
   searchAdminUsers,
+  updateAdminUserLimits,
   type AdminRunSummary,
   type AdminUserDetail,
   type AdminUserSummary,
@@ -37,6 +38,13 @@ type GrantTarget = {
   displayName: string | null;
 };
 
+type LimitTarget = GrantTarget & {
+  maxTasksPerRunOverride: number | null;
+  maxActiveRunsPerUserOverride: number | null;
+  effectiveMaxTasksPerRun: number;
+  effectiveMaxActiveRunsPerUser: number;
+};
+
 export default function Admin() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<AdminUserSummary[]>([]);
@@ -47,6 +55,7 @@ export default function Admin() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [grantOpen, setGrantOpen] = useState(false);
+  const [limitOpen, setLimitOpen] = useState(false);
 
   const showingDetail = loadingDetail || detail !== null;
   const selected = detail?.user ?? null;
@@ -55,6 +64,17 @@ export default function Admin() {
         id: selected.id,
         email: selected.email,
         displayName: selected.display_name,
+      }
+    : null;
+  const limitTarget = selected
+    ? {
+        id: selected.id,
+        email: selected.email,
+        displayName: selected.display_name,
+        maxTasksPerRunOverride: selected.max_tasks_per_run_override,
+        maxActiveRunsPerUserOverride: selected.max_active_runs_per_user_override,
+        effectiveMaxTasksPerRun: selected.effective_max_tasks_per_run,
+        effectiveMaxActiveRunsPerUser: selected.effective_max_active_runs_per_user,
       }
     : null;
 
@@ -123,12 +143,23 @@ export default function Admin() {
     setDetail(null);
     setLoadingDetail(false);
     setGrantOpen(false);
+    setLimitOpen(false);
   };
 
   const handleGranted = (target: GrantTarget, amountCents: number) => {
     setError(null);
     setInfo(`Granted ${formatCents(amountCents)} to ${displayUser(target)}.`);
     setGrantOpen(false);
+    void refreshDetail().catch((e) => {
+      setError(e instanceof Error ? e.message : String(e));
+    });
+  };
+
+  const handleLimitsUpdated = (target: LimitTarget, user: AdminUserSummary) => {
+    setError(null);
+    setInfo(`Updated managed run limits for ${displayUser(target)}.`);
+    setLimitOpen(false);
+    setDetail((current) => (current ? { ...current, user } : current));
     void refreshDetail().catch((e) => {
       setError(e instanceof Error ? e.message : String(e));
     });
@@ -147,7 +178,7 @@ export default function Admin() {
               className="-ml-3 mb-3 gap-2"
             >
               <ArrowLeft className="h-4 w-4" />
-              Back to search
+              Back To Search
             </Button>
           ) : null}
           <h1 className="text-xl font-medium">Admin</h1>
@@ -158,14 +189,25 @@ export default function Admin() {
           </p>
         </div>
         {selected ? (
-          <Button
-            type="button"
-            onClick={() => setGrantOpen(true)}
-            className="gap-2"
-          >
-            <Plus className="h-4 w-4" />
-            Grant credits
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setLimitOpen(true)}
+              className="gap-2"
+            >
+              <SlidersHorizontal className="h-4 w-4" />
+              Update Limits
+            </Button>
+            <Button
+              type="button"
+              onClick={() => setGrantOpen(true)}
+              className="gap-2"
+            >
+              <Plus className="h-4 w-4" />
+              Grant Credits
+            </Button>
+          </div>
         ) : null}
       </div>
 
@@ -201,6 +243,14 @@ export default function Admin() {
           onOpenChange={setGrantOpen}
           target={grantTarget}
           onGranted={handleGranted}
+        />
+      ) : null}
+      {limitTarget ? (
+        <LimitSheet
+          open={limitOpen}
+          onOpenChange={setLimitOpen}
+          target={limitTarget}
+          onUpdated={handleLimitsUpdated}
         />
       ) : null}
     </div>
@@ -327,7 +377,7 @@ function UserDetail({ detail }: { detail: AdminUserDetail }) {
       <Card>
         <CardHeader className="flex-row items-center gap-2 space-y-0">
           <UserRound className="h-4 w-4 text-muted-foreground" />
-          <CardTitle className="text-base">User information</CardTitle>
+          <CardTitle className="text-base">User Information</CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="text-lg font-medium">{headline}</div>
@@ -338,17 +388,19 @@ function UserDetail({ detail }: { detail: AdminUserDetail }) {
             <Detail label="User ID" value={user.id} mono />
             <Detail label="Created" value={formatDate(user.created_at)} />
             <Detail
-              label="Free credit granted"
+              label="Free Credit Granted"
               value={formatDate(user.free_credit_granted_at)}
             />
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-            <Metric label="Remaining credits" value={formatCents(user.balance_cents)} />
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
+            <Metric label="Remaining Credits" value={formatCents(user.balance_cents)} />
             <Metric label="Spent" value={formatCents(user.credit_spent_cents)} />
             <Metric label="Granted" value={formatCents(user.credit_granted_cents)} />
             <Metric label="Runs" value={formatCount(user.run_count)} />
-            <Metric label="Active runs" value={formatCount(user.active_run_count)} />
-            <Metric label="API keys" value={formatCount(user.token_count)} />
+            <Metric label="Active Runs" value={formatCount(user.active_run_count)} />
+            <Metric label="API Keys" value={formatCount(user.token_count)} />
+            <Metric label="Tasks Per Run" value={formatRunLimit(user.effective_max_tasks_per_run)} />
+            <Metric label="Active Run Limit" value={formatRunLimit(user.effective_max_active_runs_per_user)} />
           </div>
         </CardContent>
       </Card>
@@ -356,7 +408,7 @@ function UserDetail({ detail }: { detail: AdminUserDetail }) {
       <Card>
         <CardHeader className="flex-row items-center gap-2 space-y-0">
           <ListChecks className="h-4 w-4 text-muted-foreground" />
-          <CardTitle className="flex-1 text-base">Agents ran</CardTitle>
+          <CardTitle className="flex-1 text-base">Agents Ran</CardTitle>
           <span className="tabular-nums text-xs text-muted-foreground">
             {detail.runs.length}
           </span>
@@ -510,8 +562,8 @@ function DetailSkeleton() {
             <Skeleton className="h-10 w-full" />
             <Skeleton className="h-10 w-full" />
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-            {Array.from({ length: 6 }).map((_, i) => (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
+            {Array.from({ length: 8 }).map((_, i) => (
               <Skeleton key={i} className="h-20 w-full" />
             ))}
           </div>
@@ -552,6 +604,158 @@ function SearchSkeleton() {
         ))}
       </ul>
     </div>
+  );
+}
+
+function LimitSheet({
+  open,
+  onOpenChange,
+  target,
+  onUpdated,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  target: LimitTarget;
+  onUpdated: (target: LimitTarget, user: AdminUserSummary) => void;
+}) {
+  const [maxTasks, setMaxTasks] = useState("");
+  const [maxActiveRuns, setMaxActiveRuns] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [sheetError, setSheetError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setMaxTasks(
+        target.maxTasksPerRunOverride === null
+          ? ""
+          : String(target.maxTasksPerRunOverride)
+      );
+      setMaxActiveRuns(
+        target.maxActiveRunsPerUserOverride === null
+          ? ""
+          : String(target.maxActiveRunsPerUserOverride)
+      );
+      setSheetError(null);
+    }
+  }, [open, target.maxActiveRunsPerUserOverride, target.maxTasksPerRunOverride]);
+
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const parsedTasks = parseLimitDraft(maxTasks, "Max Tasks Per Run");
+    if (parsedTasks.error) {
+      setSheetError(parsedTasks.error);
+      return;
+    }
+    const parsedActiveRuns = parseLimitDraft(maxActiveRuns, "Max Active Runs");
+    if (parsedActiveRuns.error) {
+      setSheetError(parsedActiveRuns.error);
+      return;
+    }
+    setBusy(true);
+    setSheetError(null);
+    try {
+      const user = await updateAdminUserLimits(target.id, {
+        max_tasks_per_run: parsedTasks.value,
+        max_active_runs_per_user: parsedActiveRuns.value,
+      });
+      onUpdated(target, user);
+    } catch (err) {
+      setSheetError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="flex flex-col gap-6">
+        <SheetHeader>
+          <SheetTitle>Update Run Limits</SheetTitle>
+          <SheetDescription>
+            Override managed run guardrails for {displayUser(target)}.
+          </SheetDescription>
+        </SheetHeader>
+
+        <form
+          onSubmit={handleSubmit}
+          className="flex flex-1 flex-col gap-5 overflow-y-auto"
+        >
+          <Field label="User">
+            <div>
+              <div>{displayUser(target)}</div>
+              <div className="font-mono text-xs text-muted-foreground">
+                {target.id}
+              </div>
+            </div>
+          </Field>
+
+          <Field label="Current Tasks Per Run">
+            <div className="text-sm tabular-nums">
+              {formatRunLimit(target.effectiveMaxTasksPerRun)}
+            </div>
+          </Field>
+
+          <Field label="Max Tasks Per Run" htmlFor="max-tasks-per-run" optional>
+            <Input
+              id="max-tasks-per-run"
+              value={maxTasks}
+              onChange={(e) => setMaxTasks(e.target.value)}
+              placeholder="Default"
+              inputMode="numeric"
+              min={0}
+              step={1}
+              type="number"
+              autoFocus
+            />
+            <div className="text-xs text-muted-foreground">
+              Empty uses the service default. 0 means Unlimited.
+            </div>
+          </Field>
+
+          <Field label="Current Active Runs">
+            <div className="text-sm tabular-nums">
+              {formatRunLimit(target.effectiveMaxActiveRunsPerUser)}
+            </div>
+          </Field>
+
+          <Field label="Max Active Runs" htmlFor="max-active-runs" optional>
+            <Input
+              id="max-active-runs"
+              value={maxActiveRuns}
+              onChange={(e) => setMaxActiveRuns(e.target.value)}
+              placeholder="Default"
+              inputMode="numeric"
+              min={0}
+              step={1}
+              type="number"
+            />
+            <div className="text-xs text-muted-foreground">
+              Empty uses the service default. 0 means Unlimited.
+            </div>
+          </Field>
+
+          {sheetError ? (
+            <div className="border border-destructive/50 bg-destructive/10 p-3 text-sm">
+              {sheetError}
+            </div>
+          ) : null}
+
+          <SheetFooter className="mt-auto pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={busy}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={busy}>
+              {busy ? "Saving…" : "Save Limits"}
+            </Button>
+          </SheetFooter>
+        </form>
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -601,7 +805,7 @@ function GrantSheet({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="flex flex-col gap-6">
         <SheetHeader>
-          <SheetTitle>Grant credits</SheetTitle>
+          <SheetTitle>Grant Credits</SheetTitle>
           <SheetDescription>
             Add managed run credits to {displayUser(target)}.
           </SheetDescription>
@@ -657,7 +861,7 @@ function GrantSheet({
               Cancel
             </Button>
             <Button type="submit" disabled={busy || !amountUsd.trim()}>
-              {busy ? "Granting…" : "Grant credits"}
+              {busy ? "Granting…" : "Grant Credits"}
             </Button>
           </SheetFooter>
         </form>
@@ -699,8 +903,28 @@ function displayUser(user: GrantTarget): string {
   return user.displayName ?? user.email;
 }
 
+function parseLimitDraft(
+  draft: string,
+  label: string
+): { value: number | null; error: string | null } {
+  const trimmed = draft.trim();
+  if (!trimmed) return { value: null, error: null };
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(parsed) || String(parsed) !== trimmed || parsed < 0) {
+    return {
+      value: null,
+      error: `${label} must be empty or a non-negative integer.`,
+    };
+  }
+  return { value: parsed, error: null };
+}
+
 function formatCount(value: number): string {
   return value.toLocaleString();
+}
+
+function formatRunLimit(value: number): string {
+  return value === 0 ? "Unlimited" : formatCount(value);
 }
 
 function minimumSkeletonDelay(): Promise<void> {

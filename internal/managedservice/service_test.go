@@ -1686,6 +1686,30 @@ func TestActiveRunLimitErrorMessageUsesLimit(t *testing.T) {
 	}
 }
 
+func TestParseManagedTasksJSONZeroMaxAllowsMultipleTasks(t *testing.T) {
+	tasks, err := parseManagedTasksJSON(`["one","two","three","four"]`, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 4 {
+		t.Fatalf("tasks = %v, want 4 tasks", tasks)
+	}
+}
+
+func TestValidateAdminRunLimitOverride(t *testing.T) {
+	zero := 0
+	if err := validateAdminRunLimitOverride("max_tasks_per_run", &zero); err != nil {
+		t.Fatalf("zero should mean unlimited: %v", err)
+	}
+	if err := validateAdminRunLimitOverride("max_tasks_per_run", nil); err != nil {
+		t.Fatalf("nil should clear override: %v", err)
+	}
+	negative := -1
+	if err := validateAdminRunLimitOverride("max_tasks_per_run", &negative); err == nil {
+		t.Fatal("negative override should be rejected")
+	}
+}
+
 func TestRunStatusResponseDoesNotExposeEditorSessionID(t *testing.T) {
 	b, err := json.Marshal(runStatusResponse{
 		ID:                   "run_test",

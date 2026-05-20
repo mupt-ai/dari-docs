@@ -12,6 +12,10 @@ export type AdminUserSummary = {
   run_count: number;
   active_run_count: number;
   token_count: number;
+  max_tasks_per_run_override: number | null;
+  max_active_runs_per_user_override: number | null;
+  effective_max_tasks_per_run: number;
+  effective_max_active_runs_per_user: number;
 };
 
 export type AdminRunSummary = {
@@ -82,4 +86,20 @@ export async function grantAdminCredits(params: {
     method: "POST",
     body: params,
   });
+}
+
+export async function updateAdminUserLimits(
+  userId: string,
+  params: {
+    max_tasks_per_run: number | null;
+    max_active_runs_per_user: number | null;
+  }
+): Promise<AdminUserSummary> {
+  return apiFetch<AdminUserSummary>(
+    `/v1/admin/users/${encodeURIComponent(userId)}/limits`,
+    {
+      method: "PATCH",
+      body: params,
+    }
+  );
 }

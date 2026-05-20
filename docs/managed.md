@@ -84,7 +84,7 @@ dari-docs billing checkout --amount 5
 
 Before a managed run starts, the CLI prints a bundle summary and credit estimate. Credits are reserved before the run, then reconciled to the actual session cost after completion.
 
-Managed runs currently support up to three tasks per run and three active runs per account at a time. Tester sessions are started with the Dari session-batch API; optimize runs start the editor after tester feedback is complete.
+Managed runs default to three tasks per run and three active runs per account at a time. Admins can override those limits for individual users. Tester sessions are started with the Dari session-batch API; optimize runs start the editor after tester feedback is complete.
 
 ## Model selection
 
