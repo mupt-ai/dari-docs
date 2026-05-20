@@ -113,12 +113,6 @@ func checkOptimizeShort(command string) string {
 	return "Run docs checks and propose edits"
 }
 
-func runCheckOrOptimize(command string, args []string) error {
-	cmd := newCheckOptimizeCommand(command)
-	cmd.SetArgs(args)
-	return cmd.Execute()
-}
-
 func runCheckOrOptimizeOptions(ctx context.Context, opts *checkOptimizeOptions) error {
 	if err := opts.prepare(); err != nil {
 		return err
@@ -260,7 +254,7 @@ func resolveSelfManagedCheckOptimizeConfig(opts *checkOptimizeOptions) error {
 		if opts.LLMID != "" {
 			opts.FeedbackLLMIDs = []string{opts.LLMID}
 		} else {
-			opts.FeedbackLLMIDs = defaultFeedbackLLMIDs()
+			opts.FeedbackLLMIDs = runner.DefaultFeedbackLLMIDs()
 		}
 	}
 	if c, ok, err := appconfig.Load(opts.RepoRoot); err != nil {

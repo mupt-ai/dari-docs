@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mupt-ai/dari-docs/internal/managed"
+	"github.com/mupt-ai/dari-docs/internal/runner"
 )
 
 func TestParseDollarsToCents(t *testing.T) {
@@ -123,7 +124,7 @@ func TestManagedLLMSelectionAllowsGPT(t *testing.T) {
 }
 
 func TestDefaultFeedbackLLMIDsIncludesBundledMatrix(t *testing.T) {
-	got := defaultFeedbackLLMIDs()
+	got := runner.DefaultFeedbackLLMIDs()
 	want := []string{"dumb-claude", "medium-claude", "smart-claude", "dumb-gpt", "medium-gpt", "smart-gpt"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("defaultFeedbackLLMIDs = %#v, want %#v", got, want)
@@ -143,78 +144,6 @@ func TestExpandFeedbackLLMListSupportsGroups(t *testing.T) {
 	want := []string{"dumb-claude", "medium-claude", "smart-claude", "medium-gpt", "dumb-gpt", "smart-gpt"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("expandFeedbackLLMList = %#v, want %#v", got, want)
-	}
-}
-
-func TestExtractOutFlagAllowsOutAfterRunID(t *testing.T) {
-	args, outDir, err := extractOutFlag([]string{"run_test", "--out", "/tmp/dari-docs-out"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(args, ",") != "run_test" || outDir != "/tmp/dari-docs-out" {
-		t.Fatalf("args/out = %#v/%q", args, outDir)
-	}
-}
-
-func TestExtractOutFlagRejectsMissingValue(t *testing.T) {
-	if _, _, err := extractOutFlag([]string{"run_test", "--out"}); err == nil {
-		t.Fatal("expected missing --out value error")
-	}
-}
-
-func TestExtractTimeoutMinutesFlagAllowsTimeoutAfterRunID(t *testing.T) {
-	args, timeout, err := extractTimeoutMinutesFlag([]string{"run_test", "--timeout-minutes", "30"}, 15)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(args, ",") != "run_test" || timeout != 30 {
-		t.Fatalf("args/timeout = %#v/%d", args, timeout)
-	}
-}
-
-func TestExtractTimeoutMinutesFlagAllowsEqualsSyntax(t *testing.T) {
-	args, timeout, err := extractTimeoutMinutesFlag([]string{"--timeout-minutes=0", "run_test"}, 15)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(args, ",") != "run_test" || timeout != 0 {
-		t.Fatalf("args/timeout = %#v/%d", args, timeout)
-	}
-}
-
-func TestExtractTimeoutMinutesFlagRejectsMissingValue(t *testing.T) {
-	if _, _, err := extractTimeoutMinutesFlag([]string{"run_test", "--timeout-minutes"}, 15); err == nil {
-		t.Fatal("expected missing --timeout-minutes value error")
-	}
-}
-
-func TestParseRunsWaitArgsAllowsTimeoutAfterRunID(t *testing.T) {
-	got, err := parseRunsWaitArgs([]string{"run_test", "--timeout-minutes", "17"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.RunID != "run_test" || got.TimeoutMinutes != 17 {
-		t.Fatalf("runs wait args = %#v", got)
-	}
-}
-
-func TestParseRunsWaitArgsAllowsTimeoutBeforeRunID(t *testing.T) {
-	got, err := parseRunsWaitArgs([]string{"--timeout-minutes", "9", "run_test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.RunID != "run_test" || got.TimeoutMinutes != 9 {
-		t.Fatalf("runs wait args = %#v", got)
-	}
-}
-
-func TestParseRunsWaitArgsUsesDefaultTimeout(t *testing.T) {
-	got, err := parseRunsWaitArgs([]string{"run_test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.RunID != "run_test" || got.TimeoutMinutes != 30 {
-		t.Fatalf("runs wait args = %#v", got)
 	}
 }
 
@@ -341,7 +270,9 @@ func TestManagedCheckRequiresLoginBeforeRunConfig(t *testing.T) {
 	repo := t.TempDir()
 	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
 
-	err := runCheckOrOptimize("check", []string{repo, "--managed", "--task", "Run echo ok"})
+	cmd := newCheckOptimizeCommand("check")
+	cmd.SetArgs([]string{repo, "--managed", "--task", "Run echo ok"})
+	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected missing login error")
 	}
@@ -357,7 +288,9 @@ func TestManagedAgentDeployManagedNoops(t *testing.T) {
 	repo := t.TempDir()
 	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
 
-	err := runAgents([]string{"deploy", "--managed", repo})
+	cmd := newAgentsCommand()
+	cmd.SetArgs([]string{"deploy", "--managed", repo})
+	err := cmd.Execute()
 	if err != nil {
 		t.Fatalf("managed agent deploy should be a no-op: %v", err)
 	}
@@ -367,7 +300,8 @@ func TestAuthLogoutWithoutTokenSucceeds(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	t.Setenv("HOME", home)
 
-	if err := runAuthLogout(nil); err != nil {
+	cmd := newAuthLogoutCommand()
+	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".dari-docs", "credentials.json")); !os.IsNotExist(err) {

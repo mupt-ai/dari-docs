@@ -1,6 +1,10 @@
 package main
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/mupt-ai/dari-docs/internal/runner"
+)
 
 func uniqueTrimmedList(values []string) []string {
 	var out []string
@@ -33,15 +37,15 @@ func expandFeedbackLLMList(values []string) []string {
 	for _, part := range parts {
 		switch strings.ToLower(part) {
 		case "all":
-			for _, llmID := range defaultFeedbackLLMIDs() {
+			for _, llmID := range runner.DefaultFeedbackLLMIDs() {
 				add(llmID)
 			}
 		case "claude":
-			for _, llmID := range defaultClaudeFeedbackLLMIDs() {
+			for _, llmID := range runner.ClaudeFeedbackLLMIDs() {
 				add(llmID)
 			}
 		case "gpt":
-			for _, llmID := range defaultGPTFeedbackLLMIDs() {
+			for _, llmID := range runner.GPTFeedbackLLMIDs() {
 				add(llmID)
 			}
 		default:

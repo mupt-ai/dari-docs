@@ -116,12 +116,6 @@ func newAgentsDeployCommand() *cobra.Command {
 	return cmd
 }
 
-func runAgents(args []string) error {
-	cmd := newAgentsCommand()
-	cmd.SetArgs(args)
-	return cmd.Execute()
-}
-
 func runAgentsDeploy(managedMode bool) error {
 	if !managedMode {
 		return fmt.Errorf("for self-managed agents, run `dari-docs init --deploy`")

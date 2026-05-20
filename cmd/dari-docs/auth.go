@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
-	"os"
 	"strings"
 	"text/tabwriter"
 
@@ -41,7 +41,7 @@ func newAuthLoginCommand() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAuthLogin(cmd.Context())
+			return runAuthLogin(cmd.Context(), cmd.OutOrStdout(), cmd.InOrStdin(), cmd.ErrOrStderr())
 		},
 	}
 }
@@ -63,7 +63,7 @@ func newAuthLogoutCommand() *cobra.Command {
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAuthLogoutOptions(cmd.Context(), all, interactiveOnly, automationOnly)
+			return runAuthLogoutOptions(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), cmd.InOrStdin(), all, interactiveOnly, automationOnly)
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "revoke all managed service credentials for this account")
@@ -81,7 +81,7 @@ func newAuthStatusCommand() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAuthStatus(cmd.Context())
+			return runAuthStatus(cmd.Context(), cmd.OutOrStdout())
 		},
 	}
 }
@@ -116,7 +116,7 @@ func newAuthTokenCreateCommand() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAuthTokenCreate(cmd.Context(), name, scopes, expiresIn)
+			return runAuthTokenCreate(cmd.Context(), cmd.OutOrStdout(), name, scopes, expiresIn)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "API key name, for example github-actions")
@@ -133,7 +133,7 @@ func newAuthTokenListCommand() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAuthTokenList(cmd.Context())
+			return runAuthTokenList(cmd.Context(), cmd.OutOrStdout())
 		},
 	}
 }
@@ -146,25 +146,19 @@ func newAuthTokenRevokeCommand() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAuthTokenRevoke(cmd.Context(), args[0])
+			return runAuthTokenRevoke(cmd.Context(), cmd.OutOrStdout(), args[0])
 		},
 	}
 }
 
-func runAuthLogout(args []string) error {
-	cmd := newAuthLogoutCommand()
-	cmd.SetArgs(args)
-	return cmd.Execute()
-}
-
-func runAuthLogin(ctx context.Context) error {
+func runAuthLogin(ctx context.Context, out io.Writer, stdin io.Reader, stderr io.Writer) error {
 	if token, err := managed.LoadToken(managed.DefaultBaseURL); err != nil {
 		return err
 	} else if strings.TrimSpace(token) != "" {
 		client := managed.NewWithAuthToken(managed.DefaultBaseURL, managed.AuthToken{Token: token, Source: managed.AuthSourceLocal})
 		me, err := client.Me(ctx)
 		if err == nil {
-			fmt.Printf("Already logged in to %s as %s\n", managed.DefaultBaseURL, me.Email)
+			fmt.Fprintf(out, "Already logged in to %s as %s\n", managed.DefaultBaseURL, me.Email)
 			return nil
 		}
 		var httpErr *managed.HTTPError
@@ -175,23 +169,23 @@ func runAuthLogin(ctx context.Context) error {
 			return err
 		}
 	}
-	verified, err := exchangeManagedBrowserLogin(ctx)
+	verified, err := exchangeManagedBrowserLogin(ctx, stdin, stderr)
 	if err != nil {
 		return err
 	}
 	if err := managed.SaveToken(managed.DefaultBaseURL, verified.Token); err != nil {
 		return err
 	}
-	fmt.Printf("Logged in to %s as %s\n", managed.DefaultBaseURL, verified.Email)
+	fmt.Fprintf(out, "Logged in to %s as %s\n", managed.DefaultBaseURL, verified.Email)
 	return nil
 }
 
-func exchangeManagedBrowserLogin(ctx context.Context) (managed.DariExchangeResponse, error) {
+func exchangeManagedBrowserLogin(ctx context.Context, stdin io.Reader, stderr io.Writer) (managed.DariExchangeResponse, error) {
 	authConfig, err := platformauth.FetchConfig(ctx, "https://api.dari.dev")
 	if err != nil {
 		return managed.DariExchangeResponse{}, err
 	}
-	session, err := platformauth.LoginWithBrowser(ctx, authConfig, os.Stdin, os.Stderr)
+	session, err := platformauth.LoginWithBrowser(ctx, authConfig, stdin, stderr)
 	if err != nil {
 		return managed.DariExchangeResponse{}, err
 	}
@@ -199,7 +193,7 @@ func exchangeManagedBrowserLogin(ctx context.Context) (managed.DariExchangeRespo
 	return client.ExchangeDariToken(ctx, session.AccessToken)
 }
 
-func runAuthLogoutOptions(ctx context.Context, all bool, interactiveOnly bool, automationOnly bool) error {
+func runAuthLogoutOptions(ctx context.Context, out io.Writer, stderr io.Writer, stdin io.Reader, all bool, interactiveOnly bool, automationOnly bool) error {
 	if all {
 		kind := ""
 		switch {
@@ -208,14 +202,14 @@ func runAuthLogoutOptions(ctx context.Context, all bool, interactiveOnly bool, a
 		case automationOnly:
 			kind = "automation"
 		}
-		return runAuthLogoutAll(ctx, kind)
+		return runAuthLogoutAll(ctx, out, stderr, stdin, kind)
 	}
 	auth, err := managed.LoadAuthToken(managed.DefaultBaseURL)
 	if err != nil {
 		return err
 	}
 	if auth.Token == "" {
-		fmt.Printf("Already logged out locally.\nTo revoke server-side credentials from other devices or deleted local sessions, run `dari-docs auth logout --all`.\n")
+		fmt.Fprintf(out, "Already logged out locally.\nTo revoke server-side credentials from other devices or deleted local sessions, run `dari-docs auth logout --all`.\n")
 		return nil
 	}
 	client := managed.NewWithAuthToken(managed.DefaultBaseURL, auth)
@@ -233,14 +227,14 @@ func runAuthLogoutOptions(ctx context.Context, all bool, interactiveOnly bool, a
 		if err := managed.DeleteToken(managed.DefaultBaseURL); err != nil {
 			return err
 		}
-		fmt.Printf("Logged out of %s\n", managed.DefaultBaseURL)
+		fmt.Fprintf(out, "Logged out of %s\n", managed.DefaultBaseURL)
 	} else {
-		fmt.Printf("Revoked API key from %s. Unset %s to stop using it locally.\n", managed.EnvTokenName, managed.EnvTokenName)
+		fmt.Fprintf(out, "Revoked API key from %s. Unset %s to stop using it locally.\n", managed.EnvTokenName, managed.EnvTokenName)
 	}
 	return nil
 }
 
-func runAuthLogoutAll(ctx context.Context, kind string) error {
+func runAuthLogoutAll(ctx context.Context, out io.Writer, stderr io.Writer, stdin io.Reader, kind string) error {
 	auth, err := managed.LoadAuthToken(managed.DefaultBaseURL)
 	if err != nil {
 		return err
@@ -253,7 +247,7 @@ func runAuthLogoutAll(ctx context.Context, kind string) error {
 					return err
 				}
 			}
-			fmt.Printf("%s.\n", logoutAllMessage(kind))
+			fmt.Fprintf(out, "%s.\n", logoutAllMessage(kind))
 			return nil
 		} else {
 			var httpErr *managed.HTTPError
@@ -268,15 +262,15 @@ func runAuthLogoutAll(ctx context.Context, kind string) error {
 				if err := managed.DeleteToken(managed.DefaultBaseURL); err != nil {
 					return err
 				}
-				fmt.Fprintln(os.Stderr, "Stored login was invalid; re-authenticating to revoke server-side credentials.")
+				fmt.Fprintln(stderr, "Stored login was invalid; re-authenticating to revoke server-side credentials.")
 			} else {
 				return err
 			}
 		}
 	} else {
-		fmt.Fprintln(os.Stderr, "No local login found; re-authenticating to revoke server-side credentials.")
+		fmt.Fprintln(stderr, "No local login found; re-authenticating to revoke server-side credentials.")
 	}
-	verified, err := exchangeManagedBrowserLogin(ctx)
+	verified, err := exchangeManagedBrowserLogin(ctx, stdin, stderr)
 	if err != nil {
 		return err
 	}
@@ -289,7 +283,7 @@ func runAuthLogoutAll(ctx context.Context, kind string) error {
 			return err
 		}
 	}
-	fmt.Printf("%s for %s.\n", logoutAllMessage(kind), verified.Email)
+	fmt.Fprintf(out, "%s for %s.\n", logoutAllMessage(kind), verified.Email)
 	return nil
 }
 
@@ -304,7 +298,7 @@ func logoutAllMessage(kind string) string {
 	}
 }
 
-func runAuthStatus(ctx context.Context) error {
+func runAuthStatus(ctx context.Context, out io.Writer) error {
 	client, auth, err := managedClientWithAuth()
 	if err != nil {
 		return err
@@ -313,23 +307,23 @@ func runAuthStatus(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Authenticated to %s\n", managed.DefaultBaseURL)
-	fmt.Printf("Email: %s\n", me.Email)
-	fmt.Printf("Source: %s\n", authSourceLabel(auth.Source))
+	fmt.Fprintf(out, "Authenticated to %s\n", managed.DefaultBaseURL)
+	fmt.Fprintf(out, "Email: %s\n", me.Email)
+	fmt.Fprintf(out, "Source: %s\n", authSourceLabel(auth.Source))
 	if me.Token.ID != "" {
 		name := me.Token.Name
 		if name == "" {
 			name = me.Token.ID
 		}
-		fmt.Printf("Credential: %s (%s)\n", name, me.Token.Kind)
+		fmt.Fprintf(out, "Credential: %s (%s)\n", name, me.Token.Kind)
 	}
 	if len(me.Token.Scopes) > 0 {
-		fmt.Printf("Scopes: %s\n", strings.Join(me.Token.Scopes, ", "))
+		fmt.Fprintf(out, "Scopes: %s\n", strings.Join(me.Token.Scopes, ", "))
 	}
 	return nil
 }
 
-func runAuthTokenCreate(ctx context.Context, name string, scopes []string, expiresIn string) error {
+func runAuthTokenCreate(ctx context.Context, out io.Writer, name string, scopes []string, expiresIn string) error {
 	expiresAt, err := parseExpiresIn(expiresIn)
 	if err != nil {
 		return err
@@ -354,13 +348,13 @@ func runAuthTokenCreate(ctx context.Context, name string, scopes []string, expir
 	if displayName == "" {
 		displayName = resp.ID
 	}
-	fmt.Printf("Created API key %q.\n\n", displayName)
-	fmt.Printf("%s=%s\n\n", managed.EnvTokenName, resp.Token)
-	fmt.Println("Copy this value now. It will not be shown again.")
+	fmt.Fprintf(out, "Created API key %q.\n\n", displayName)
+	fmt.Fprintf(out, "%s=%s\n\n", managed.EnvTokenName, resp.Token)
+	fmt.Fprintln(out, "Copy this value now. It will not be shown again.")
 	return nil
 }
 
-func runAuthTokenList(ctx context.Context) error {
+func runAuthTokenList(ctx context.Context, out io.Writer) error {
 	client, _, err := managedClientWithAuth()
 	if err != nil {
 		return err
@@ -369,7 +363,7 @@ func runAuthTokenList(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tNAME\tKIND\tSCOPES\tLAST USED\tEXPIRES")
 	for _, token := range resp.Tokens {
 		name := token.Name
@@ -388,7 +382,7 @@ func runAuthTokenList(ctx context.Context) error {
 	return tw.Flush()
 }
 
-func runAuthTokenRevoke(ctx context.Context, tokenID string) error {
+func runAuthTokenRevoke(ctx context.Context, out io.Writer, tokenID string) error {
 	client, _, err := managedClientWithAuth()
 	if err != nil {
 		return err
@@ -396,6 +390,6 @@ func runAuthTokenRevoke(ctx context.Context, tokenID string) error {
 	if err := client.RevokeAuthToken(ctx, tokenID); err != nil {
 		return err
 	}
-	fmt.Printf("Revoked API key %s\n", tokenID)
+	fmt.Fprintf(out, "Revoked API key %s\n", tokenID)
 	return nil
 }

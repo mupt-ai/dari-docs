@@ -51,12 +51,6 @@ func newInitCommand() *cobra.Command {
 	return cmd
 }
 
-func runInit(args []string) error {
-	cmd := newInitCommand()
-	cmd.SetArgs(args)
-	return cmd.Execute()
-}
-
 func runInitWithOptions(ctx context.Context, opts initOptions) error {
 	_ = ctx
 	repoArg := opts.RepoArg

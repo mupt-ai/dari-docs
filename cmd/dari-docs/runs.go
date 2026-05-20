@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -152,25 +151,6 @@ func runRunsWait(ctx context.Context, runID string, timeoutMinutes int) error {
 	return nil
 }
 
-type runsWaitArgs struct {
-	RunID          string
-	TimeoutMinutes int
-}
-
-func parseRunsWaitArgs(args []string) (runsWaitArgs, error) {
-	parsed := runsWaitArgs{TimeoutMinutes: 30}
-	remaining, timeoutMinutes, err := extractTimeoutMinutesFlag(args, parsed.TimeoutMinutes)
-	if err != nil {
-		return runsWaitArgs{}, err
-	}
-	parsed.TimeoutMinutes = timeoutMinutes
-	if len(remaining) != 1 {
-		return runsWaitArgs{}, fmt.Errorf("usage: dari-docs runs wait <run-id>")
-	}
-	parsed.RunID = remaining[0]
-	return parsed, nil
-}
-
 func runRunsDownload(ctx context.Context, runID string, repo string, outDir string) error {
 	repoRoot, outDir, err := resolveRunArtifactPaths(repo, outDir)
 	if err != nil {
@@ -228,83 +208,6 @@ func resolveRunArtifactPaths(repo string, outDir string) (string, string, error)
 		outDir = filepath.Join(absRepo, ".dari-docs")
 	}
 	return absRepo, outDir, nil
-}
-
-func parseRunArtifactArgs(command string, args []string) (string, string, string, error) {
-	var outDir string
-	var err error
-	args, outDir, err = extractOutFlag(args)
-	if err != nil {
-		return "", "", "", err
-	}
-	if len(args) < 1 || len(args) > 2 {
-		return "", "", "", fmt.Errorf("usage: dari-docs runs %s <run-id> [repo] [--out DIR]", command)
-	}
-	repo := "."
-	if len(args) == 2 {
-		repo = args[1]
-	}
-	absRepo, outDir, err := resolveRunArtifactPaths(repo, outDir)
-	if err != nil {
-		return "", "", "", err
-	}
-	return args[0], absRepo, outDir, nil
-}
-
-func extractTimeoutMinutesFlag(args []string, defaultValue int) ([]string, int, error) {
-	timeoutMinutes := defaultValue
-	out := make([]string, 0, len(args))
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--timeout-minutes" {
-			if i+1 >= len(args) {
-				return nil, 0, fmt.Errorf("--timeout-minutes requires a value")
-			}
-			n, err := strconv.Atoi(args[i+1])
-			if err != nil || n < 0 {
-				return nil, 0, fmt.Errorf("--timeout-minutes must be a non-negative integer")
-			}
-			timeoutMinutes = n
-			i++
-			continue
-		}
-		if strings.HasPrefix(arg, "--timeout-minutes=") {
-			raw := strings.TrimSpace(strings.TrimPrefix(arg, "--timeout-minutes="))
-			n, err := strconv.Atoi(raw)
-			if err != nil || n < 0 {
-				return nil, 0, fmt.Errorf("--timeout-minutes must be a non-negative integer")
-			}
-			timeoutMinutes = n
-			continue
-		}
-		out = append(out, arg)
-	}
-	return out, timeoutMinutes, nil
-}
-
-func extractOutFlag(args []string) ([]string, string, error) {
-	var outDir string
-	out := make([]string, 0, len(args))
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--out" {
-			if i+1 >= len(args) {
-				return nil, "", fmt.Errorf("--out requires a directory")
-			}
-			outDir = args[i+1]
-			i++
-			continue
-		}
-		if strings.HasPrefix(arg, "--out=") {
-			outDir = strings.TrimSpace(strings.TrimPrefix(arg, "--out="))
-			if outDir == "" {
-				return nil, "", fmt.Errorf("--out requires a directory")
-			}
-			continue
-		}
-		out = append(out, arg)
-	}
-	return out, outDir, nil
 }
 
 func printManagedRunStatus(status managed.RunStatus) {
