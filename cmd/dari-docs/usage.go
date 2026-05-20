@@ -19,8 +19,8 @@ Usage:
   dari-docs runs wait <run-id>
   dari-docs runs download <run-id> [repo]
   dari-docs runs apply <run-id> [repo]
-  dari-docs optimize [repo] --task "Implement auth" [--task "Set up webhooks"] [flags]
-  dari-docs check [repo] --task "Implement auth" [flags]
+  dari-docs optimize [repo|docs-url] --task "Implement auth" [--task "Set up webhooks"] [flags]
+  dari-docs check [repo|docs-url] --task "Implement auth" [flags]
 
 Managed setup:
   dari-docs auth login
@@ -38,6 +38,7 @@ Important flags:
   --wait                      wait for a managed run to finish before exiting
   --bundle-include GLOB       include extra repo-relative docs bundle paths; repeatable
   --bundle-exclude GLOB       exclude repo-relative docs bundle paths; repeatable
+  --docs-url URL              give agents a public docs URL to use with internet access; repeatable
   --apply                     copy downloaded updated docs back into repo
   --api-base-url URL          Dari API base URL; self-managed only
   --parallel N                tester sessions per batch; self-managed only

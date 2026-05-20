@@ -48,6 +48,7 @@ export default function NewRun() {
   const [editingTaskIndex, setEditingTaskIndex] = useState<number | null>(null);
   const [editingTaskDraft, setEditingTaskDraft] = useState("");
   const [browserFiles, setBrowserFiles] = useState<File[]>([]);
+  const [publicDocsURL, setPublicDocsURL] = useState("");
   const [testerLLMIDs, setTesterLLMIDs] = useState<string[]>([]);
   const [editorLLMID, setEditorLLMID] = useState("");
   const [includeText, setIncludeText] = useState("");
@@ -83,6 +84,7 @@ export default function NewRun() {
   const tasks = useMemo(() => parseTaskInputs(taskItems), [taskItems]);
   const includeGlobs = useMemo(() => parsePatternLines(includeText), [includeText]);
   const excludeGlobs = useMemo(() => parsePatternLines(excludeText), [excludeText]);
+  const publicDocURLs = useMemo(() => parsePatternLines(publicDocsURL), [publicDocsURL]);
   const taskLimit = config?.max_tasks_per_run ?? 3;
   const taskByteLimit = config?.max_task_bytes ?? 10000;
   const liveVerify = runtimeSecrets.length > 0;
@@ -105,8 +107,8 @@ export default function NewRun() {
     : 0;
   const startRunDisabledReason = submitting
     ? ""
-    : selectedFiles.length === 0
-      ? "Choose a docs folder with at least one uploadable file."
+    : selectedFiles.length === 0 && publicDocURLs.length === 0
+      ? "Choose a docs folder or add a public docs URL."
       : tasks.length === 0
         ? "Add at least one task."
         : testerLLMIDs.length === 0
@@ -221,6 +223,7 @@ export default function NewRun() {
       editorLLMID,
       liveVerify,
       runtimeSecrets,
+      publicDocURLs,
     });
     if (validation) {
       setSubmitError(validation);
@@ -232,6 +235,7 @@ export default function NewRun() {
         mode,
         tasks,
         files: selectedFiles,
+        publicDocURLs,
         testerLLMIDs,
         editorLLMID: mode === "optimize" ? editorLLMID : undefined,
         includeGlobs,
@@ -256,7 +260,7 @@ export default function NewRun() {
           </Link>
           <h1 className="mt-2 text-xl font-medium">New Run</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Upload a local docs folder and start a check or optimize run.
+            Upload a local docs folder or collect public docs from a URL, then start a check or optimize run.
           </p>
         </div>
       </div>
@@ -280,7 +284,7 @@ export default function NewRun() {
             <section className="border border-border bg-card p-4">
               <div className="mb-3 flex items-start justify-between gap-4">
                 <div>
-                  <h2 className="text-sm font-medium">Docs Folder</h2>
+                  <h2 className="text-sm font-medium">Docs Source</h2>
                 </div>
               </div>
               {browserFiles.length === 0 ? (
@@ -321,6 +325,19 @@ export default function NewRun() {
                   </div>
                 </div>
               )}
+              <div className="mt-4">
+                <label className="mb-2 block text-xs uppercase tracking-widest text-muted-foreground">
+                  Public Docs URL
+                </label>
+                <Input
+                  value={publicDocsURL}
+                  onChange={(event) => setPublicDocsURL(event.target.value)}
+                  placeholder="https://www.kernel.sh/docs/llms.txt"
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Add a public docs page or llms.txt URL. Agents use internet access to read the URL and choose relevant linked docs.
+                </p>
+              </div>
               <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
                 <span className="border border-border bg-background px-2 py-1">
                   {selectedFiles.length} Selected
@@ -726,6 +743,7 @@ function validateRunForm({
   editorLLMID,
   liveVerify,
   runtimeSecrets,
+  publicDocURLs,
 }: {
   config: RunConfig;
   tasks: string[];
@@ -736,9 +754,17 @@ function validateRunForm({
   editorLLMID: string;
   liveVerify: boolean;
   runtimeSecrets: RuntimeSecretInput[];
+  publicDocURLs: string[];
 }): string | null {
-  if (selectedFiles.length === 0) {
-    return "Choose a docs folder with at least one uploadable file.";
+  if (selectedFiles.length === 0 && publicDocURLs.length === 0) {
+    return "Choose a docs folder or add a public docs URL.";
+  }
+  if (mode === "optimize" && publicDocURLs.length > 0) {
+    return "Public docs URLs support Check only. Use local docs files for Optimize.";
+  }
+  const invalidURL = publicDocURLs.find((value) => !isPublicDocsURL(value));
+  if (invalidURL) {
+    return `Public docs URL must be an HTTP or HTTPS URL: ${invalidURL}`;
   }
   if (selectedBytes > config.bundle_max_uncompressed_bytes) {
     return `Selected files exceed the ${formatBytes(config.bundle_max_uncompressed_bytes)} upload limit.`;
@@ -785,6 +811,15 @@ function parsePatternLines(value: string): string[] {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line && !line.startsWith("#"));
+}
+
+function isPublicDocsURL(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function selectedFolderLabel(files: File[]): string {

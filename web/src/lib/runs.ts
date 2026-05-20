@@ -60,6 +60,7 @@ export type CreateManagedRunInput = {
   mode: "check" | "optimize";
   tasks: string[];
   files: BrowserSourceFile[];
+  publicDocURLs?: string[];
   testerLLMIDs: string[];
   editorLLMID?: string;
   includeGlobs?: string[];
@@ -117,14 +118,19 @@ export async function createRunFromFolder(input: CreateManagedRunInput): Promise
     form.set("live_verify", "true");
     form.set("runtime_secrets_json", JSON.stringify(secrets));
   }
-  form.set(
-    "source_files_json",
-    JSON.stringify({
-      files: input.files.map((item) => ({ path: item.path })),
-    })
-  );
-  for (const item of input.files) {
-    form.append("source_file", item.file, item.file.name);
+  if (input.files.length > 0) {
+    form.set(
+      "source_files_json",
+      JSON.stringify({
+        files: input.files.map((item) => ({ path: item.path })),
+      })
+    );
+    for (const item of input.files) {
+      form.append("source_file", item.file, item.file.name);
+    }
+  }
+  for (const url of input.publicDocURLs ?? []) {
+    form.append("source_url", url);
   }
   return apiFetch<CreateRunResponse>("/v1/runs", {
     method: "POST",

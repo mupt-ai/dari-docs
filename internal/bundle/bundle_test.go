@@ -79,6 +79,34 @@ func TestCreateWithOptionsReportsSkipsAndAppliesGlobs(t *testing.T) {
 	}
 }
 
+func TestCreateWithOptionsIncludesExtraFiles(t *testing.T) {
+	repo := t.TempDir()
+	writeFileForTest(t, repo, "README.md", "# Local\n")
+
+	out := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	created, err := CreateWithOptions(repo, out, CreateOptions{
+		ExtraFiles: []ExtraFile{{Path: "public-docs/source.md", Content: []byte("# Public\n")}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	read, err := Read(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, rec := range read.Manifest.Files {
+		paths = append(paths, rec.Path)
+	}
+	wantPaths := []string{"README.md", "public-docs/source.md"}
+	if strings.Join(paths, ",") != strings.Join(wantPaths, ",") {
+		t.Fatalf("paths = %v, want %v", paths, wantPaths)
+	}
+	if created.Manifest.Files[1].ContentType != "text/markdown" {
+		t.Fatalf("content type = %q, want text/markdown", created.Manifest.Files[1].ContentType)
+	}
+}
+
 func TestCreateWithOptionsDoubleStarIncludeMatchesRootFiles(t *testing.T) {
 	repo := t.TempDir()
 	writeFileForTest(t, repo, "demo.py", "print('root')\n")

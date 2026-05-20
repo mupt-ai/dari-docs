@@ -266,6 +266,45 @@ func writeUpdatedDocsZip(w http.ResponseWriter, files map[string]string) error {
 	return err
 }
 
+func TestPrepareAddsPublicDocsSourceWithoutBundlingCWD(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	if err := os.WriteFile(filepath.Join(cwd, "README.md"), []byte("# Local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opts := &checkOptimizeOptions{
+		Command:       "check",
+		TaskInputs:    []string{"Read docs"},
+		PublicDocURLs: []string{"https://www.kernel.sh/docs/llms.txt"},
+	}
+	if err := opts.prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if !opts.PublicDocsOnly {
+		t.Fatal("expected public-docs-only source")
+	}
+	if len(opts.BundleOptions.ExtraFiles) != 1 {
+		t.Fatalf("extra files = %#v, want source file", opts.BundleOptions.ExtraFiles)
+	}
+	if opts.RepoRoot == cwd {
+		t.Fatalf("RepoRoot = cwd; public docs without repo arg should not bundle cwd")
+	}
+}
+
+func TestPrepareRejectsOptimizeWithPublicDocsURL(t *testing.T) {
+	repo := t.TempDir()
+	opts := &checkOptimizeOptions{
+		Command:       "optimize",
+		RepoArg:       repo,
+		TaskInputs:    []string{"Improve docs"},
+		PublicDocURLs: []string{"https://example.com/llms.txt"},
+	}
+	err := opts.prepare()
+	if err == nil || !strings.Contains(err.Error(), "support check only") {
+		t.Fatalf("err = %v, want public docs optimize rejection", err)
+	}
+}
+
 func TestManagedCheckRequiresLoginBeforeRunConfig(t *testing.T) {
 	repo := t.TempDir()
 	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
