@@ -1209,15 +1209,7 @@ func (s *Server) handleRunSessionTranscript(
 	if !requireScope(w, u, scopeManagedRead) {
 		return
 	}
-	var exists bool
-	err := s.db.QueryRow(r.Context(), `
-SELECT EXISTS (
-  SELECT 1
-  FROM run_sessions rs
-  JOIN runs r ON r.id = rs.run_id
-  WHERE r.id=$1 AND r.user_id=$2 AND rs.session_id=$3
-)
-`, runID, u.ID, sessionID).Scan(&exists)
+	exists, err := s.userOwnsRunSession(r.Context(), u.ID, runID, sessionID)
 	if err != nil {
 		writeLoggedError(w, http.StatusInternalServerError, "could not verify run session", err)
 		return
@@ -1234,6 +1226,24 @@ SELECT EXISTS (
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(raw)
+}
+
+func (s *Server) userOwnsRunSession(
+	ctx context.Context,
+	userID string,
+	runID string,
+	sessionID string,
+) (bool, error) {
+	var exists bool
+	err := s.db.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM run_sessions rs
+  JOIN runs r ON r.id = rs.run_id
+  WHERE r.id=$1 AND r.user_id=$2 AND rs.session_id=$3
+)
+`, runID, userID, sessionID).Scan(&exists)
+	return exists, err
 }
 
 func (s *Server) handleUpdatedZip(w http.ResponseWriter, r *http.Request, u user, runID string) {
