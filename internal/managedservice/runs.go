@@ -3,6 +3,7 @@ package managedservice
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -44,6 +45,12 @@ type managedSourceManifest struct {
 
 type managedSourceManifestFile struct {
 	Path string `json:"path"`
+}
+
+type managedRunLimits struct {
+	MaxTasksPerRun       int
+	MaxActiveRunsPerUser int
+	MaxTaskBytes         int64
 }
 
 type activeRunLimitError struct {
@@ -141,12 +148,17 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 				return
 			}
 		case "tasks_json":
-			v, err := readTextPart(part, maxTasksJSONFieldBytes(s.cfg.MaxTasksPerRun, s.cfg.MaxTaskBytes))
+			limits, err := s.managedRunLimitsForUser(r.Context(), u.ID)
+			if err != nil {
+				writeLoggedError(w, http.StatusInternalServerError, "could not load managed run limits", err)
+				return
+			}
+			v, err := readTextPart(part, maxTasksJSONFieldBytes(limits.MaxTasksPerRun, limits.MaxTaskBytes))
 			if err != nil {
 				writeError(w, http.StatusBadRequest, "tasks_json field is too large")
 				return
 			}
-			tasks, err = parseManagedTasksJSON(v, s.cfg.MaxTasksPerRun, s.cfg.MaxTaskBytes)
+			tasks, err = parseManagedTasksJSON(v, limits.MaxTasksPerRun, limits.MaxTaskBytes)
 			if err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
@@ -945,8 +957,12 @@ func (s *Server) preflightRun(ctx context.Context, userID string, reserve int64)
 	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM runs WHERE user_id=$1 AND status IN ($2,$3,$4,$5)`, userID, statusUploading, statusQueued, statusStarting, statusRunning).Scan(&active); err != nil {
 		return err
 	}
-	limit := s.maxActiveRunsPerUser()
-	if active >= limit {
+	limits, err := s.managedRunLimitsForUser(ctx, userID)
+	if err != nil {
+		return err
+	}
+	limit := limits.MaxActiveRunsPerUser
+	if limit > 0 && active >= limit {
 		return &activeRunLimitError{Limit: limit}
 	}
 	balance, err := s.balanceCents(ctx, userID)
@@ -968,7 +984,7 @@ func parseManagedTasksJSON(raw string, maxTasks int, maxTaskBytes int64) ([]stri
 	if len(tasks) == 0 {
 		return nil, errors.New("at least one task is required")
 	}
-	if len(tasks) > maxTasks {
+	if maxTasks > 0 && len(tasks) > maxTasks {
 		return nil, fmt.Errorf("at most %d tasks are allowed per managed run", maxTasks)
 	}
 	if err := validateManagedTasks(tasks, maxTaskBytes); err != nil {
@@ -1002,6 +1018,39 @@ func (s *Server) maxActiveRunsPerUser() int {
 	return int(managedMaxActiveRunsPerUser)
 }
 
+func (s *Server) managedRunLimitsForUser(ctx context.Context, userID string) (managedRunLimits, error) {
+	limits := managedRunLimits{
+		MaxTasksPerRun:       s.cfg.MaxTasksPerRun,
+		MaxActiveRunsPerUser: s.maxActiveRunsPerUser(),
+		MaxTaskBytes:         s.cfg.MaxTaskBytes,
+	}
+	if limits.MaxTaskBytes <= 0 {
+		limits.MaxTaskBytes = managedMaxTaskBytes
+	}
+	if s.db == nil || strings.TrimSpace(userID) == "" {
+		return limits, nil
+	}
+	var taskOverride, activeOverride sql.NullInt64
+	err := s.db.QueryRow(ctx, `
+SELECT max_tasks_per_run_override, max_active_runs_per_user_override
+FROM users
+WHERE id=$1
+`, userID).Scan(&taskOverride, &activeOverride)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return limits, nil
+	}
+	if err != nil {
+		return managedRunLimits{}, err
+	}
+	if taskOverride.Valid {
+		limits.MaxTasksPerRun = int(taskOverride.Int64)
+	}
+	if activeOverride.Valid {
+		limits.MaxActiveRunsPerUser = int(activeOverride.Int64)
+	}
+	return limits, nil
+}
+
 func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, taskJSON, testerLLMIDsJSON []byte, editorLLMID string, source string, b bundle.Result, reserve int64, liveVerify bool, secretNamesJSON, runtimeNonce, runtimeCiphertext []byte) error {
 	agents, err := s.configuredManagedAgents()
 	if err != nil {
@@ -1013,7 +1062,13 @@ func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, tas
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT id FROM users WHERE id=$1 FOR UPDATE`, userID); err != nil {
+	var activeOverride sql.NullInt64
+	if err := tx.QueryRow(ctx, `
+SELECT max_active_runs_per_user_override
+FROM users
+WHERE id=$1
+FOR UPDATE
+`, userID).Scan(&activeOverride); err != nil {
 		return err
 	}
 	var active int
@@ -1021,7 +1076,10 @@ func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, tas
 		return err
 	}
 	limit := s.maxActiveRunsPerUser()
-	if active >= limit {
+	if activeOverride.Valid {
+		limit = int(activeOverride.Int64)
+	}
+	if limit > 0 && active >= limit {
 		return &activeRunLimitError{Limit: limit}
 	}
 	balance, err := balanceCentsTx(ctx, tx, userID)
@@ -1325,6 +1383,12 @@ func readTextPart(part *multipart.Part, maxBytes int64) (string, error) {
 }
 
 func maxTasksJSONFieldBytes(maxTasks int, maxTaskBytes int64) int64 {
+	if maxTasks <= 0 {
+		return 1 << 20
+	}
+	if maxTaskBytes <= 0 {
+		maxTaskBytes = managedMaxTaskBytes
+	}
 	limit := int64(maxTasks)*maxTaskBytes + 4096
 	if limit < 4096 {
 		return 4096
