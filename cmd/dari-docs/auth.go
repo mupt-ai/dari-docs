@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,32 +11,146 @@ import (
 
 	"github.com/mupt-ai/dari-docs/internal/managed"
 	"github.com/mupt-ai/dari-docs/internal/platformauth"
+	"github.com/spf13/cobra"
 )
 
-func runAuth(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: dari-docs auth [login|logout|status|api-key]")
+func newAuthCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:           "auth",
+		Short:         "Authenticate to the managed service",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return fmt.Errorf("usage: dari-docs auth [login|logout|status|api-key]")
+		},
 	}
-	switch args[0] {
-	case "login":
-		return runAuthLogin(args[1:])
-	case "logout":
-		return runAuthLogout(args[1:])
-	case "status":
-		return runAuthStatus(args[1:])
-	case "api-key", "api-keys", "token":
-		return runAuthToken(args[1:])
-	default:
-		return fmt.Errorf("usage: dari-docs auth [login|logout|status|api-key]")
+	cmd.AddCommand(
+		newAuthLoginCommand(),
+		newAuthLogoutCommand(),
+		newAuthStatusCommand(),
+		newAuthAPIKeyCommand(),
+	)
+	return cmd
+}
+
+func newAuthLoginCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:           "login",
+		Short:         "Log in with a browser",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAuthLogin(cmd.Context())
+		},
 	}
 }
 
-func runAuthLogin(args []string) error {
-	fs := flag.NewFlagSet("dari-docs auth login", flag.ExitOnError)
-	if err := fs.Parse(args); err != nil {
-		return err
+func newAuthLogoutCommand() *cobra.Command {
+	var all bool
+	var interactiveOnly bool
+	var automationOnly bool
+	cmd := &cobra.Command{
+		Use:           "logout",
+		Short:         "Log out or revoke credentials",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAuthLogoutOptions(cmd.Context(), all, interactiveOnly, automationOnly)
+		},
 	}
-	ctx := context.Background()
+	cmd.Flags().BoolVar(&all, "all", false, "revoke all managed service credentials for this account")
+	cmd.Flags().BoolVar(&interactiveOnly, "interactive-only", false, "with --all, revoke only browser-login sessions")
+	cmd.Flags().BoolVar(&automationOnly, "automation-only", false, "with --all, revoke only API keys")
+	return cmd
+}
+
+func newAuthStatusCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:           "status",
+		Short:         "Show authenticated account",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAuthStatus(cmd.Context())
+		},
+	}
+}
+
+func newAuthAPIKeyCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:           "api-key",
+		Aliases:       []string{"api-keys", "token"},
+		Short:         "Manage API keys",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return fmt.Errorf("usage: dari-docs auth api-key [create|list|revoke]")
+		},
+	}
+	cmd.AddCommand(
+		newAuthTokenCreateCommand(),
+		newAuthTokenListCommand(),
+		newAuthTokenRevokeCommand(),
+	)
+	return cmd
+}
+
+func newAuthTokenCreateCommand() *cobra.Command {
+	var name string
+	var scopes []string
+	var expiresIn string
+	cmd := &cobra.Command{
+		Use:           "create",
+		Short:         "Create an API key",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAuthTokenCreate(cmd.Context(), name, scopes, expiresIn)
+		},
+	}
+	cmd.Flags().StringVar(&name, "name", "", "API key name, for example github-actions")
+	cmd.Flags().StringArrayVar(&scopes, "scope", nil, "API key scope; repeatable (default: managed:read, managed:check, and managed:optimize)")
+	cmd.Flags().StringVar(&expiresIn, "expires-in", "", "optional expiration such as 90d or 24h")
+	return cmd
+}
+
+func newAuthTokenListCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:           "list",
+		Short:         "List API keys",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAuthTokenList(cmd.Context())
+		},
+	}
+}
+
+func newAuthTokenRevokeCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:           "revoke <api-key-id>",
+		Short:         "Revoke an API key",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAuthTokenRevoke(cmd.Context(), args[0])
+		},
+	}
+}
+
+func runAuthLogout(args []string) error {
+	cmd := newAuthLogoutCommand()
+	cmd.SetArgs(args)
+	return cmd.Execute()
+}
+
+func runAuthLogin(ctx context.Context) error {
 	if token, err := managed.LoadToken(managed.DefaultBaseURL); err != nil {
 		return err
 	} else if strings.TrimSpace(token) != "" {
@@ -79,17 +192,7 @@ func exchangeManagedBrowserLogin(ctx context.Context) (managed.DariExchangeRespo
 	return client.ExchangeDariToken(ctx, session.AccessToken)
 }
 
-func runAuthLogout(args []string) error {
-	fs := flag.NewFlagSet("dari-docs auth logout", flag.ExitOnError)
-	var all bool
-	var interactiveOnly bool
-	var automationOnly bool
-	fs.BoolVar(&all, "all", false, "revoke all managed service credentials for this account")
-	fs.BoolVar(&interactiveOnly, "interactive-only", false, "with --all, revoke only browser-login sessions")
-	fs.BoolVar(&automationOnly, "automation-only", false, "with --all, revoke only API keys")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
+func runAuthLogoutOptions(ctx context.Context, all bool, interactiveOnly bool, automationOnly bool) error {
 	if interactiveOnly && automationOnly {
 		return fmt.Errorf("--interactive-only cannot be combined with --automation-only")
 	}
@@ -104,7 +207,7 @@ func runAuthLogout(args []string) error {
 		case automationOnly:
 			kind = "automation"
 		}
-		return runAuthLogoutAll(context.Background(), kind)
+		return runAuthLogoutAll(ctx, kind)
 	}
 	auth, err := managed.LoadAuthToken(managed.DefaultBaseURL)
 	if err != nil {
@@ -115,7 +218,7 @@ func runAuthLogout(args []string) error {
 		return nil
 	}
 	client := managed.NewWithAuthToken(managed.DefaultBaseURL, auth)
-	if err := client.Logout(context.Background()); err != nil {
+	if err := client.Logout(ctx); err != nil {
 		var httpErr *managed.HTTPError
 		var invalidEnv *managed.InvalidEnvTokenError
 		if errors.As(err, &invalidEnv) {
@@ -200,16 +303,12 @@ func logoutAllMessage(kind string) string {
 	}
 }
 
-func runAuthStatus(args []string) error {
-	fs := flag.NewFlagSet("dari-docs auth status", flag.ExitOnError)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
+func runAuthStatus(ctx context.Context) error {
 	client, auth, err := managedClientWithAuth()
 	if err != nil {
 		return err
 	}
-	me, err := client.Me(context.Background())
+	me, err := client.Me(ctx)
 	if err != nil {
 		return err
 	}
@@ -229,33 +328,7 @@ func runAuthStatus(args []string) error {
 	return nil
 }
 
-func runAuthToken(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: dari-docs auth api-key [create|list|revoke]")
-	}
-	switch args[0] {
-	case "create":
-		return runAuthTokenCreate(args[1:])
-	case "list":
-		return runAuthTokenList(args[1:])
-	case "revoke":
-		return runAuthTokenRevoke(args[1:])
-	default:
-		return fmt.Errorf("usage: dari-docs auth api-key [create|list|revoke]")
-	}
-}
-
-func runAuthTokenCreate(args []string) error {
-	fs := flag.NewFlagSet("dari-docs auth api-key create", flag.ExitOnError)
-	var name string
-	var scopes repeated
-	var expiresIn string
-	fs.StringVar(&name, "name", "", "API key name, for example github-actions")
-	fs.Var(&scopes, "scope", "API key scope; repeatable (default: managed:read, managed:check, and managed:optimize)")
-	fs.StringVar(&expiresIn, "expires-in", "", "optional expiration such as 90d or 24h")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
+func runAuthTokenCreate(ctx context.Context, name string, scopes []string, expiresIn string) error {
 	expiresAt, err := parseExpiresIn(expiresIn)
 	if err != nil {
 		return err
@@ -268,7 +341,7 @@ func runAuthTokenCreate(args []string) error {
 	if len(tokenScopes) == 0 {
 		tokenScopes = []string{"managed:read", "managed:check", "managed:optimize"}
 	}
-	resp, err := client.CreateAuthToken(context.Background(), managed.TokenCreateRequest{
+	resp, err := client.CreateAuthToken(ctx, managed.TokenCreateRequest{
 		Name:      name,
 		Scopes:    tokenScopes,
 		ExpiresAt: expiresAt,
@@ -286,16 +359,12 @@ func runAuthTokenCreate(args []string) error {
 	return nil
 }
 
-func runAuthTokenList(args []string) error {
-	fs := flag.NewFlagSet("dari-docs auth api-key list", flag.ExitOnError)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
+func runAuthTokenList(ctx context.Context) error {
 	client, _, err := managedClientWithAuth()
 	if err != nil {
 		return err
 	}
-	resp, err := client.ListAuthTokens(context.Background())
+	resp, err := client.ListAuthTokens(ctx)
 	if err != nil {
 		return err
 	}
@@ -318,20 +387,12 @@ func runAuthTokenList(args []string) error {
 	return tw.Flush()
 }
 
-func runAuthTokenRevoke(args []string) error {
-	fs := flag.NewFlagSet("dari-docs auth api-key revoke", flag.ExitOnError)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: dari-docs auth api-key revoke <api-key-id>")
-	}
+func runAuthTokenRevoke(ctx context.Context, tokenID string) error {
 	client, _, err := managedClientWithAuth()
 	if err != nil {
 		return err
 	}
-	tokenID := fs.Arg(0)
-	if err := client.RevokeAuthToken(context.Background(), tokenID); err != nil {
+	if err := client.RevokeAuthToken(ctx, tokenID); err != nil {
 		return err
 	}
 	fmt.Printf("Revoked API key %s\n", tokenID)

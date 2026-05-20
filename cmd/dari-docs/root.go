@@ -21,22 +21,28 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(
 		newCheckCommand(),
 		newOptimizeCommand(),
-		passthroughCommand("init [repo]", "Extract or deploy bundled agents", runInit),
+		newInitCommand(),
 		newAuthCommand(),
 		newBillingCommand(),
 		newAgentsCommand(),
 		newRunsCommand(),
-		&cobra.Command{
-			Use:   "version",
-			Short: "Print version",
-			Args:  cobra.NoArgs,
-			RunE: func(cmd *cobra.Command, args []string) error {
-				cmd.Println(versionLine())
-				return nil
-			},
-		},
+		newVersionCommand(),
 	)
 	return root
+}
+
+func newVersionCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:           "version",
+		Short:         "Print version",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.Println(versionLine())
+			return nil
+		},
+	}
 }
 
 func normalizeRootArgs(args []string) []string {
@@ -54,63 +60,4 @@ func normalizeRootArgs(args []string) []string {
 		out = append(out, args...)
 		return out
 	}
-}
-
-func passthroughCommand(use, short string, run func([]string) error) *cobra.Command {
-	return &cobra.Command{
-		Use:                use,
-		Short:              short,
-		DisableFlagParsing: true,
-		Args:               cobra.ArbitraryArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if wantsCommandHelp(args) {
-				return cmd.Help()
-			}
-			return run(args)
-		},
-	}
-}
-
-func wantsCommandHelp(args []string) bool {
-	for _, arg := range args {
-		if arg == "-h" || arg == "--help" {
-			return true
-		}
-	}
-	return false
-}
-
-func newAuthCommand() *cobra.Command {
-	cmd := passthroughCommand("auth", "Authenticate to the managed service", runAuth)
-	login := passthroughCommand("login", "Log in with a browser", runAuthLogin)
-	logout := passthroughCommand("logout", "Log out or revoke credentials", runAuthLogout)
-	status := passthroughCommand("status", "Show authenticated account", runAuthStatus)
-	apiKey := passthroughCommand("api-key", "Manage API keys", runAuthToken)
-	apiKey.Aliases = []string{"api-keys", "token"}
-	apiKey.AddCommand(
-		passthroughCommand("create", "Create an API key", runAuthTokenCreate),
-		passthroughCommand("list", "List API keys", runAuthTokenList),
-		passthroughCommand("revoke <api-key-id>", "Revoke an API key", runAuthTokenRevoke),
-	)
-	cmd.AddCommand(login, logout, status, apiKey)
-	return cmd
-}
-
-func newAgentsCommand() *cobra.Command {
-	cmd := passthroughCommand("agents", "Agent helper commands", runAgents)
-	cmd.AddCommand(passthroughCommand("deploy", "Deploy or select docs agents", func(args []string) error {
-		return runAgents(append([]string{"deploy"}, args...))
-	}))
-	return cmd
-}
-
-func newRunsCommand() *cobra.Command {
-	cmd := passthroughCommand("runs", "Inspect managed runs", runRuns)
-	cmd.AddCommand(
-		passthroughCommand("status <run-id>", "Show run status", runRunsStatus),
-		passthroughCommand("wait <run-id>", "Wait for a run to finish", runRunsWait),
-		passthroughCommand("download <run-id> [repo]", "Download run artifacts", runRunsDownload),
-		passthroughCommand("apply <run-id> [repo]", "Apply run artifacts", runRunsApply),
-	)
-	return cmd
 }

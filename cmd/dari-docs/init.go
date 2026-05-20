@@ -2,8 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,34 +12,62 @@ import (
 
 	"github.com/mupt-ai/dari-docs/internal/agenttemplates"
 	appconfig "github.com/mupt-ai/dari-docs/internal/config"
+	"github.com/spf13/cobra"
 )
 
+type initOptions struct {
+	RepoArg               string
+	Deploy                bool
+	APIKeyEnv             string
+	APIKey                string
+	LLMAPIKeySecret       string
+	AnthropicAPIKeySecret string
+	OpenAIAPIKeySecret    string
+	AgentsDir             string
+}
+
+func newInitCommand() *cobra.Command {
+	opts := initOptions{APIKeyEnv: "DARI_API_KEY"}
+	cmd := &cobra.Command{
+		Use:           "init [repo]",
+		Short:         "Extract or deploy bundled agents",
+		Args:          cobra.ArbitraryArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				opts.RepoArg = args[0]
+			}
+			return runInitWithOptions(cmd.Context(), opts)
+		},
+	}
+	cmd.Flags().BoolVar(&opts.Deploy, "deploy", false, "deploy bundled agents into the current Dari org")
+	cmd.Flags().StringVar(&opts.APIKeyEnv, "api-key-env", opts.APIKeyEnv, "env var containing Dari API key for deploy")
+	cmd.Flags().StringVar(&opts.APIKey, "api-key", "", "Dari API key for deploy (prefer --api-key-env)")
+	cmd.Flags().StringVar(&opts.LLMAPIKeySecret, "llm-api-key-secret", "", "optional stored Dari credential name for BYOK LLM at agent publish time; only valid when all LLM options use one provider")
+	cmd.Flags().StringVar(&opts.AnthropicAPIKeySecret, "anthropic-api-key-secret", "", "optional stored Dari credential name for Anthropic BYOK LLM at agent publish time")
+	cmd.Flags().StringVar(&opts.OpenAIAPIKeySecret, "openai-api-key-secret", "", "optional stored Dari credential name for OpenAI BYOK LLM at agent publish time")
+	cmd.Flags().StringVar(&opts.AgentsDir, "agents-dir", "", "where to extract agent templates (default: <repo>/.dari-docs/agents)")
+	return cmd
+}
+
 func runInit(args []string) error {
-	fs := flag.NewFlagSet("dari-docs init", flag.ExitOnError)
-	var deploy bool
-	var apiKeyEnv, apiKey, llmAPIKeySecret, anthropicAPIKeySecret, openAIAPIKeySecret, agentsDir string
-	fs.BoolVar(&deploy, "deploy", false, "deploy bundled agents into the current Dari org")
-	fs.StringVar(&apiKeyEnv, "api-key-env", "DARI_API_KEY", "env var containing Dari API key for deploy")
-	fs.StringVar(&apiKey, "api-key", "", "Dari API key for deploy (prefer --api-key-env)")
-	fs.StringVar(&llmAPIKeySecret, "llm-api-key-secret", "", "optional stored Dari credential name for BYOK LLM at agent publish time; only valid when all LLM options use one provider")
-	fs.StringVar(&anthropicAPIKeySecret, "anthropic-api-key-secret", "", "optional stored Dari credential name for Anthropic BYOK LLM at agent publish time")
-	fs.StringVar(&openAIAPIKeySecret, "openai-api-key-secret", "", "optional stored Dari credential name for OpenAI BYOK LLM at agent publish time")
-	fs.StringVar(&agentsDir, "agents-dir", "", "where to extract agent templates (default: <repo>/.dari-docs/agents)")
-	repoArg := "."
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		repoArg = args[0]
-		args = args[1:]
-	}
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() > 0 {
-		repoArg = fs.Arg(0)
+	cmd := newInitCommand()
+	cmd.SetArgs(args)
+	return cmd.Execute()
+}
+
+func runInitWithOptions(ctx context.Context, opts initOptions) error {
+	_ = ctx
+	repoArg := opts.RepoArg
+	if repoArg == "" {
+		repoArg = "."
 	}
 	absRepo, err := filepath.Abs(repoArg)
 	if err != nil {
 		return err
 	}
+	agentsDir := opts.AgentsDir
 	if agentsDir == "" {
 		agentsDir = filepath.Join(absRepo, ".dari-docs", "agents")
 	}
@@ -49,23 +77,23 @@ func runInit(args []string) error {
 	fmt.Printf("Extracted bundled agents to %s\n", agentsDir)
 
 	providerSecrets := map[string]string{}
-	if anthropicAPIKeySecret != "" {
-		providerSecrets["anthropic"] = anthropicAPIKeySecret
+	if opts.AnthropicAPIKeySecret != "" {
+		providerSecrets["anthropic"] = opts.AnthropicAPIKeySecret
 	}
-	if openAIAPIKeySecret != "" {
-		providerSecrets["openai"] = openAIAPIKeySecret
+	if opts.OpenAIAPIKeySecret != "" {
+		providerSecrets["openai"] = opts.OpenAIAPIKeySecret
 	}
-	if llmAPIKeySecret != "" && len(providerSecrets) > 0 {
+	if opts.LLMAPIKeySecret != "" && len(providerSecrets) > 0 {
 		return fmt.Errorf("--llm-api-key-secret cannot be combined with provider-specific LLM key secret flags")
 	}
 
-	cfg := appconfig.Config{AgentsDir: agentsDir, LLMMode: "platform-managed", LLMAPIKeySecret: llmAPIKeySecret}
-	if llmAPIKeySecret != "" {
+	cfg := appconfig.Config{AgentsDir: agentsDir, LLMMode: "platform-managed", LLMAPIKeySecret: opts.LLMAPIKeySecret}
+	if opts.LLMAPIKeySecret != "" {
 		cfg.LLMMode = "byok-publish-time"
-		if err := setLLMAPIKeySecret(filepath.Join(agentsDir, "docs-user-tester-agent", "dari.yml"), llmAPIKeySecret); err != nil {
+		if err := setLLMAPIKeySecret(filepath.Join(agentsDir, "docs-user-tester-agent", "dari.yml"), opts.LLMAPIKeySecret); err != nil {
 			return err
 		}
-		if err := setLLMAPIKeySecret(filepath.Join(agentsDir, "docs-editor-agent", "dari.yml"), llmAPIKeySecret); err != nil {
+		if err := setLLMAPIKeySecret(filepath.Join(agentsDir, "docs-editor-agent", "dari.yml"), opts.LLMAPIKeySecret); err != nil {
 			return err
 		}
 	}
@@ -79,12 +107,13 @@ func runInit(args []string) error {
 			return err
 		}
 	}
-	if deploy {
-		if apiKey == "" && apiKeyEnv != "" {
-			apiKey = os.Getenv(apiKeyEnv)
+	if opts.Deploy {
+		apiKey := opts.APIKey
+		if apiKey == "" && opts.APIKeyEnv != "" {
+			apiKey = os.Getenv(opts.APIKeyEnv)
 		}
 		if apiKey == "" {
-			return fmt.Errorf("missing Dari API key for deploy; set %s or pass --api-key", apiKeyEnv)
+			return fmt.Errorf("missing Dari API key for deploy; set %s or pass --api-key", opts.APIKeyEnv)
 		}
 		env := append(os.Environ(), "DARI_API_URL=https://api.dari.dev", "DARI_API_KEY="+apiKey)
 		ensureCredential(env, "DARI_DOCS_RUNTIME_SECRETS_JSON", "{}")
@@ -105,7 +134,7 @@ func runInit(args []string) error {
 		return err
 	}
 	fmt.Printf("Wrote %s\n", appconfig.Path(absRepo))
-	if !deploy {
+	if !opts.Deploy {
 		fmt.Println("Run `dari-docs init --deploy` to deploy these agents into your Dari org.")
 	}
 	return nil

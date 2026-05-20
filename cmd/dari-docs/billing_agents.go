@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"os"
 
@@ -86,16 +85,43 @@ func runBillingCheckout(ctx context.Context, amount string) error {
 	return nil
 }
 
-func runAgents(args []string) error {
-	if len(args) == 0 || args[0] != "deploy" {
-		return fmt.Errorf("managed mode uses hosted Dari Docs agents automatically. For self-managed agents, run `dari-docs init --deploy`")
+func newAgentsCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:           "agents",
+		Short:         "Agent helper commands",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return fmt.Errorf("managed mode uses hosted Dari Docs agents automatically. For self-managed agents, run `dari-docs init --deploy`")
+		},
 	}
-	fs := flag.NewFlagSet("dari-docs agents deploy", flag.ExitOnError)
+	cmd.AddCommand(newAgentsDeployCommand())
+	return cmd
+}
+
+func newAgentsDeployCommand() *cobra.Command {
 	var managedMode bool
-	fs.BoolVar(&managedMode, "managed", false, "use hosted Dari Docs managed agents")
-	if err := fs.Parse(args[1:]); err != nil {
-		return err
+	cmd := &cobra.Command{
+		Use:           "deploy [repo]",
+		Short:         "Deploy or select docs agents",
+		Args:          cobra.ArbitraryArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAgentsDeploy(managedMode)
+		},
 	}
+	cmd.Flags().BoolVar(&managedMode, "managed", false, "use hosted Dari Docs managed agents")
+	return cmd
+}
+
+func runAgents(args []string) error {
+	cmd := newAgentsCommand()
+	cmd.SetArgs(args)
+	return cmd.Execute()
+}
+
+func runAgentsDeploy(managedMode bool) error {
 	if !managedMode {
 		return fmt.Errorf("for self-managed agents, run `dari-docs init --deploy`")
 	}

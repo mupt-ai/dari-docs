@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"flag"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -11,39 +9,103 @@ import (
 	"time"
 
 	"github.com/mupt-ai/dari-docs/internal/managed"
+	"github.com/spf13/cobra"
 )
 
-func runRuns(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: dari-docs runs [status|wait|download|apply]")
+func newRunsCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:           "runs",
+		Short:         "Inspect managed runs",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return fmt.Errorf("usage: dari-docs runs [status|wait|download|apply]")
+		},
 	}
-	switch args[0] {
-	case "status":
-		return runRunsStatus(args[1:])
-	case "wait":
-		return runRunsWait(args[1:])
-	case "download":
-		return runRunsDownload(args[1:])
-	case "apply":
-		return runRunsApply(args[1:])
-	default:
-		return fmt.Errorf("usage: dari-docs runs [status|wait|download|apply]")
+	cmd.AddCommand(
+		newRunsStatusCommand(),
+		newRunsWaitCommand(),
+		newRunsDownloadCommand(),
+		newRunsApplyCommand(),
+	)
+	return cmd
+}
+
+func newRunsStatusCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:           "status <run-id>",
+		Short:         "Show run status",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runRunsStatus(cmd.Context(), args[0])
+		},
 	}
 }
 
-func runRunsStatus(args []string) error {
-	fs := flag.NewFlagSet("dari-docs runs status", flag.ExitOnError)
-	if err := fs.Parse(args); err != nil {
-		return err
+func newRunsWaitCommand() *cobra.Command {
+	var timeoutMinutes int
+	cmd := &cobra.Command{
+		Use:           "wait <run-id>",
+		Short:         "Wait for a run to finish",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runRunsWait(cmd.Context(), args[0], timeoutMinutes)
+		},
 	}
-	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: dari-docs runs status <run-id>")
+	cmd.Flags().IntVar(&timeoutMinutes, "timeout-minutes", 30, "managed CLI wait timeout in minutes")
+	return cmd
+}
+
+func newRunsDownloadCommand() *cobra.Command {
+	var outDir string
+	cmd := &cobra.Command{
+		Use:           "download <run-id> [repo]",
+		Short:         "Download run artifacts",
+		Args:          cobra.RangeArgs(1, 2),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repo := "."
+			if len(args) == 2 {
+				repo = args[1]
+			}
+			return runRunsDownload(cmd.Context(), args[0], repo, outDir)
+		},
 	}
+	cmd.Flags().StringVar(&outDir, "out", "", "output directory (default: <repo>/.dari-docs)")
+	return cmd
+}
+
+func newRunsApplyCommand() *cobra.Command {
+	var outDir string
+	cmd := &cobra.Command{
+		Use:           "apply <run-id> [repo]",
+		Short:         "Apply run artifacts",
+		Args:          cobra.RangeArgs(1, 2),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repo := "."
+			if len(args) == 2 {
+				repo = args[1]
+			}
+			return runRunsApply(cmd.Context(), args[0], repo, outDir)
+		},
+	}
+	cmd.Flags().StringVar(&outDir, "out", "", "output directory (default: <repo>/.dari-docs)")
+	return cmd
+}
+
+func runRunsStatus(ctx context.Context, runID string) error {
 	client, err := managedClientWithToken()
 	if err != nil {
 		return err
 	}
-	status, err := client.GetRun(context.Background(), fs.Arg(0))
+	status, err := client.GetRun(ctx, runID)
 	if err != nil {
 		return err
 	}
@@ -51,16 +113,12 @@ func runRunsStatus(args []string) error {
 	return nil
 }
 
-func runRunsWait(args []string) error {
-	parsed, err := parseRunsWaitArgs(args)
-	if err != nil {
-		return err
-	}
+func runRunsWait(ctx context.Context, runID string, timeoutMinutes int) error {
 	client, err := managedClientWithToken()
 	if err != nil {
 		return err
 	}
-	status, err := waitForManagedRun(context.Background(), client, parsed.RunID, time.Duration(parsed.TimeoutMinutes)*time.Minute)
+	status, err := waitForManagedRun(ctx, client, runID, time.Duration(timeoutMinutes)*time.Minute)
 	if err != nil {
 		return err
 	}
@@ -85,40 +143,34 @@ type runsWaitArgs struct {
 }
 
 func parseRunsWaitArgs(args []string) (runsWaitArgs, error) {
-	var err error
 	parsed := runsWaitArgs{TimeoutMinutes: 30}
-	args, parsed.TimeoutMinutes, err = extractTimeoutMinutesFlag(args, parsed.TimeoutMinutes)
+	remaining, timeoutMinutes, err := extractTimeoutMinutesFlag(args, parsed.TimeoutMinutes)
 	if err != nil {
 		return runsWaitArgs{}, err
 	}
-	fs := flag.NewFlagSet("dari-docs runs wait", flag.ContinueOnError)
-	var flagOutput bytes.Buffer
-	fs.SetOutput(&flagOutput)
-	fs.IntVar(&parsed.TimeoutMinutes, "timeout-minutes", parsed.TimeoutMinutes, "managed CLI wait timeout in minutes")
-	if err := fs.Parse(args); err != nil {
-		return runsWaitArgs{}, err
-	}
-	if fs.NArg() != 1 {
+	parsed.TimeoutMinutes = timeoutMinutes
+	if len(remaining) != 1 {
 		return runsWaitArgs{}, fmt.Errorf("usage: dari-docs runs wait <run-id>")
 	}
-	parsed.RunID = fs.Arg(0)
+	parsed.RunID = remaining[0]
 	return parsed, nil
 }
 
-func runRunsDownload(args []string) error {
-	runID, _, outDir, err := parseRunArtifactArgs("download", args)
+func runRunsDownload(ctx context.Context, runID string, repo string, outDir string) error {
+	repoRoot, outDir, err := resolveRunArtifactPaths(repo, outDir)
 	if err != nil {
 		return err
 	}
+	_ = repoRoot
 	client, err := managedClientWithToken()
 	if err != nil {
 		return err
 	}
-	status, err := client.GetRun(context.Background(), runID)
+	status, err := client.GetRun(ctx, runID)
 	if err != nil {
 		return err
 	}
-	updatedDir, err := downloadManagedRunArtifacts(context.Background(), client, status, outDir)
+	updatedDir, err := downloadManagedRunArtifacts(ctx, client, status, outDir)
 	if err != nil {
 		return err
 	}
@@ -129,8 +181,8 @@ func runRunsDownload(args []string) error {
 	return nil
 }
 
-func runRunsApply(args []string) error {
-	runID, repoRoot, outDir, err := parseRunArtifactArgs("apply", args)
+func runRunsApply(ctx context.Context, runID string, repo string, outDir string) error {
+	repoRoot, outDir, err := resolveRunArtifactPaths(repo, outDir)
 	if err != nil {
 		return err
 	}
@@ -138,15 +190,29 @@ func runRunsApply(args []string) error {
 	if err != nil {
 		return err
 	}
-	status, err := client.GetRun(context.Background(), runID)
+	status, err := client.GetRun(ctx, runID)
 	if err != nil {
 		return err
 	}
-	if err := applyManagedRunArtifacts(context.Background(), client, status, repoRoot, outDir); err != nil {
+	if err := applyManagedRunArtifacts(ctx, client, status, repoRoot, outDir); err != nil {
 		return err
 	}
 	fmt.Printf("Feedback: %s\n", filepath.Join(outDir, "aggregate-feedback.md"))
 	return nil
+}
+
+func resolveRunArtifactPaths(repo string, outDir string) (string, string, error) {
+	if repo == "" {
+		repo = "."
+	}
+	absRepo, err := filepath.Abs(repo)
+	if err != nil {
+		return "", "", err
+	}
+	if outDir == "" {
+		outDir = filepath.Join(absRepo, ".dari-docs")
+	}
+	return absRepo, outDir, nil
 }
 
 func parseRunArtifactArgs(command string, args []string) (string, string, string, error) {
@@ -163,12 +229,9 @@ func parseRunArtifactArgs(command string, args []string) (string, string, string
 	if len(args) == 2 {
 		repo = args[1]
 	}
-	absRepo, err := filepath.Abs(repo)
+	absRepo, outDir, err := resolveRunArtifactPaths(repo, outDir)
 	if err != nil {
 		return "", "", "", err
-	}
-	if outDir == "" {
-		outDir = filepath.Join(absRepo, ".dari-docs")
 	}
 	return args[0], absRepo, outDir, nil
 }
