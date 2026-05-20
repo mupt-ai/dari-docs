@@ -19,8 +19,8 @@ func newRootCommand() *cobra.Command {
 	root.SetVersionTemplate(versionLine() + "\n")
 
 	root.AddCommand(
-		newCheckCommand(),
-		newOptimizeCommand(),
+		newCheckOptimizeCommand("check"),
+		newCheckOptimizeCommand("optimize"),
 		newInitCommand(),
 		newAuthCommand(),
 		newBillingCommand(),

@@ -50,14 +50,6 @@ type checkOptimizeOptions struct {
 	TimeoutMinutes int
 }
 
-func newCheckCommand() *cobra.Command {
-	return newCheckOptimizeCommand("check")
-}
-
-func newOptimizeCommand() *cobra.Command {
-	return newCheckOptimizeCommand("optimize")
-}
-
 func newCheckOptimizeCommand(command string) *cobra.Command {
 	opts := defaultCheckOptimizeOptions(command)
 	cmd := &cobra.Command{
