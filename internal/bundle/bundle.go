@@ -11,7 +11,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -81,13 +80,6 @@ var defaultExts = map[string]bool{
 var defaultNames = map[string]bool{
 	"mint.json": true, "docs.json": true, "openapi.json": true, "openapi.yaml": true,
 	"README": true, "README.md": true, "llms.txt": true, "llms-full.txt": true,
-}
-
-type compiledPattern struct {
-	raw      string
-	rx       *regexp.Regexp
-	basename bool
-	prefix   string
 }
 
 func Create(repoRoot, outPath string) (Result, error) {
@@ -204,40 +196,34 @@ func CreateWithOptions(repoRoot, outPath string, opts CreateOptions) (Result, er
 	return Result{Path: outPath, Manifest: manifest, SHA256: hex.EncodeToString(hash.Sum(nil)), Bytes: info.Size(), MaxFileBytes: opts.MaxFileBytes, Skipped: skipped}, nil
 }
 
-func normalizeCreateOptions(opts CreateOptions) (CreateOptions, []compiledPattern, []compiledPattern, error) {
+func normalizeCreateOptions(opts CreateOptions) (CreateOptions, []string, []string, error) {
 	if opts.MaxFileBytes <= 0 {
 		opts.MaxFileBytes = DefaultMaxFileBytes
 	}
-	include, err := compilePatterns(opts.Include)
+	include, err := normalizePatterns(opts.Include)
 	if err != nil {
 		return CreateOptions{}, nil, nil, err
 	}
-	exclude, err := compilePatterns(opts.Exclude)
+	exclude, err := normalizePatterns(opts.Exclude)
 	if err != nil {
 		return CreateOptions{}, nil, nil, err
 	}
 	return opts, include, exclude, nil
 }
 
-func compilePatterns(patterns []string) ([]compiledPattern, error) {
-	compiled := make([]compiledPattern, 0, len(patterns))
+func normalizePatterns(patterns []string) ([]string, error) {
+	normalized := make([]string, 0, len(patterns))
 	for _, pattern := range patterns {
 		pattern = normalizePattern(pattern)
 		if pattern == "" {
 			continue
 		}
-		cp := compiledPattern{raw: pattern, basename: !strings.Contains(pattern, "/")}
-		if strings.HasSuffix(pattern, "/**") {
-			cp.prefix = strings.TrimSuffix(pattern, "/**")
-		}
-		rx, err := regexp.Compile("^" + globRegexp(pattern) + "$")
-		if err != nil {
+		if _, err := path.Match(pattern, ""); err != nil {
 			return nil, fmt.Errorf("invalid bundle glob %q: %w", pattern, err)
 		}
-		cp.rx = rx
-		compiled = append(compiled, cp)
+		normalized = append(normalized, pattern)
 	}
-	return compiled, nil
+	return normalized, nil
 }
 
 func normalizePattern(pattern string) string {
@@ -254,47 +240,50 @@ func normalizePattern(pattern string) string {
 	return pattern
 }
 
-func globRegexp(pattern string) string {
-	var sb strings.Builder
-	for i := 0; i < len(pattern); i++ {
-		ch := pattern[i]
-		switch ch {
-		case '*':
-			if i+1 < len(pattern) && pattern[i+1] == '*' {
-				if i+2 < len(pattern) && pattern[i+2] == '/' {
-					sb.WriteString("(?:.*/)?")
-					i += 2
-				} else {
-					sb.WriteString(".*")
-					i++
-				}
-			} else {
-				sb.WriteString("[^/]*")
-			}
-		case '?':
-			sb.WriteString("[^/]")
-		default:
-			sb.WriteString(regexp.QuoteMeta(string(ch)))
-		}
-	}
-	return sb.String()
-}
-
-func matchesAny(patterns []compiledPattern, rel string) bool {
+func matchesAny(patterns []string, rel string) bool {
 	rel = strings.TrimPrefix(filepath.ToSlash(rel), "./")
 	for _, pattern := range patterns {
-		if pattern.prefix != "" && (rel == pattern.prefix || strings.HasPrefix(rel, pattern.prefix+"/")) {
-			return true
-		}
 		target := rel
-		if pattern.basename {
+		if !strings.Contains(pattern, "/") {
 			target = path.Base(rel)
 		}
-		if pattern.rx.MatchString(target) {
+		if matchPattern(pattern, target) {
 			return true
 		}
 	}
 	return false
+}
+
+func matchPattern(pattern, name string) bool {
+	if !strings.Contains(pattern, "**") {
+		matched, _ := path.Match(pattern, name)
+		return matched
+	}
+	return matchDoubleStarPattern(strings.Split(pattern, "/"), strings.Split(name, "/"))
+}
+
+func matchDoubleStarPattern(patternParts, nameParts []string) bool {
+	for len(patternParts) > 0 {
+		part := patternParts[0]
+		patternParts = patternParts[1:]
+		if part == "**" {
+			for i := 0; i <= len(nameParts); i++ {
+				if matchDoubleStarPattern(patternParts, nameParts[i:]) {
+					return true
+				}
+			}
+			return false
+		}
+		if len(nameParts) == 0 {
+			return false
+		}
+		matched, _ := path.Match(part, nameParts[0])
+		if !matched {
+			return false
+		}
+		nameParts = nameParts[1:]
+	}
+	return len(nameParts) == 0
 }
 
 func WriteSummary(w io.Writer, r Result) {
