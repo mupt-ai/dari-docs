@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/mupt-ai/dari-docs/internal/bundle"
 	"github.com/mupt-ai/dari-docs/internal/dari"
 	"github.com/mupt-ai/dari-docs/internal/runner"
@@ -91,6 +92,8 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 	var (
 		mode               string
 		tasks              []string
+		runRequestID       string
+		runRequestIDSeen   bool
 		liveVerify         bool
 		runtimeSecretJSON  string
 		runtimeSecretNames []string
@@ -148,6 +151,31 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 			if err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
+			}
+		case "run_request_id":
+			if runRequestIDSeen {
+				writeError(w, http.StatusBadRequest, "run_request_id field must be sent once")
+				return
+			}
+			runRequestIDSeen = true
+			v, err := readTextPart(part, 128)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "run_request_id field is too large")
+				return
+			}
+			runRequestID = strings.TrimSpace(v)
+			if err := validateManagedRunRequestID(runRequestID); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			if s.db != nil {
+				if existing, ok, err := s.loadRunByRequest(r.Context(), u.ID, runRequestID); err != nil {
+					writeLoggedError(w, http.StatusInternalServerError, "could not load managed run", err)
+					return
+				} else if ok {
+					writeJSON(w, http.StatusAccepted, map[string]string{"run_id": existing.ID, "status": existing.Status})
+					return
+				}
 			}
 		case "live_verify":
 			v, err := readTextPart(part, 16)
@@ -213,6 +241,10 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 				return
 			}
 		case "source_files_json":
+			if !runRequestIDSeen {
+				writeError(w, http.StatusBadRequest, "run_request_id must be sent before source_files_json")
+				return
+			}
 			if sourceRoot != "" {
 				writeError(w, http.StatusBadRequest, "source_files_json must be sent before source_file")
 				return
@@ -236,6 +268,10 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 				return
 			}
 		case "source_file":
+			if !runRequestIDSeen {
+				writeError(w, http.StatusBadRequest, "run_request_id must be sent before source_file")
+				return
+			}
 			if mode == "" {
 				writeError(w, http.StatusBadRequest, "mode must be sent before source_file")
 				return
@@ -270,6 +306,10 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 			}
 			sourceFilesSeen++
 		case "bundle":
+			if !runRequestIDSeen {
+				writeError(w, http.StatusBadRequest, "run_request_id must be sent before bundle")
+				return
+			}
 			if sourceRoot != "" || len(sourcePaths) > 0 || len(sourceInclude) > 0 || len(sourceExclude) > 0 {
 				writeError(w, http.StatusBadRequest, "send either bundle or source files, not both")
 				return
@@ -311,6 +351,10 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	if tasks == nil {
 		writeError(w, http.StatusBadRequest, "tasks_json must be a JSON string array")
+		return
+	}
+	if !runRequestIDSeen {
+		writeError(w, http.StatusBadRequest, "run_request_id must not be empty")
 		return
 	}
 	if sourceRoot != "" || len(sourcePaths) > 0 {
@@ -370,20 +414,6 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		editorLLMID = defaultManagedEditorLLMID()
 	}
 	reserve = reserveCentsForRun(mode, len(tasks), len(testerLLMIDs), s.cfg)
-	if err := s.preflightRun(r.Context(), u.ID, reserve); err != nil {
-		var activeErr *activeRunLimitError
-		if errors.As(err, &activeErr) {
-			writeError(w, http.StatusConflict, err.Error())
-			return
-		}
-		var creditErr *insufficientCreditsError
-		if errors.As(err, &creditErr) {
-			writeError(w, http.StatusPaymentRequired, creditErr.Error())
-			return
-		}
-		writeLoggedError(w, http.StatusInternalServerError, "could not reserve managed run", err)
-		return
-	}
 	runID := "run_" + randomToken(18)
 	taskJSON, err := json.Marshal(tasks)
 	if err != nil {
@@ -400,7 +430,18 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		writeLoggedError(w, http.StatusInternalServerError, "could not encode runtime secret names", err)
 		return
 	}
-	if err := s.reserveRun(r.Context(), u.ID, runID, mode, taskJSON, testerLLMIDsJSON, editorLLMID, runSource, b, reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
+	if err := s.reserveRun(r.Context(), u.ID, runID, runRequestID, mode, taskJSON, testerLLMIDsJSON, editorLLMID, runSource, b, reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
+		if errors.Is(err, errRunRequestConflict) {
+			if existing, ok, loadErr := s.loadRunByRequest(r.Context(), u.ID, runRequestID); loadErr != nil {
+				writeLoggedError(w, http.StatusInternalServerError, "could not load managed run", loadErr)
+				return
+			} else if ok {
+				writeJSON(w, http.StatusAccepted, map[string]string{"run_id": existing.ID, "status": existing.Status})
+				return
+			}
+			writeError(w, http.StatusConflict, "managed run request conflicted; retry")
+			return
+		}
 		if errors.Is(err, errManagedAgentsNotConfigured) {
 			writeError(w, http.StatusServiceUnavailable, "managed agents are not configured")
 			return
@@ -440,6 +481,32 @@ UPDATE runs SET status=$2, bundle_file_id=$3, updated_at=now() WHERE id=$1
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": runID, "status": statusQueued})
+}
+
+type runRequestRecord struct {
+	ID     string
+	Status string
+}
+
+var errRunRequestConflict = errors.New("managed run request conflicted")
+
+func (s *Server) loadRunByRequest(ctx context.Context, userID, runRequestID string) (runRequestRecord, bool, error) {
+	if strings.TrimSpace(runRequestID) == "" {
+		return runRequestRecord{}, false, nil
+	}
+	var record runRequestRecord
+	err := s.db.QueryRow(ctx, `
+SELECT id, status
+FROM runs
+WHERE user_id=$1 AND run_request_id=$2
+`, userID, runRequestID).Scan(&record.ID, &record.Status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return runRequestRecord{}, false, nil
+	}
+	if err != nil {
+		return runRequestRecord{}, false, err
+	}
+	return record, true, nil
 }
 
 type runListResponse struct {
@@ -901,21 +968,21 @@ func normalizeRunSource(source string) string {
 	return runSourceCLI
 }
 
-func (s *Server) preflightRun(ctx context.Context, userID string, reserve int64) error {
-	var active int
-	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM runs WHERE user_id=$1 AND status IN ($2,$3,$4,$5)`, userID, statusUploading, statusQueued, statusStarting, statusRunning).Scan(&active); err != nil {
-		return err
+func validateManagedRunRequestID(id string) error {
+	if id == "" {
+		return errors.New("run_request_id must not be empty")
 	}
-	limit := s.maxActiveRunsPerUser()
-	if active >= limit {
-		return &activeRunLimitError{Limit: limit}
+	if len(id) > 128 {
+		return errors.New("run_request_id field is too large")
 	}
-	balance, err := s.balanceCents(ctx, userID)
-	if err != nil {
-		return err
+	if !strings.HasPrefix(id, "mrr_") {
+		return errors.New("run_request_id is invalid")
 	}
-	if balance < reserve {
-		return &insufficientCreditsError{Need: reserve, Balance: balance}
+	for _, r := range id {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' {
+			continue
+		}
+		return errors.New("run_request_id is invalid")
 	}
 	return nil
 }
@@ -963,7 +1030,7 @@ func (s *Server) maxActiveRunsPerUser() int {
 	return int(managedMaxActiveRunsPerUser)
 }
 
-func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, taskJSON, testerLLMIDsJSON []byte, editorLLMID string, source string, b bundle.Result, reserve int64, liveVerify bool, secretNamesJSON, runtimeNonce, runtimeCiphertext []byte) error {
+func (s *Server) reserveRun(ctx context.Context, userID, runID, runRequestID, mode string, taskJSON, testerLLMIDsJSON []byte, editorLLMID string, source string, b bundle.Result, reserve int64, liveVerify bool, secretNamesJSON, runtimeNonce, runtimeCiphertext []byte) error {
 	agents, err := s.configuredManagedAgents()
 	if err != nil {
 		return err
@@ -976,6 +1043,16 @@ func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, tas
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, `SELECT id FROM users WHERE id=$1 FOR UPDATE`, userID); err != nil {
 		return err
+	}
+	if runRequestID != "" {
+		var existingRunID string
+		err := tx.QueryRow(ctx, `SELECT id FROM runs WHERE user_id=$1 AND run_request_id=$2`, userID, runRequestID).Scan(&existingRunID)
+		if err == nil {
+			return errRunRequestConflict
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
 	}
 	var active int
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM runs WHERE user_id=$1 AND status IN ($2,$3,$4,$5)`, userID, statusUploading, statusQueued, statusStarting, statusRunning).Scan(&active); err != nil {
@@ -996,11 +1073,12 @@ func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, tas
 		editorLLMID = defaultManagedEditorLLMID()
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO runs (id, user_id, mode, source, status, tasks, tester_llm_ids, editor_llm_id, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files, reserved_cents, live_verify, runtime_secret_names, runtime_secrets_nonce, runtime_secrets_ciphertext)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+		INSERT INTO runs (id, user_id, run_request_id, mode, source, status, tasks, tester_llm_ids, editor_llm_id, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files, reserved_cents, live_verify, runtime_secret_names, runtime_secrets_nonce, runtime_secrets_ciphertext)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 		`,
 		runID,
 		userID,
+		nullableText(runRequestID),
 		mode,
 		source,
 		statusUploading,
@@ -1019,6 +1097,9 @@ func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, tas
 		runtimeNonce,
 		runtimeCiphertext,
 	); err != nil {
+		if isUniqueViolation(err) {
+			return errRunRequestConflict
+		}
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -1028,6 +1109,18 @@ VALUES ($1, $2, $3, 'run_reservation', $4, $5)
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func nullableText(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 func (s *Server) failBeforeQueue(_ context.Context, runID string, reserve int64, code persistedErrorCode) {

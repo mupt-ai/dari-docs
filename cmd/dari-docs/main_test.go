@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,6 +35,23 @@ func TestParseDollarsToCents(t *testing.T) {
 	}
 	if _, err := parseDollarsToCents("1.234"); err == nil {
 		t.Fatal("expected too many decimal places error")
+	}
+}
+
+func TestShouldRetryManagedRunCreate(t *testing.T) {
+	if !shouldRetryManagedRunCreate(context.Background(), errors.New("connection reset")) {
+		t.Fatal("expected transport error to be retried")
+	}
+	if shouldRetryManagedRunCreate(context.Background(), &managed.HTTPError{StatusCode: http.StatusPaymentRequired}) {
+		t.Fatal("expected HTTP error not to be retried")
+	}
+	if shouldRetryManagedRunCreate(context.Background(), &managed.InvalidEnvTokenError{}) {
+		t.Fatal("expected invalid env token error not to be retried")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if shouldRetryManagedRunCreate(ctx, errors.New("connection reset")) {
+		t.Fatal("expected canceled context not to be retried")
 	}
 }
 

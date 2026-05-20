@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -78,12 +81,18 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 		}
 		runtimeSecretJSON = string(b)
 	}
-	created, err := client.CreateRun(ctx, cfg.Command, cfg.Tasks, bundlePath, managed.CreateRunOptions{
+	runRequestID := newManagedRunRequestID()
+	createOpts := managed.CreateRunOptions{
+		RunRequestID:       runRequestID,
 		LiveVerify:         cfg.LiveVerify,
 		RuntimeSecretsJSON: runtimeSecretJSON,
 		FeedbackLLMIDs:     feedbackLLMIDs,
 		EditorLLMID:        editorLLMID,
-	})
+	}
+	created, err := client.CreateRun(ctx, cfg.Command, cfg.Tasks, bundlePath, createOpts)
+	if err != nil && shouldRetryManagedRunCreate(ctx, err) {
+		created, err = client.CreateRun(ctx, cfg.Command, cfg.Tasks, bundlePath, createOpts)
+	}
 	if err != nil {
 		return err
 	}
@@ -191,6 +200,26 @@ func waitForManagedRun(ctx context.Context, client *managed.Client, runID string
 
 func isTerminalManagedRunStatus(status string) bool {
 	return status == "completed" || status == "failed"
+}
+
+func newManagedRunRequestID() string {
+	b := make([]byte, 18)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return "mrr_" + base64.RawURLEncoding.EncodeToString(b)
+}
+
+func shouldRetryManagedRunCreate(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
+	var httpErr *managed.HTTPError
+	if errors.As(err, &httpErr) {
+		return false
+	}
+	var invalidEnv *managed.InvalidEnvTokenError
+	return !errors.As(err, &invalidEnv)
 }
 
 func managedLLMSelection(feedbackLLMIDs []string, editorLLMID string, cfg managed.RunConfig) ([]string, string, error) {

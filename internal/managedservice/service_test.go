@@ -392,6 +392,24 @@ func TestStripeCheckoutIntentMigrationAddsDurableLookupColumns(t *testing.T) {
 	}
 }
 
+func TestRunRequestIDMigrationAddsUniqueUserRequestIndex(t *testing.T) {
+	data, err := migrationFS.ReadFile("migrations/0013_run_request_ids.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	for _, want := range []string{
+		"ADD COLUMN run_request_id TEXT",
+		"CREATE UNIQUE INDEX idx_runs_user_request_id",
+		"runs (user_id, run_request_id)",
+		"WHERE run_request_id IS NOT NULL",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("run request migration is missing %q", want)
+		}
+	}
+}
+
 func TestRuntimeSecretNamesFromJSON(t *testing.T) {
 	names, err := runtimeSecretNamesFromJSON(`{"STRIPE_TEST_KEY":"sk_test","GITHUB_TOKEN":"ghp_test"}`)
 	if err != nil {
@@ -934,7 +952,7 @@ VALUES ($1, $1, $2, 1200, 'usd', 'pending')
 	}
 }
 
-func TestPreflightRunAllowsConfiguredActiveRunLimit(t *testing.T) {
+func TestReserveRunAllowsConfiguredActiveRunLimit(t *testing.T) {
 	dsn := os.Getenv("MANAGEDSERVICE_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("set MANAGEDSERVICE_TEST_DATABASE_URL to run managed service database integration tests")
@@ -949,7 +967,11 @@ func TestPreflightRunAllowsConfiguredActiveRunLimit(t *testing.T) {
 	if err := runMigrations(ctx, dsn); err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{db: db, cfg: Config{MaxActiveRunsPerUser: 3}}
+	s := &Server{db: db, cfg: Config{
+		ManagedTesterAgentID: "agt_tester",
+		ManagedEditorAgentID: "agt_editor",
+		MaxActiveRunsPerUser: 3,
+	}}
 	userID := "usr_test_" + randomToken(8)
 	t.Cleanup(func() {
 		_, _ = db.Exec(context.Background(), `DELETE FROM runs WHERE user_id=$1`, userID)
@@ -962,6 +984,12 @@ func TestPreflightRunAllowsConfiguredActiveRunLimit(t *testing.T) {
 	if _, err := db.Exec(ctx, `INSERT INTO credit_ledger (id, user_id, amount_cents, kind, source_id) VALUES ($1, $2, 500, 'test_credit', $3)`, "cred_"+randomToken(8), userID, "src_"+randomToken(8)); err != nil {
 		t.Fatal(err)
 	}
+	result := bundle.Result{
+		SHA256: "bundle_sha",
+		Manifest: bundle.Manifest{Files: []bundle.FileRecord{
+			{Path: "README.md", SizeBytes: 12, SHA256: "file_sha"},
+		}},
+	}
 	for i := 0; i < 2; i++ {
 		if _, err := db.Exec(ctx, `
 INSERT INTO runs (id, user_id, mode, status, tasks, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files)
@@ -970,19 +998,13 @@ VALUES ($1, $2, 'check', $3, '["task"]'::jsonb, 'agt_tester', 'ver_tester', 'agt
 			t.Fatal(err)
 		}
 	}
-	if err := s.preflightRun(ctx, userID, 75); err != nil {
-		t.Fatalf("preflight with 2 active runs returned error: %v", err)
+	if err := s.reserveRun(ctx, userID, "run_test_"+randomToken(8), "mrr_test_"+randomToken(8), "check", []byte(`["task"]`), []byte(`["claude-haiku-4-5"]`), "claude-haiku-4-5", runSourceCLI, result, 75, false, []byte(`[]`), nil, nil); err != nil {
+		t.Fatalf("reserveRun with 2 active runs returned error: %v", err)
 	}
-	if _, err := db.Exec(ctx, `
-INSERT INTO runs (id, user_id, mode, status, tasks, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files)
-VALUES ($1, $2, 'check', $3, '["task"]'::jsonb, 'agt_tester', 'ver_tester', 'agt_editor', 'ver_editor', 'sha', 1)
-`, "run_"+randomToken(8), userID, statusQueued); err != nil {
-		t.Fatal(err)
-	}
-	err = s.preflightRun(ctx, userID, 75)
+	err = s.reserveRun(ctx, userID, "run_test_"+randomToken(8), "mrr_test_"+randomToken(8), "check", []byte(`["task"]`), []byte(`["claude-haiku-4-5"]`), "claude-haiku-4-5", runSourceCLI, result, 75, false, []byte(`[]`), nil, nil)
 	var activeErr *activeRunLimitError
 	if !errors.As(err, &activeErr) || activeErr.Limit != 3 {
-		t.Fatalf("preflight error = %v, want active run limit 3", err)
+		t.Fatalf("reserveRun error = %v, want active run limit 3", err)
 	}
 }
 
@@ -993,6 +1015,7 @@ func TestReserveRunStoresConfiguredHostedAgents(t *testing.T) {
 	s := &Server{db: db, cfg: testManagedHostedAgentConfig()}
 	userID := "usr_test_" + randomToken(8)
 	runID := "run_test_" + randomToken(8)
+	runRequestID := "mrr_test_" + randomToken(8)
 	t.Cleanup(func() {
 		_, _ = db.Exec(context.Background(), `DELETE FROM credit_ledger WHERE run_id=$1 OR user_id=$2`, runID, userID)
 		_, _ = db.Exec(context.Background(), `DELETE FROM runs WHERE id=$1`, runID)
@@ -1011,17 +1034,18 @@ func TestReserveRunStoresConfiguredHostedAgents(t *testing.T) {
 			{Path: "README.md", SizeBytes: 12, SHA256: "file_sha"},
 		}},
 	}
-	if err := s.reserveRun(ctx, userID, runID, "check", []byte(`["task"]`), []byte(`["claude-haiku-4-5","claude-opus-4-7"]`), "claude-opus-4-7", runSourceCLI, result, 150, false, []byte(`[]`), nil, nil); err != nil {
+	if err := s.reserveRun(ctx, userID, runID, runRequestID, "check", []byte(`["task"]`), []byte(`["claude-haiku-4-5","claude-opus-4-7"]`), "claude-opus-4-7", runSourceCLI, result, 150, false, []byte(`[]`), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	var testerAgentID, testerVersionID, editorAgentID, editorVersionID, source string
 	var testerLLMIDsJSON []byte
 	var editorLLMID string
+	var storedRunRequestID string
 	if err := db.QueryRow(ctx, `
-SELECT tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, tester_llm_ids, editor_llm_id, source
+SELECT tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, tester_llm_ids, editor_llm_id, source, run_request_id
 FROM runs WHERE id=$1
-`, runID).Scan(&testerAgentID, &testerVersionID, &editorAgentID, &editorVersionID, &testerLLMIDsJSON, &editorLLMID, &source); err != nil {
+`, runID).Scan(&testerAgentID, &testerVersionID, &editorAgentID, &editorVersionID, &testerLLMIDsJSON, &editorLLMID, &source, &storedRunRequestID); err != nil {
 		t.Fatal(err)
 	}
 	if testerAgentID != "agt_tester" ||
@@ -1042,6 +1066,54 @@ FROM runs WHERE id=$1
 	}
 	if source != runSourceCLI {
 		t.Fatalf("source = %q, want %q", source, runSourceCLI)
+	}
+	if storedRunRequestID != runRequestID {
+		t.Fatalf("run_request_id = %q, want %q", storedRunRequestID, runRequestID)
+	}
+}
+
+func TestReserveRunReturnsRequestConflictBeforeActiveLimit(t *testing.T) {
+	db := openManagedServiceTestDB(t)
+	ctx := context.Background()
+
+	s := &Server{db: db, cfg: Config{
+		ManagedTesterAgentID: "agt_tester",
+		ManagedEditorAgentID: "agt_editor",
+		MaxActiveRunsPerUser: 1,
+		TesterReserveCents:   75,
+		EditorReserveCents:   75,
+	}}
+	userID := "usr_test_" + randomToken(8)
+	existingRunID := "run_test_" + randomToken(8)
+	newRunID := "run_test_" + randomToken(8)
+	runRequestID := "mrr_test_" + randomToken(8)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), `DELETE FROM credit_ledger WHERE user_id=$1`, userID)
+		_, _ = db.Exec(context.Background(), `DELETE FROM runs WHERE user_id=$1`, userID)
+		_, _ = db.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+	})
+	if _, err := db.Exec(ctx, `INSERT INTO users (id, auth_subject, email) VALUES ($1, $2, $3)`, userID, "auth_"+userID, userID+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO credit_ledger (id, user_id, amount_cents, kind, source_id) VALUES ($1, $2, 500, 'test_credit', $3)`, "cred_"+randomToken(8), userID, "src_"+randomToken(8)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+INSERT INTO runs (id, user_id, run_request_id, mode, status, tasks, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files)
+VALUES ($1, $2, $3, 'check', $4, '["task"]'::jsonb, 'agt_tester', 'compat', 'agt_editor', 'compat', 'sha', 1)
+`, existingRunID, userID, runRequestID, statusRunning); err != nil {
+		t.Fatal(err)
+	}
+
+	result := bundle.Result{
+		SHA256: "new_bundle_sha",
+		Manifest: bundle.Manifest{Files: []bundle.FileRecord{
+			{Path: "README.md", SizeBytes: 12, SHA256: "file_sha"},
+		}},
+	}
+	err := s.reserveRun(ctx, userID, newRunID, runRequestID, "check", []byte(`["task"]`), []byte(`["claude-haiku-4-5"]`), "claude-haiku-4-5", runSourceCLI, result, 75, false, []byte(`[]`), nil, nil)
+	if !errors.Is(err, errRunRequestConflict) {
+		t.Fatalf("reserveRun error = %v, want errRunRequestConflict", err)
 	}
 }
 
@@ -1761,6 +1833,103 @@ func TestHandleRunsRejectsUnknownManagedLLM(t *testing.T) {
 	}
 }
 
+func TestHandleRunsRejectsInvalidRunRequestID(t *testing.T) {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	if err := mw.WriteField("run_request_id", "bad value"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{cfg: Config{MaxBundleBytes: 1 << 20, MaxTasksPerRun: 3, MaxTaskBytes: 10000}}
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	s.handleRuns(rec, req, user{ID: "usr_test", TokenScopes: []string{scopeManagedCheck}})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "run_request_id is invalid") {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
+func TestHandleRunsRequiresRunRequestIDBeforeBundle(t *testing.T) {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	part, err := mw.CreateFormFile("bundle", "input-docs-bundle.tar.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeManagedServiceTestBundle(part); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{cfg: Config{MaxBundleBytes: 1 << 20, MaxTasksPerRun: 3, MaxTaskBytes: 10000}}
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	s.handleRuns(rec, req, user{ID: "usr_test", TokenScopes: []string{scopeManagedCheck}})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "run_request_id must be sent before bundle") {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
+func TestHandleRunsReturnsExistingRunForDuplicateRunRequestID(t *testing.T) {
+	db := openManagedServiceTestDB(t)
+	ctx := context.Background()
+
+	userID := "usr_test_" + randomToken(8)
+	runID := "run_test_" + randomToken(8)
+	runRequestID := "mrr_test_" + randomToken(8)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), `DELETE FROM runs WHERE user_id=$1`, userID)
+		_, _ = db.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+	})
+	if _, err := db.Exec(ctx, `INSERT INTO users (id, auth_subject, email) VALUES ($1, $2, $3)`, userID, "auth_"+userID, userID+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `
+INSERT INTO runs (id, user_id, run_request_id, mode, status, tasks, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files)
+VALUES ($1, $2, $3, 'check', $4, '["task"]'::jsonb, 'agt_tester', 'compat', 'agt_editor', 'compat', 'sha', 1)
+`, runID, userID, runRequestID, statusQueued); err != nil {
+		t.Fatal(err)
+	}
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	if err := mw.WriteField("run_request_id", runRequestID); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{db: db, cfg: Config{MaxBundleBytes: 1 << 20, MaxTasksPerRun: 3, MaxTaskBytes: 10000}}
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	s.handleRuns(rec, req, user{ID: userID, TokenScopes: []string{scopeManagedCheck}})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+	var got struct {
+		RunID  string `json:"run_id"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.RunID != runID || got.Status != statusQueued {
+		t.Fatalf("duplicate response = %#v, want %s/%s", got, runID, statusQueued)
+	}
+}
+
 func TestHandleRunsReturns413ForOversizedMultipartBody(t *testing.T) {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
@@ -1799,6 +1968,9 @@ func TestHandleRunsReturns413ForOversizedMultipartBody(t *testing.T) {
 func TestHandleRunsReadsFieldsAfterBundle(t *testing.T) {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
+	if err := mw.WriteField("run_request_id", "mrr_test_"+randomToken(8)); err != nil {
+		t.Fatal(err)
+	}
 	part, err := mw.CreateFormFile("bundle", "input-docs-bundle.tar.gz")
 	if err != nil {
 		t.Fatal(err)

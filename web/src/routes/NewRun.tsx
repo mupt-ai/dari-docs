@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { getRunConfig, type RunConfig } from "@/lib/billing";
 import {
   createRunFromFolder,
+  newRunRequestID,
   type BrowserSourceFile,
   type RuntimeSecretInput,
 } from "@/lib/runs";
@@ -58,6 +59,7 @@ export default function NewRun() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const taskDraftRef = useRef<HTMLTextAreaElement | null>(null);
   const editingTaskRef = useRef<HTMLTextAreaElement | null>(null);
+  const runRequestIDRef = useRef<string | null>(null);
 
   useEffect(() => {
     let canceled = false;
@@ -79,6 +81,10 @@ export default function NewRun() {
       canceled = true;
     };
   }, []);
+
+  useEffect(() => {
+    runRequestIDRef.current = null;
+  }, [browserFiles, editorLLMID, excludeText, includeText, mode, runtimeSecrets, taskItems, testerLLMIDs]);
 
   const tasks = useMemo(() => parseTaskInputs(taskItems), [taskItems]);
   const includeGlobs = useMemo(() => parsePatternLines(includeText), [includeText]);
@@ -227,8 +233,11 @@ export default function NewRun() {
       return;
     }
     setSubmitting(true);
+    const runRequestID = runRequestIDRef.current ?? newRunRequestID();
+    runRequestIDRef.current = runRequestID;
     try {
       const response = await createRunFromFolder({
+        runRequestID,
         mode,
         tasks,
         files: selectedFiles,
@@ -239,6 +248,7 @@ export default function NewRun() {
         liveVerify,
         runtimeSecrets: liveVerify ? runtimeSecrets : undefined,
       });
+      runRequestIDRef.current = null;
       navigate(`/runs/${response.run_id}`);
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : String(error));

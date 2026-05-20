@@ -57,6 +57,7 @@ export type RuntimeSecretInput = {
 };
 
 export type CreateManagedRunInput = {
+  runRequestID: string;
   mode: "check" | "optimize";
   tasks: string[];
   files: BrowserSourceFile[];
@@ -72,6 +73,15 @@ export type CreateRunResponse = {
   run_id: string;
   status: string;
 };
+
+export function newRunRequestID(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(18));
+  let raw = "";
+  for (const byte of bytes) {
+    raw += String.fromCharCode(byte);
+  }
+  return `mrr_${btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "")}`;
+}
 
 export async function listRuns(params: {
   sort: RunSort;
@@ -94,6 +104,7 @@ export async function getRun(id: string): Promise<RunStatus> {
 
 export async function createRunFromFolder(input: CreateManagedRunInput): Promise<CreateRunResponse> {
   const form = new FormData();
+  form.set("run_request_id", input.runRequestID);
   form.set("mode", input.mode);
   form.set("tasks_json", JSON.stringify(input.tasks));
   form.set("feedback_llm_ids_json", JSON.stringify(input.testerLLMIDs));

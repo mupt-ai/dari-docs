@@ -142,10 +142,13 @@ func TestCreateRunDoesNotSendAgentSetID(t *testing.T) {
 		if seen["agent_set_id"] {
 			t.Fatalf("managed run request should not include agent_set_id")
 		}
-		for _, want := range []string{"mode", "tasks_json", "feedback_llm_ids_json", "editor_llm_id", "bundle"} {
+		for _, want := range []string{"run_request_id", "mode", "tasks_json", "feedback_llm_ids_json", "editor_llm_id", "bundle"} {
 			if !seen[want] {
 				t.Fatalf("missing multipart field %q; seen=%#v", want, seen)
 			}
+		}
+		if fields["run_request_id"] != "mrr_test" {
+			t.Fatalf("run_request_id = %q", fields["run_request_id"])
 		}
 		if fields["feedback_llm_ids_json"] != `["claude-haiku-4-5","claude-opus-4-7"]` {
 			t.Fatalf("feedback_llm_ids_json = %q", fields["feedback_llm_ids_json"])
@@ -158,6 +161,7 @@ func TestCreateRunDoesNotSendAgentSetID(t *testing.T) {
 	defer server.Close()
 
 	got, err := New(server.URL, "managed-token").CreateRun(context.Background(), "check", []string{"task"}, bundlePath, CreateRunOptions{
+		RunRequestID:   "mrr_test",
 		FeedbackLLMIDs: []string{"claude-haiku-4-5", "claude-opus-4-7"},
 		EditorLLMID:    "claude-opus-4-7",
 	})
@@ -166,6 +170,16 @@ func TestCreateRunDoesNotSendAgentSetID(t *testing.T) {
 	}
 	if got.RunID != "run_test" || got.Status != "queued" {
 		t.Fatalf("response = %#v", got)
+	}
+}
+
+func TestCreateRunRequiresRunRequestID(t *testing.T) {
+	bundlePath := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	if err := os.WriteFile(bundlePath, []byte("bundle"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New("https://service.example.test", "managed-token").CreateRun(context.Background(), "check", []string{"task"}, bundlePath, CreateRunOptions{}); err == nil || !strings.Contains(err.Error(), "run request id is required") {
+		t.Fatalf("err = %v, want run request id required", err)
 	}
 }
 

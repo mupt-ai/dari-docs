@@ -142,6 +142,7 @@ type CreateRunResponse struct {
 }
 
 type CreateRunOptions struct {
+	RunRequestID       string
 	LiveVerify         bool
 	RuntimeSecretsJSON string
 	FeedbackLLMIDs     []string
@@ -266,6 +267,13 @@ func (c *Client) RevokeAuthToken(ctx context.Context, id string) error {
 func (c *Client) CreateRun(ctx context.Context, mode string, tasks []string, bundlePath string, opts CreateRunOptions) (CreateRunResponse, error) {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
+	runRequestID := strings.TrimSpace(opts.RunRequestID)
+	if runRequestID == "" {
+		return CreateRunResponse{}, fmt.Errorf("run request id is required")
+	}
+	if err := mw.WriteField("run_request_id", runRequestID); err != nil {
+		return CreateRunResponse{}, err
+	}
 	if err := mw.WriteField("mode", mode); err != nil {
 		return CreateRunResponse{}, err
 	}
