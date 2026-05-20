@@ -275,7 +275,7 @@ func TestPrepareAddsPublicDocsSourceWithoutBundlingCWD(t *testing.T) {
 	opts := &checkOptimizeOptions{
 		Command:       "check",
 		TaskInputs:    []string{"Read docs"},
-		PublicDocURLs: []string{"https://www.kernel.sh/docs/llms.txt"},
+		PublicDocURLs: []string{"https://docs.dari.dev/llms.txt"},
 	}
 	if err := opts.prepare(); err != nil {
 		t.Fatal(err)

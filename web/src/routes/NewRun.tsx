@@ -13,6 +13,7 @@ import {
 import { cn, formatCents } from "@/lib/utils";
 
 type RunMode = "check" | "optimize";
+type DocsSourceMode = "folder" | "link";
 
 type SelectedSourceFile = BrowserSourceFile & {
   size: number;
@@ -49,6 +50,7 @@ export default function NewRun() {
   const [editingTaskDraft, setEditingTaskDraft] = useState("");
   const [browserFiles, setBrowserFiles] = useState<File[]>([]);
   const [publicDocsURL, setPublicDocsURL] = useState("");
+  const [docsSourceMode, setDocsSourceMode] = useState<DocsSourceMode>("folder");
   const [testerLLMIDs, setTesterLLMIDs] = useState<string[]>([]);
   const [editorLLMID, setEditorLLMID] = useState("");
   const [includeText, setIncludeText] = useState("");
@@ -100,6 +102,9 @@ export default function NewRun() {
     () => selectedFiles.reduce((sum, item) => sum + item.size, 0),
     [selectedFiles]
   );
+  const activeSelectedFiles = docsSourceMode === "folder" ? selectedFiles : [];
+  const activeSelectedBytes = docsSourceMode === "folder" ? selectedBytes : 0;
+  const activePublicDocURLs = docsSourceMode === "link" ? publicDocURLs : [];
   const testerSessionCount = tasks.length * testerLLMIDs.length;
   const estimatedReserve = config
     ? testerSessionCount * config.tester_session_reserve_cents +
@@ -107,8 +112,8 @@ export default function NewRun() {
     : 0;
   const startRunDisabledReason = submitting
     ? ""
-    : selectedFiles.length === 0 && publicDocURLs.length === 0
-      ? "Choose a docs folder or add a public docs URL."
+    : activeSelectedFiles.length === 0 && activePublicDocURLs.length === 0
+      ? "Choose a docs folder or enter a public docs URL."
       : tasks.length === 0
         ? "Add at least one task."
         : testerLLMIDs.length === 0
@@ -126,6 +131,16 @@ export default function NewRun() {
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
+  };
+
+  const selectFolderSource = () => {
+    setDocsSourceMode("folder");
+    setPublicDocsURL("");
+  };
+
+  const selectLinkSource = () => {
+    setDocsSourceMode("link");
+    clearFolder();
   };
 
   const updateTaskDraft = (value: string) => {
@@ -216,14 +231,14 @@ export default function NewRun() {
     const validation = validateRunForm({
       config,
       tasks,
-      selectedFiles,
-      selectedBytes,
+      selectedFiles: activeSelectedFiles,
+      selectedBytes: activeSelectedBytes,
       testerLLMIDs,
       mode,
       editorLLMID,
       liveVerify,
       runtimeSecrets,
-      publicDocURLs,
+      publicDocURLs: activePublicDocURLs,
     });
     if (validation) {
       setSubmitError(validation);
@@ -234,12 +249,12 @@ export default function NewRun() {
       const response = await createRunFromFolder({
         mode,
         tasks,
-        files: selectedFiles,
-        publicDocURLs,
+        files: activeSelectedFiles,
+        publicDocURLs: activePublicDocURLs,
         testerLLMIDs,
         editorLLMID: mode === "optimize" ? editorLLMID : undefined,
-        includeGlobs,
-        excludeGlobs,
+        includeGlobs: docsSourceMode === "folder" ? includeGlobs : [],
+        excludeGlobs: docsSourceMode === "folder" ? excludeGlobs : [],
         liveVerify,
         runtimeSecrets: liveVerify ? runtimeSecrets : undefined,
       });
@@ -284,130 +299,149 @@ export default function NewRun() {
             <section className="border border-border bg-card p-4">
               <div className="mb-3 flex items-start justify-between gap-4">
                 <div>
-                  <h2 className="text-sm font-medium">Docs Source</h2>
+                  <h2 className="text-sm font-medium">Docs Source: Folder Or Link</h2>
                 </div>
               </div>
-              {browserFiles.length === 0 ? (
-                <label className="flex min-h-36 cursor-pointer flex-col items-center justify-center border border-dashed border-border bg-background px-4 py-6 text-center hover:border-muted-foreground/60">
-                  <FolderOpen className="mb-3 h-6 w-6 text-muted-foreground" />
-                  <span className="text-sm font-medium">Choose Docs Folder</span>
-                  <span className="mt-1 text-xs text-muted-foreground">
-                    Files are staged only for this run.
-                  </span>
-                  <input
-                    {...directoryInputProps}
-                    ref={fileInputRef}
-                    type="file"
-                    multiple
-                    className="sr-only"
-                    onChange={onFolderChange}
-                  />
-                </label>
-              ) : (
-                <div className="border border-border bg-background p-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex min-w-0 items-center gap-3">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-border bg-card">
-                        <FolderOpen className="h-5 w-5 text-muted-foreground" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-medium">{selectedFolder}</div>
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          {browserFiles.length} raw files selected
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Button
+                  type="button"
+                  variant={docsSourceMode === "folder" ? "default" : "outline"}
+                  onClick={selectFolderSource}
+                >
+                  Docs Folder
+                </Button>
+                <Button
+                  type="button"
+                  variant={docsSourceMode === "link" ? "default" : "outline"}
+                  onClick={selectLinkSource}
+                >
+                  Public Docs URL
+                </Button>
+              </div>
+
+              {docsSourceMode === "folder" ? (
+                <div className="mt-4">
+                  {browserFiles.length === 0 ? (
+                    <label className="flex min-h-36 cursor-pointer flex-col items-center justify-center border border-dashed border-border bg-background px-4 py-6 text-center hover:border-muted-foreground/60">
+                      <FolderOpen className="mb-3 h-6 w-6 text-muted-foreground" />
+                      <span className="text-sm font-medium">Choose Docs Folder</span>
+                      <span className="mt-1 text-xs text-muted-foreground">
+                        Files are staged only for this run.
+                      </span>
+                      <input
+                        {...directoryInputProps}
+                        ref={fileInputRef}
+                        type="file"
+                        multiple
+                        className="sr-only"
+                        onChange={onFolderChange}
+                      />
+                    </label>
+                  ) : (
+                    <div className="border border-border bg-background p-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-border bg-card">
+                            <FolderOpen className="h-5 w-5 text-muted-foreground" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium">{selectedFolder}</div>
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              {browserFiles.length} raw files selected
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center">
+                          <Button type="button" variant="outline" size="icon" onClick={clearFolder}>
+                            <X className="h-4 w-4" />
+                          </Button>
                         </div>
                       </div>
                     </div>
-                    <div className="flex shrink-0 items-center">
-                      <Button type="button" variant="outline" size="icon" onClick={clearFolder}>
-                        <X className="h-4 w-4" />
-                      </Button>
-                    </div>
+                  )}
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                    <span className="border border-border bg-background px-2 py-1">
+                      {selectedFiles.length} Selected
+                    </span>
+                    <span className="border border-border bg-background px-2 py-1">
+                      {formatBytes(selectedBytes)} / {formatBytes(config.bundle_max_uncompressed_bytes)}
+                    </span>
+                    <span className="border border-border bg-background px-2 py-1">
+                      {skippedFiles.length} Skipped
+                    </span>
                   </div>
-                </div>
-              )}
-              <div className="mt-4">
-                <label className="mb-2 block text-xs uppercase tracking-widest text-muted-foreground">
-                  Public Docs URL
-                </label>
-                <Input
-                  value={publicDocsURL}
-                  onChange={(event) => setPublicDocsURL(event.target.value)}
-                  placeholder="https://www.kernel.sh/docs/llms.txt"
-                />
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Add a public docs page or llms.txt URL. Agents use internet access to read the URL and choose relevant linked docs.
-                </p>
-              </div>
-              <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                <span className="border border-border bg-background px-2 py-1">
-                  {selectedFiles.length} Selected
-                </span>
-                <span className="border border-border bg-background px-2 py-1">
-                  {formatBytes(selectedBytes)} / {formatBytes(config.bundle_max_uncompressed_bytes)}
-                </span>
-                <span className="border border-border bg-background px-2 py-1">
-                  {skippedFiles.length} Skipped
-                </span>
-              </div>
-              {skippedFiles.length > 0 && (
-                <details className="mt-3 border border-border bg-background p-3 text-xs">
-                  <summary className="cursor-pointer text-muted-foreground">
-                    Show skipped files
-                  </summary>
-                  <div className="mt-3 max-h-40 overflow-auto">
-                    {skippedFiles.slice(0, 50).map((file) => (
-                      <div key={`${file.path}:${file.reason}`} className="flex justify-between gap-3 py-1">
-                        <span className="min-w-0 truncate">{file.path}</span>
-                        <span className="shrink-0 text-muted-foreground">{file.reason}</span>
+                  {skippedFiles.length > 0 && (
+                    <details className="mt-3 border border-border bg-background p-3 text-xs">
+                      <summary className="cursor-pointer text-muted-foreground">
+                        Show skipped files
+                      </summary>
+                      <div className="mt-3 max-h-40 overflow-auto">
+                        {skippedFiles.slice(0, 50).map((file) => (
+                          <div key={`${file.path}:${file.reason}`} className="flex justify-between gap-3 py-1">
+                            <span className="min-w-0 truncate">{file.path}</span>
+                            <span className="shrink-0 text-muted-foreground">{file.reason}</span>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                </details>
-              )}
-              <details className="group mt-4 border border-border bg-background p-3">
-                  <summary className="flex cursor-pointer list-none items-center justify-between gap-4 text-sm font-medium">
-                    Options
-                    <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />
-                  </summary>
-                <div className="mt-4 grid gap-4 lg:grid-cols-2">
-                  <div>
-                    <label className="mb-2 flex items-center gap-1.5 text-xs uppercase tracking-widest text-muted-foreground">
-                      <span>Include Patterns</span>
-                      <InfoTooltip>
-                        By default, docs/source files are included: Markdown, JSON,
-                        YAML, TOML, CSS, JavaScript, TypeScript, README.md,
-                        docs.json, mint.json, OpenAPI files, and llms.txt.
-                        Include patterns add files outside those defaults, but
-                        do not override built-in skipped folders such as
-                        node_modules, .git, dist, and build.
-                      </InfoTooltip>
-                    </label>
-                    <textarea
-                      value={includeText}
-                      onChange={(event) => setIncludeText(event.target.value)}
-                      placeholder={"examples/**/*.py\nscripts/**"}
-                      className="min-h-28 w-full border border-border bg-card px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground hover:border-muted-foreground/60 focus:border-brand"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-2 flex items-center gap-1.5 text-xs uppercase tracking-widest text-muted-foreground">
-                      <span>Exclude Patterns</span>
-                      <InfoTooltip>
-                        By default, generated or dependency-heavy folders are
-                        skipped: .git, node_modules, .dari-docs, .next, dist,
-                        build, coverage, and .turbo. Exclude patterns win over
-                        defaults and include patterns.
-                      </InfoTooltip>
-                    </label>
-                    <textarea
-                      value={excludeText}
-                      onChange={(event) => setExcludeText(event.target.value)}
-                      placeholder={"generated/**\n*.lock"}
-                      className="min-h-28 w-full border border-border bg-card px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground hover:border-muted-foreground/60 focus:border-brand"
-                    />
-                  </div>
+                    </details>
+                  )}
+                  <details className="group mt-4 border border-border bg-background p-3">
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-4 text-sm font-medium">
+                      Options
+                      <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />
+                    </summary>
+                    <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                      <div>
+                        <label className="mb-2 flex items-center gap-1.5 text-xs uppercase tracking-widest text-muted-foreground">
+                          <span>Include Patterns</span>
+                          <InfoTooltip>
+                            By default, docs/source files are included: Markdown, JSON,
+                            YAML, TOML, CSS, JavaScript, TypeScript, README.md,
+                            docs.json, mint.json, OpenAPI files, and llms.txt.
+                            Include patterns add files outside those defaults, but
+                            do not override built-in skipped folders such as
+                            node_modules, .git, dist, and build.
+                          </InfoTooltip>
+                        </label>
+                        <textarea
+                          value={includeText}
+                          onChange={(event) => setIncludeText(event.target.value)}
+                          placeholder={"examples/**/*.py\nscripts/**"}
+                          className="min-h-28 w-full border border-border bg-card px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground hover:border-muted-foreground/60 focus:border-brand"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-2 flex items-center gap-1.5 text-xs uppercase tracking-widest text-muted-foreground">
+                          <span>Exclude Patterns</span>
+                          <InfoTooltip>
+                            By default, generated or dependency-heavy folders are
+                            skipped: .git, node_modules, .dari-docs, .next, dist,
+                            build, coverage, and .turbo. Exclude patterns win over
+                            defaults and include patterns.
+                          </InfoTooltip>
+                        </label>
+                        <textarea
+                          value={excludeText}
+                          onChange={(event) => setExcludeText(event.target.value)}
+                          placeholder={"generated/**\n*.lock"}
+                          className="min-h-28 w-full border border-border bg-card px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground hover:border-muted-foreground/60 focus:border-brand"
+                        />
+                      </div>
+                    </div>
+                  </details>
                 </div>
-              </details>
+              ) : (
+                <div className="mt-4">
+                  <label className="mb-2 block text-sm font-medium">
+                    Public Docs URL
+                  </label>
+                  <Input
+                    value={publicDocsURL}
+                    onChange={(event) => setPublicDocsURL(event.target.value)}
+                    placeholder="https://docs.dari.dev/llms.txt"
+                  />
+                </div>
+              )}
             </section>
 
             <section className="border border-border bg-card p-4">
@@ -757,7 +791,7 @@ function validateRunForm({
   publicDocURLs: string[];
 }): string | null {
   if (selectedFiles.length === 0 && publicDocURLs.length === 0) {
-    return "Choose a docs folder or add a public docs URL.";
+    return "Choose a docs folder or enter a public docs URL.";
   }
   if (mode === "optimize" && publicDocURLs.length > 0) {
     return "Public docs URLs support Check only. Use local docs files for Optimize.";
