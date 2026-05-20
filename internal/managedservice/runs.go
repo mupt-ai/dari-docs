@@ -522,6 +522,7 @@ type runLLMSummary struct {
 }
 
 type runSessionSummary struct {
+	ID          string     `json:"id"`
 	Kind        string     `json:"kind"`
 	TaskIndex   int        `json:"task_index"`
 	Status      string     `json:"status"`
@@ -1155,6 +1156,10 @@ func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request, u user) {
 		s.handleUpdatedZip(w, r, u, strings.Trim(runID, "/"))
 		return
 	}
+	if runID, sessionID, ok := parseRunSessionTranscriptPath(rest); ok {
+		s.handleRunSessionTranscript(w, r, u, runID, sessionID)
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -1175,6 +1180,70 @@ func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rs)
+}
+
+func parseRunSessionTranscriptPath(rest string) (string, string, bool) {
+	parts := strings.Split(strings.Trim(rest, "/"), "/")
+	if len(parts) != 4 || parts[1] != "sessions" || parts[3] != "transcript" {
+		return "", "", false
+	}
+	runID := strings.TrimSpace(parts[0])
+	sessionID := strings.TrimSpace(parts[2])
+	if runID == "" || sessionID == "" {
+		return "", "", false
+	}
+	return runID, sessionID, true
+}
+
+func (s *Server) handleRunSessionTranscript(
+	w http.ResponseWriter,
+	r *http.Request,
+	u user,
+	runID string,
+	sessionID string,
+) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !requireScope(w, u, scopeManagedRead) {
+		return
+	}
+	exists, err := s.userOwnsRunSession(r.Context(), u.ID, runID, sessionID)
+	if err != nil {
+		writeLoggedError(w, http.StatusInternalServerError, "could not verify run session", err)
+		return
+	}
+	if !exists {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	raw, err := s.dari.GetTranscriptRaw(r.Context(), sessionID)
+	if err != nil {
+		writeLoggedError(w, http.StatusBadGateway, "could not load session transcript", err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(raw)
+}
+
+func (s *Server) userOwnsRunSession(
+	ctx context.Context,
+	userID string,
+	runID string,
+	sessionID string,
+) (bool, error) {
+	var exists bool
+	err := s.db.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM run_sessions rs
+  JOIN runs r ON r.id = rs.run_id
+  WHERE r.id=$1 AND r.user_id=$2 AND rs.session_id=$3
+)
+`, runID, userID, sessionID).Scan(&exists)
+	return exists, err
 }
 
 func (s *Server) handleUpdatedZip(w http.ResponseWriter, r *http.Request, u user, runID string) {
@@ -1270,7 +1339,8 @@ FROM runs WHERE id=$1 AND user_id=$2
 
 func (s *Server) loadRunSessionSummaries(ctx context.Context, userID, runID string) ([]runSessionSummary, error) {
 	rows, err := s.db.Query(ctx, `
-SELECT rs.kind,
+SELECT rs.session_id,
+       rs.kind,
        rs.task_index,
        rs.status,
        coalesce(nullif(rs.llm_id,''), $3),
@@ -1290,6 +1360,7 @@ ORDER BY CASE rs.kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, rs.t
 	for rows.Next() {
 		var session runSessionSummary
 		if err := rows.Scan(
+			&session.ID,
 			&session.Kind,
 			&session.TaskIndex,
 			&session.Status,

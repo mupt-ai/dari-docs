@@ -1,9 +1,18 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ChevronDown, Download, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { downloadUpdatedDocs, formatLLMID, getRun, isActiveRun, type RunSession, type RunStatus } from "@/lib/runs";
+import {
+  downloadUpdatedDocs,
+  formatLLMID,
+  getRun,
+  getRunSessionTranscript,
+  isActiveRun,
+  type RunSession,
+  type RunSessionTranscript,
+  type RunStatus,
+} from "@/lib/runs";
 import { formatCents, formatDate, formatDuration, toTitleCase } from "@/lib/utils";
 import { StatusBadge } from "@/routes/Runs";
 
@@ -156,6 +165,11 @@ export default function RunDetail() {
                 session={editorSession(run.sessions)}
                 fallbackStatus={editorFallbackStatus(run)}
               />
+              {editorSession(run.sessions) && (
+                <div className="mt-3">
+                  <SessionTranscriptToggle runId={run.id} session={editorSession(run.sessions)!} />
+                </div>
+              )}
             </section>
           )}
 
@@ -360,6 +374,11 @@ function TaskResults({
               ) : (
                 <div className="text-muted-foreground">No Feedback Available.</div>
               )}
+              {selectedResult?.session && (
+                <div className="mt-3">
+                  <SessionTranscriptToggle runId={run.id} session={selectedResult.session} />
+                </div>
+              )}
             </div>
           </div>
         </>
@@ -370,6 +389,225 @@ function TaskResults({
       )}
     </section>
   );
+}
+
+function isLiveSessionStatus(status: string): boolean {
+  return status === "starting" || status === "running" || status === "queued" || status === "uploading";
+}
+
+function SessionTranscriptToggle({ runId, session }: { runId: string; session: RunSession }) {
+  const [open, setOpen] = useState(false);
+  const [transcript, setTranscript] = useState<RunSessionTranscript | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const currentRequestKeyRef = useRef(`${runId}\u0000${session.id}`);
+  const activeRequestRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    currentRequestKeyRef.current = `${runId}\u0000${session.id}`;
+    activeRequestRef.current?.abort();
+    activeRequestRef.current = null;
+    setTranscript(null);
+    setError(null);
+    setLoading(false);
+
+    return () => {
+      activeRequestRef.current?.abort();
+      activeRequestRef.current = null;
+    };
+  }, [runId, session.id]);
+
+  const refreshTranscript = useCallback(async (quiet = false) => {
+    if (!session.id || activeRequestRef.current) return;
+
+    const requestKey = `${runId}\u0000${session.id}`;
+    const controller = new AbortController();
+    activeRequestRef.current = controller;
+
+    if (!quiet) setLoading(true);
+    setError(null);
+    try {
+      const nextTranscript = await getRunSessionTranscript(runId, session.id, { signal: controller.signal });
+      if (currentRequestKeyRef.current === requestKey) {
+        setTranscript(nextTranscript);
+      }
+    } catch (e) {
+      if (!controller.signal.aborted && currentRequestKeyRef.current === requestKey) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      if (activeRequestRef.current === controller) {
+        activeRequestRef.current = null;
+      }
+      if (currentRequestKeyRef.current === requestKey) {
+        setLoading(false);
+      }
+    }
+  }, [runId, session.id]);
+
+  useEffect(() => {
+    if (!open) return;
+    void refreshTranscript();
+  }, [open, refreshTranscript]);
+
+  useEffect(() => {
+    if (!open || !isLiveSessionStatus(session.status)) return;
+    const id = window.setInterval(() => {
+      void refreshTranscript(true);
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, [open, refreshTranscript, session.status]);
+
+  return (
+    <div className="border border-border bg-card/60">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-muted-foreground hover:bg-muted/40"
+      >
+        {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        <span>{open ? "Hide Session" : "Show Session"}</span>
+        <code className="ml-auto truncate font-mono text-foreground">{session.id}</code>
+      </button>
+      {open && (
+        <div className="border-t border-border p-3">
+          {error && (
+            <div className="mb-3 border border-destructive/50 bg-destructive/10 p-3 text-xs text-destructive-foreground">
+              {error}
+            </div>
+          )}
+          {loading && transcript === null ? (
+            <div className="text-sm text-muted-foreground">Loading Session...</div>
+          ) : transcript ? (
+            <TranscriptView transcript={transcript} />
+          ) : !error ? (
+            <div className="text-sm text-muted-foreground">No Session Loaded.</div>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TranscriptView({ transcript }: { transcript: RunSessionTranscript }) {
+  const items = transcriptItems(transcript);
+  if (items.length === 0) {
+    return <JsonBlock value={transcript} emptyText="No Transcript Events Yet." />;
+  }
+  return (
+    <div className="space-y-3">
+      {items.map((item, index) => (
+        <TranscriptItemCard key={transcriptItemKey(item, index)} item={item} />
+      ))}
+    </div>
+  );
+}
+
+function TranscriptItemCard({ item }: { item: Record<string, unknown> }) {
+  const type = typeof item.type === "string" ? item.type : "event";
+  const title = transcriptItemTitle(type);
+  const status = typeof item.status === "string" ? item.status : "";
+  const createdAt = typeof item.created_at === "string" ? item.created_at : "";
+  const content = Array.isArray(item.content) ? item.content : [];
+  const errorMessage = typeof item.error_message === "string" ? item.error_message : "";
+
+  return (
+    <div className="border border-border bg-background">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/30 px-3 py-2">
+        <span className="text-xs uppercase tracking-widest text-muted-foreground">{title}</span>
+        <span className="text-xs text-muted-foreground">
+          {[status, createdAt ? formatDate(createdAt) : ""].filter(Boolean).join(" · ")}
+        </span>
+      </div>
+      <div className="space-y-2 px-3 py-3">
+        {content.length > 0 ? (
+          content.map((part, index) => <TranscriptPart key={index} part={part} />)
+        ) : type === "tool_call" ? (
+          <JsonBlock value={toolCallSummary(item)} />
+        ) : (
+          <JsonBlock value={item} />
+        )}
+        {errorMessage && (
+          <div className="border border-destructive/50 bg-destructive/10 p-3 text-xs text-destructive-foreground">
+            {errorMessage}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TranscriptPart({ part }: { part: unknown }) {
+  if (typeof part === "object" && part !== null) {
+    const record = part as Record<string, unknown>;
+    if (record.type === "text" && typeof record.text === "string") {
+      return <div className="whitespace-pre-wrap text-sm text-foreground">{record.text}</div>;
+    }
+    if (record.type === "thinking" && typeof record.thinking === "string") {
+      return (
+        <details className="border border-border">
+          <summary className="cursor-pointer px-3 py-2 text-xs text-muted-foreground">Thinking</summary>
+          <pre className="whitespace-pre-wrap border-t border-border px-3 py-2 font-mono text-xs text-muted-foreground">
+            {record.thinking}
+          </pre>
+        </details>
+      );
+    }
+    if (typeof record.file_id === "string") {
+      return (
+        <div className="text-xs text-muted-foreground">
+          {String(record.type ?? "file")} <code className="text-foreground">{record.file_id}</code>
+        </div>
+      );
+    }
+  }
+  return <JsonBlock value={part} />;
+}
+
+function transcriptItems(transcript: RunSessionTranscript): Record<string, unknown>[] {
+  const timeline = transcript.timeline;
+  if (typeof timeline === "object" && timeline !== null) {
+    const items = (timeline as { items?: unknown }).items;
+    if (Array.isArray(items)) {
+      return items.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null);
+    }
+  }
+  return [];
+}
+
+function transcriptItemKey(item: Record<string, unknown>, index: number): string {
+  const id = item.id;
+  return typeof id === "string" && id ? id : String(index);
+}
+
+function transcriptItemTitle(type: string): string {
+  if (type === "user_message") return "User";
+  if (type === "assistant_message") return "Assistant";
+  if (type === "tool_call") return "Tool Call";
+  return toTitleCase(type.replace(/_/g, " "));
+}
+
+function toolCallSummary(item: Record<string, unknown>): Record<string, unknown> {
+  return {
+    tool_name: item.tool_name,
+    arguments: item.arguments,
+    result: item.result,
+    is_error: item.is_error,
+  };
+}
+
+function JsonBlock({ value, emptyText = "No Details." }: { value: unknown; emptyText?: string }) {
+  const text = safeStringify(value);
+  if (!text || text === "{}") return <div className="text-sm text-muted-foreground">{emptyText}</div>;
+  return <pre className="whitespace-pre-wrap break-all font-mono text-xs text-foreground">{text}</pre>;
+}
+
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 function editorSession(sessions: RunSession[] | undefined): RunSession | undefined {

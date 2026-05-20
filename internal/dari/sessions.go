@@ -149,6 +149,12 @@ func (c *Client) GetTranscript(ctx context.Context, sessionID string) (Transcrip
 	return out, err
 }
 
+func (c *Client) GetTranscriptRaw(ctx context.Context, sessionID string) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := c.doJSON(ctx, http.MethodGet, "/v1/sessions/"+url.PathEscape(sessionID)+"/transcript", "", nil, &out)
+	return out, err
+}
+
 func (c *Client) GetSessionCost(ctx context.Context, sessionID string) (CostSummary, error) {
 	var out CostSummary
 	err := c.doJSON(ctx, http.MethodGet, "/v1/costs/sessions/"+url.PathEscape(sessionID), "", nil, &out)

@@ -7,6 +7,7 @@ export type RunLLM = {
 };
 
 export type RunSession = {
+  id: string;
   kind: "tester" | "editor" | string;
   task_index: number;
   status: "uploading" | "queued" | "starting" | "running" | "completed" | "failed" | string;
@@ -14,6 +15,8 @@ export type RunSession = {
   created_at: string;
   completed_at?: string | null;
 };
+
+export type RunSessionTranscript = Record<string, unknown>;
 
 export type RunListItem = {
   id: string;
@@ -91,6 +94,17 @@ export async function listRuns(params: {
 
 export async function getRun(id: string): Promise<RunStatus> {
   return apiFetch<RunStatus>(`/v1/runs/${encodeURIComponent(id)}`);
+}
+
+export async function getRunSessionTranscript(
+  runId: string,
+  sessionId: string,
+  opts: { signal?: AbortSignal } = {}
+): Promise<RunSessionTranscript> {
+  return apiFetch<RunSessionTranscript>(
+    `/v1/runs/${encodeURIComponent(runId)}/sessions/${encodeURIComponent(sessionId)}/transcript`,
+    { signal: opts.signal }
+  );
 }
 
 export async function createRunFromFolder(input: CreateManagedRunInput): Promise<CreateRunResponse> {
