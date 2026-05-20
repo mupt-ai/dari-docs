@@ -353,6 +353,18 @@ func TestManagedCheckRequiresLoginBeforeRunConfig(t *testing.T) {
 	}
 }
 
+func TestManagedApplyRequiresWait(t *testing.T) {
+	repo := t.TempDir()
+
+	err := runCheckOrOptimize("optimize", []string{repo, "--managed", "--apply", "--task", "Run echo ok"})
+	if err == nil {
+		t.Fatal("expected --apply without --wait error")
+	}
+	if !strings.Contains(err.Error(), "--apply requires --wait") {
+		t.Fatalf("error = %q, want --apply requires --wait", err.Error())
+	}
+}
+
 func TestManagedAgentDeployManagedNoops(t *testing.T) {
 	repo := t.TempDir()
 	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))

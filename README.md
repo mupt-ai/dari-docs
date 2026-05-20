@@ -95,24 +95,27 @@ dari-docs check . \
   --task "Install the SDK and make a first API call"
 ```
 
+The command submits a managed run and prints the run ID. To wait for completion in the same command, add `--wait`.
+
 Generate proposed docs edits:
 
 ```bash
 dari-docs optimize . \
   --managed \
+  --wait \
   --task "Install the SDK and make a first API call"
 ```
 
-The edited files are downloaded into `.dari-docs/updated/` without changing your repo. Add `--apply` if you want `dari-docs` to apply the revisions directly.
+With `--wait`, edited files are downloaded into `.dari-docs/updated/` without changing your repo. Add `--apply` if you want `dari-docs` to apply the revisions directly.
 
 ## How it works
 
 1. You point `dari-docs` at a docs directory and give it one or more tasks.
-2. The CLI bundles your docs and sends them to hosted Dari Docs tester/editor agents.
+2. The CLI bundles your docs and submits a run to hosted Dari Docs tester/editor agents.
 3. Tester agents try to complete the task and report where the docs blocked progress.
-4. `dari-docs` summarizes the feedback into local run artifacts.
+4. Use `dari-docs runs wait`, `dari-docs runs download`, or pass `--wait` to collect local run artifacts.
 5. If you run `optimize`, an editor agent proposes documentation changes.
-6. Proposed edits are written to `.dari-docs/updated/` for review.
+6. Proposed edits can be downloaded to `.dari-docs/updated/` for review.
 
 The simulated users are plain dari.dev agents. Managed mode uses the hosted Dari Docs tester and editor agents automatically. If you want to customize the agent prompts, skills, setup scripts, or `dari.yml`, use self-managed mode.
 

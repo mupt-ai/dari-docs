@@ -25,11 +25,12 @@ dari-docs check . \
 
 ## Choose an output directory
 
-By default, local run artifacts are written under `.dari-docs/`, and later runs overwrite the previous local outputs. Use `--out` to keep separate run directories:
+When you wait for a run or download artifacts, local files are written under `.dari-docs/` by default, and later runs overwrite the previous local outputs. Use `--out` to keep separate run directories:
 
 ```bash
 dari-docs optimize . \
   --managed \
+  --wait \
   --out .dari-docs/runs/install-sdk \
   --task "Install the SDK and make a first API call"
 ```

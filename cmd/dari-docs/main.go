@@ -112,6 +112,7 @@ func runCheckOrOptimize(cmd string, args []string) error {
 	var apply bool
 	var liveVerify bool
 	var managedMode bool
+	var wait bool
 	var timeoutMinutes int
 	fs.Var(&tasks, "task", "implementation task/prompt to test; repeatable")
 	fs.Var(&taskFiles, "tasks-file", "file containing tasks, one per paragraph or bullet; repeatable")
@@ -131,7 +132,8 @@ func runCheckOrOptimize(cmd string, args []string) error {
 	fs.BoolVar(&apply, "apply", false, "copy updated docs back into the repo after downloading")
 	fs.BoolVar(&liveVerify, "live-verify", false, "allow agents to run safe live verification using provided runtime secrets")
 	fs.BoolVar(&managedMode, "managed", false, "run through the managed dari-docs service instead of a self-managed Dari org")
-	fs.IntVar(&timeoutMinutes, "timeout-minutes", 30, "managed CLI wait timeout in minutes")
+	fs.BoolVar(&wait, "wait", false, "wait for a managed run to finish before exiting")
+	fs.IntVar(&timeoutMinutes, "timeout-minutes", 30, "CLI wait timeout in minutes")
 	if cmd == "check" {
 		fs.Bool("remote-editor", false, "ignored for check")
 	}
@@ -187,6 +189,9 @@ func runCheckOrOptimize(cmd string, args []string) error {
 		if apiKey != "" || apiBaseURL != "" || feedbackAgent != "" || editorAgent != "" {
 			return fmt.Errorf("--managed cannot be combined with --api-key, --api-base-url, --feedback-agent, or --editor-agent")
 		}
+		if apply && !wait {
+			return fmt.Errorf("--apply requires --wait when using --managed")
+		}
 		if _, err := loadManagedToken(); err != nil {
 			return err
 		}
@@ -196,7 +201,7 @@ func runCheckOrOptimize(cmd string, args []string) error {
 		return runManagedCheckOrOptimize(context.Background(), managedRunConfig{
 			Command: cmd, RepoRoot: absRepo, OutDir: outDir,
 			Tasks: allTasks, FeedbackLLMIDs: feedbackLLMList, EditorLLMID: editorLLMID, Apply: apply,
-			LiveVerify: liveVerify, RuntimeSecrets: secrets, Timeout: time.Duration(timeoutMinutes) * time.Minute,
+			LiveVerify: liveVerify, RuntimeSecrets: secrets, Wait: wait, Timeout: time.Duration(timeoutMinutes) * time.Minute,
 			BundleOptions: bundle.CreateOptions{Include: bundleIncludes, Exclude: bundleExcludes},
 		})
 	}
@@ -262,6 +267,7 @@ type managedRunConfig struct {
 	LiveVerify     bool
 	RuntimeSecrets map[string]string
 	Apply          bool
+	Wait           bool
 	Timeout        time.Duration
 	BundleOptions  bundle.CreateOptions
 }
@@ -325,6 +331,10 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 	}
 	fmt.Fprintf(os.Stderr, "Managed run: %s\n", created.RunID)
 	fmt.Fprintf(os.Stderr, "Reserved: %s\n", formatCents(reserve))
+	if !cfg.Wait {
+		printManagedRunSubmitted(created.RunID, created.Status, cfg.Command)
+		return nil
+	}
 	status, err := waitForManagedRun(ctx, client, created.RunID, cfg.Timeout)
 	if err != nil {
 		return err
@@ -364,6 +374,19 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 		}
 	}
 	return nil
+}
+
+func printManagedRunSubmitted(runID string, status string, command string) {
+	fmt.Println("\nSubmitted managed run.")
+	fmt.Printf("Managed run: %s\n", runID)
+	if status != "" {
+		fmt.Printf("Status: %s\n", status)
+	}
+	fmt.Printf("Wait: dari-docs runs wait %s\n", runID)
+	fmt.Printf("Download feedback after completion: dari-docs runs download %s\n", runID)
+	if command != "check" {
+		fmt.Printf("Apply updated docs after completion: dari-docs runs apply %s\n", runID)
+	}
 }
 
 func managedRunReserveCents(command string, taskCount int, testerLLMCount int, cfg managed.RunConfig) int64 {
@@ -1788,6 +1811,7 @@ Important flags:
   --live-verify               permit safe credential-dependent checks
   --secret-env NAME           pass runtime product/API key from env var; repeatable
   --managed                   use the managed dari-docs service instead of your Dari org
+  --wait                      wait for a managed run to finish before exiting
   --bundle-include GLOB       include extra repo-relative docs bundle paths; repeatable
   --bundle-exclude GLOB       exclude repo-relative docs bundle paths; repeatable
   --apply                     copy downloaded updated docs back into repo
