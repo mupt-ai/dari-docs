@@ -1,4 +1,11 @@
-package config
+// Package projectconfig reads and writes the per-repository .dari-docs/config.json file.
+//
+// That file is created by `dari-docs init` and stores local project metadata,
+// such as where bundled agent templates were extracted and which Dari agent IDs
+// were deployed for this repo. Commands like `dari-docs check` and
+// `dari-docs optimize` use it as defaults so users do not have to pass agent IDs
+// on every run.
+package projectconfig
 
 import (
 	"encoding/json"
@@ -6,6 +13,7 @@ import (
 	"path/filepath"
 )
 
+// Config is the persisted contents of .dari-docs/config.json.
 type Config struct {
 	TesterAgentID    string            `json:"tester_agent_id"`
 	EditorAgentID    string            `json:"editor_agent_id"`
@@ -15,6 +23,7 @@ type Config struct {
 	LLMAPIKeySecrets map[string]string `json:"llm_api_key_secrets,omitempty"`
 }
 
+// Path returns the .dari-docs/config.json path for repoRoot.
 func Path(repoRoot string) string { return filepath.Join(repoRoot, ".dari-docs", "config.json") }
 
 func Load(repoRoot string) (Config, bool, error) {

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/mupt-ai/dari-docs/internal/bundle"
-	appconfig "github.com/mupt-ai/dari-docs/internal/config"
+	"github.com/mupt-ai/dari-docs/internal/projectconfig"
 	"github.com/mupt-ai/dari-docs/internal/runner"
 	"github.com/mupt-ai/dari-docs/internal/workspace"
 	"github.com/spf13/cobra"
@@ -48,6 +48,7 @@ type checkOptimizeOptions struct {
 	Apply          bool
 	LiveVerify     bool
 	Managed        bool
+	Wait           bool
 	TimeoutMinutes int
 }
 
@@ -100,7 +101,8 @@ func bindCheckOptimizeFlags(cmd *cobra.Command, opts *checkOptimizeOptions) {
 	flags.BoolVar(&opts.Apply, "apply", false, "copy updated docs back into the repo after downloading")
 	flags.BoolVar(&opts.LiveVerify, "live-verify", false, "allow agents to run safe live verification using provided runtime secrets")
 	flags.BoolVar(&opts.Managed, "managed", false, "run through the managed dari-docs service instead of a self-managed Dari org")
-	flags.IntVar(&opts.TimeoutMinutes, "timeout-minutes", opts.TimeoutMinutes, "managed CLI wait timeout in minutes")
+	flags.BoolVar(&opts.Wait, "wait", false, "wait for a managed run to finish before exiting")
+	flags.IntVar(&opts.TimeoutMinutes, "timeout-minutes", opts.TimeoutMinutes, "CLI wait timeout in minutes")
 	if opts.Command == "check" {
 		flags.Bool("remote-editor", false, "ignored for check")
 	}
@@ -199,6 +201,9 @@ func runManagedCheckOrOptimizeFromOptions(ctx context.Context, opts checkOptimiz
 	if opts.APIKey != "" || opts.APIBaseURL != "" || opts.FeedbackAgent != "" || opts.EditorAgent != "" {
 		return fmt.Errorf("--managed cannot be combined with --api-key, --api-base-url, --feedback-agent, or --editor-agent")
 	}
+	if opts.Apply && !opts.Wait {
+		return fmt.Errorf("--apply requires --wait when using --managed")
+	}
 	if _, err := loadManagedToken(); err != nil {
 		return err
 	}
@@ -214,6 +219,7 @@ func runManagedCheckOrOptimizeFromOptions(ctx context.Context, opts checkOptimiz
 		FeedbackLLMIDs: feedbackLLMIDs,
 		EditorLLMID:    opts.EditorLLMID,
 		Apply:          opts.Apply,
+		Wait:           opts.Wait,
 		LiveVerify:     opts.LiveVerify,
 		RuntimeSecrets: opts.RuntimeSecrets,
 		Timeout:        time.Duration(opts.TimeoutMinutes) * time.Minute,
@@ -263,7 +269,7 @@ func resolveSelfManagedCheckOptimizeConfig(opts *checkOptimizeOptions) error {
 			opts.FeedbackLLMIDs = runner.DefaultFeedbackLLMIDs()
 		}
 	}
-	if c, ok, err := appconfig.Load(opts.RepoRoot); err != nil {
+	if c, ok, err := projectconfig.Load(opts.RepoRoot); err != nil {
 		return err
 	} else if ok {
 		if opts.FeedbackAgent == "" {

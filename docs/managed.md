@@ -22,6 +22,8 @@ dari-docs check . \
   --task "Install the SDK and make a first API call"
 ```
 
+By default, the command submits the run and exits after printing the run ID. Add `--wait` if you want the CLI to block until the run finishes and write feedback files locally.
+
 ## Generate proposed edits
 
 Use `optimize` to turn tester feedback into proposed documentation revisions:
@@ -32,11 +34,28 @@ dari-docs optimize . \
   --task "Install the SDK and make a first API call"
 ```
 
-The edited files are downloaded into `.dari-docs/updated/` without changing your repo. Review that folder and copy changes into your repo when ready.
+By default, this submits the optimize run and exits. To wait for completion and download edited files into `.dari-docs/updated/`, add `--wait`:
+
+```bash
+dari-docs optimize . \
+  --managed \
+  --wait \
+  --task "Install the SDK and make a first API call"
+```
+
+Review `.dari-docs/updated/` and copy changes into your repo when ready. To apply edited docs directly after the run finishes, use `--wait --apply`:
+
+```bash
+dari-docs optimize . \
+  --managed \
+  --wait \
+  --task "Install the SDK and make a first API call" \
+  --apply
+```
 
 ## Recover an existing run
 
-If a managed run is still running after the original CLI command exits, use the run ID printed by the command:
+After a managed command exits, use the run ID printed by the command:
 
 ```bash
 dari-docs runs status run_...

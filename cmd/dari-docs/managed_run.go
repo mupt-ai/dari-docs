@@ -26,6 +26,7 @@ type managedRunConfig struct {
 	LiveVerify     bool
 	RuntimeSecrets map[string]string
 	Apply          bool
+	Wait           bool
 	Timeout        time.Duration
 	BundleOptions  bundle.CreateOptions
 }
@@ -89,6 +90,10 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 	}
 	fmt.Fprintf(os.Stderr, "Managed run: %s\n", created.RunID)
 	fmt.Fprintf(os.Stderr, "Reserved: %s\n", formatCents(reserve))
+	if !cfg.Wait {
+		printManagedRunSubmitted(created.RunID, created.Status, cfg.Command)
+		return nil
+	}
 	status, err := waitForManagedRun(ctx, client, created.RunID, cfg.Timeout)
 	if err != nil {
 		return err
@@ -128,6 +133,19 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 		}
 	}
 	return nil
+}
+
+func printManagedRunSubmitted(runID string, status string, command string) {
+	fmt.Println("\nSubmitted managed run.")
+	fmt.Printf("Managed run: %s\n", runID)
+	if status != "" {
+		fmt.Printf("Status: %s\n", status)
+	}
+	fmt.Printf("Wait: dari-docs runs wait %s\n", runID)
+	fmt.Printf("Download feedback after completion: dari-docs runs download %s\n", runID)
+	if command != "check" {
+		fmt.Printf("Apply updated docs after completion: dari-docs runs apply %s\n", runID)
+	}
 }
 
 func managedRunReserveCents(command string, taskCount int, testerLLMCount int, cfg managed.RunConfig) int64 {

@@ -1,6 +1,6 @@
 # GitHub Actions
 
-Managed checks can run in CI with a named API key. The CLI waits until the managed run finishes, so the Actions job status reflects the docs check result.
+Managed checks can run in CI with a named API key. Add `--wait` so the CLI waits until the managed run finishes and the Actions job status reflects the docs check result.
 
 ## Create an API key
 

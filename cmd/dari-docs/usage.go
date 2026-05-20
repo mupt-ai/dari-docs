@@ -35,6 +35,7 @@ Important flags:
   --live-verify               permit safe credential-dependent checks
   --secret-env NAME           pass runtime product/API key from env var; repeatable
   --managed                   use the managed dari-docs service instead of your Dari org
+  --wait                      wait for a managed run to finish before exiting
   --bundle-include GLOB       include extra repo-relative docs bundle paths; repeatable
   --bundle-exclude GLOB       exclude repo-relative docs bundle paths; repeatable
   --apply                     copy downloaded updated docs back into repo

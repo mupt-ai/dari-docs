@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/mupt-ai/dari-docs/internal/agenttemplates"
-	appconfig "github.com/mupt-ai/dari-docs/internal/config"
+	"github.com/mupt-ai/dari-docs/internal/projectconfig"
 	"github.com/spf13/cobra"
 )
 
@@ -81,7 +81,7 @@ func runInitWithOptions(ctx context.Context, opts initOptions) error {
 		return fmt.Errorf("--llm-api-key-secret cannot be combined with provider-specific LLM key secret flags")
 	}
 
-	cfg := appconfig.Config{AgentsDir: agentsDir, LLMMode: "platform-managed", LLMAPIKeySecret: opts.LLMAPIKeySecret}
+	cfg := projectconfig.Config{AgentsDir: agentsDir, LLMMode: "platform-managed", LLMAPIKeySecret: opts.LLMAPIKeySecret}
 	if opts.LLMAPIKeySecret != "" {
 		cfg.LLMMode = "byok-publish-time"
 		if err := setLLMAPIKeySecret(filepath.Join(agentsDir, "docs-user-tester-agent", "dari.yml"), opts.LLMAPIKeySecret); err != nil {
@@ -124,10 +124,10 @@ func runInitWithOptions(ctx context.Context, opts initOptions) error {
 		fmt.Printf("Deployed tester agent: %s\n", testerID)
 		fmt.Printf("Deployed editor agent: %s\n", editorID)
 	}
-	if err := appconfig.Save(absRepo, cfg); err != nil {
+	if err := projectconfig.Save(absRepo, cfg); err != nil {
 		return err
 	}
-	fmt.Printf("Wrote %s\n", appconfig.Path(absRepo))
+	fmt.Printf("Wrote %s\n", projectconfig.Path(absRepo))
 	if !opts.Deploy {
 		fmt.Println("Run `dari-docs init --deploy` to deploy these agents into your Dari org.")
 	}
