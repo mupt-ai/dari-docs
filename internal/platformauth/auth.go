@@ -15,11 +15,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mupt-ai/dari-docs/internal/browser"
 )
 
 const (
@@ -320,16 +320,7 @@ func validateOAuthState(expected, actual string) error {
 }
 
 func openBrowser(rawURL string) bool {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", rawURL)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", rawURL)
-	default:
-		cmd = exec.Command("xdg-open", rawURL)
-	}
-	return cmd.Start() == nil
+	return browser.Open(rawURL) == nil
 }
 
 func firstNonEmpty(values ...string) string {
