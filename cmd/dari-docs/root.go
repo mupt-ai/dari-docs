@@ -19,8 +19,8 @@ func newRootCommand() *cobra.Command {
 	root.SetVersionTemplate(versionLine() + "\n")
 
 	root.AddCommand(
-		passthroughCommand("check [repo]", "Run docs checks", func(args []string) error { return runCheckOrOptimize("check", args) }),
-		passthroughCommand("optimize [repo]", "Run docs checks and propose edits", func(args []string) error { return runCheckOrOptimize("optimize", args) }),
+		newCheckCommand(),
+		newOptimizeCommand(),
 		passthroughCommand("init [repo]", "Extract or deploy bundled agents", runInit),
 		newAuthCommand(),
 		newBillingCommand(),

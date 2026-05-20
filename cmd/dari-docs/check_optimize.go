@@ -2,174 +2,308 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/mupt-ai/dari-docs/internal/bundle"
 	appconfig "github.com/mupt-ai/dari-docs/internal/config"
 	"github.com/mupt-ai/dari-docs/internal/runner"
+	"github.com/spf13/cobra"
 )
 
-func runCheckOrOptimize(cmd string, args []string) error {
-	fs := flag.NewFlagSet("dari-docs "+cmd, flag.ExitOnError)
-	var tasks repeated
-	var taskFiles repeated
-	var secretEnvs repeated
-	var bundleIncludes repeated
-	var bundleExcludes repeated
-	var apiKeyEnv string
-	var apiKey string
-	var apiBaseURL string
-	var feedbackAgent string
-	var editorAgent string
-	var llmID string
-	var feedbackLLMIDs repeated
-	var editorLLMID string
-	var outDir string
-	var parallel int
-	var apply bool
-	var liveVerify bool
-	var managedMode bool
-	var timeoutMinutes int
-	fs.Var(&tasks, "task", "implementation task/prompt to test; repeatable")
-	fs.Var(&taskFiles, "tasks-file", "file containing tasks, one per paragraph or bullet; repeatable")
-	fs.Var(&secretEnvs, "secret-env", "runtime product/API secret env var to pass to sessions; repeatable")
-	fs.Var(&bundleIncludes, "bundle-include", "repo-relative glob to include in the docs bundle in addition to defaults; repeatable")
-	fs.Var(&bundleExcludes, "bundle-exclude", "repo-relative glob to exclude from the docs bundle; repeatable")
-	fs.StringVar(&apiKeyEnv, "api-key-env", "DARI_API_KEY", "env var containing Dari API key")
-	fs.StringVar(&apiKey, "api-key", "", "Dari API key (prefer --api-key-env)")
-	fs.StringVar(&apiBaseURL, "api-base-url", os.Getenv("DARI_API_BASE_URL"), "Dari API base URL (defaults to production)")
-	fs.StringVar(&feedbackAgent, "feedback-agent", "", "Dari docs user-test agent ID (defaults to .dari-docs/config.json)")
-	fs.StringVar(&editorAgent, "editor-agent", "", "Dari docs editor agent ID (defaults to .dari-docs/config.json)")
-	fs.StringVar(&llmID, "llm", "", "manifest LLM option ID to use for all sessions")
-	fs.Var(&feedbackLLMIDs, "feedback-llm", "manifest LLM option ID or group for feedback/tester sessions; repeat or comma-separate (groups: all, claude, gpt; overrides --llm)")
-	fs.StringVar(&editorLLMID, "editor-llm", "", "manifest LLM option ID for the editor session (overrides --llm)")
-	fs.StringVar(&outDir, "out", "", "output directory (default: <repo>/.dari-docs)")
-	fs.IntVar(&parallel, "parallel", 4, "number of feedback sessions per self-managed batch")
-	fs.BoolVar(&apply, "apply", false, "copy updated docs back into the repo after downloading")
-	fs.BoolVar(&liveVerify, "live-verify", false, "allow agents to run safe live verification using provided runtime secrets")
-	fs.BoolVar(&managedMode, "managed", false, "run through the managed dari-docs service instead of a self-managed Dari org")
-	fs.IntVar(&timeoutMinutes, "timeout-minutes", 30, "managed CLI wait timeout in minutes")
-	if cmd == "check" {
-		fs.Bool("remote-editor", false, "ignored for check")
+type checkOptimizeOptions struct {
+	Command string
+	RepoArg string
+
+	RepoRoot string
+	OutDir   string
+
+	TaskInputs []string
+	TaskFiles  []string
+	Tasks      []string
+
+	SecretEnvs     []string
+	RuntimeSecrets map[string]string
+
+	BundleIncludes []string
+	BundleExcludes []string
+	BundleOptions  bundle.CreateOptions
+
+	APIKeyEnv     string
+	APIKey        string
+	APIBaseURL    string
+	FeedbackAgent string
+	EditorAgent   string
+
+	LLMID           string
+	FeedbackLLMRaw  []string
+	FeedbackLLMIDs  []string
+	EditorLLMID     string
+	EditorLLMIDFlag string
+
+	Parallel       int
+	Apply          bool
+	LiveVerify     bool
+	Managed        bool
+	TimeoutMinutes int
+}
+
+func newCheckCommand() *cobra.Command {
+	return newCheckOptimizeCommand("check")
+}
+
+func newOptimizeCommand() *cobra.Command {
+	return newCheckOptimizeCommand("optimize")
+}
+
+func newCheckOptimizeCommand(command string) *cobra.Command {
+	opts := defaultCheckOptimizeOptions(command)
+	cmd := &cobra.Command{
+		Use:           command + " [repo]",
+		Short:         checkOptimizeShort(command),
+		Args:          cobra.ArbitraryArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				opts.RepoArg = args[0]
+			}
+			return runCheckOrOptimizeOptions(cmd.Context(), opts)
+		},
 	}
-	repoArg := ""
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		repoArg = args[0]
-		args = args[1:]
+	bindCheckOptimizeFlags(cmd, opts)
+	return cmd
+}
+
+func defaultCheckOptimizeOptions(command string) *checkOptimizeOptions {
+	return &checkOptimizeOptions{
+		Command:        command,
+		APIKeyEnv:      "DARI_API_KEY",
+		APIBaseURL:     os.Getenv("DARI_API_BASE_URL"),
+		Parallel:       4,
+		TimeoutMinutes: 30,
 	}
-	if err := fs.Parse(args); err != nil {
+}
+
+func bindCheckOptimizeFlags(cmd *cobra.Command, opts *checkOptimizeOptions) {
+	flags := cmd.Flags()
+	flags.StringArrayVar(&opts.TaskInputs, "task", nil, "implementation task/prompt to test; repeatable")
+	flags.StringArrayVar(&opts.TaskFiles, "tasks-file", nil, "file containing tasks, one per paragraph or bullet; repeatable")
+	flags.StringArrayVar(&opts.SecretEnvs, "secret-env", nil, "runtime product/API secret env var to pass to sessions; repeatable")
+	flags.StringArrayVar(&opts.BundleIncludes, "bundle-include", nil, "repo-relative glob to include in the docs bundle in addition to defaults; repeatable")
+	flags.StringArrayVar(&opts.BundleExcludes, "bundle-exclude", nil, "repo-relative glob to exclude from the docs bundle; repeatable")
+	flags.StringVar(&opts.APIKeyEnv, "api-key-env", opts.APIKeyEnv, "env var containing Dari API key")
+	flags.StringVar(&opts.APIKey, "api-key", "", "Dari API key (prefer --api-key-env)")
+	flags.StringVar(&opts.APIBaseURL, "api-base-url", opts.APIBaseURL, "Dari API base URL (defaults to production)")
+	flags.StringVar(&opts.FeedbackAgent, "feedback-agent", "", "Dari docs user-test agent ID (defaults to .dari-docs/config.json)")
+	flags.StringVar(&opts.EditorAgent, "editor-agent", "", "Dari docs editor agent ID (defaults to .dari-docs/config.json)")
+	flags.StringVar(&opts.LLMID, "llm", "", "manifest LLM option ID to use for all sessions")
+	flags.StringArrayVar(&opts.FeedbackLLMRaw, "feedback-llm", nil, "manifest LLM option ID or group for feedback/tester sessions; repeat or comma-separate (groups: all, claude, gpt; overrides --llm)")
+	flags.StringVar(&opts.EditorLLMIDFlag, "editor-llm", "", "manifest LLM option ID for the editor session (overrides --llm)")
+	flags.StringVar(&opts.OutDir, "out", "", "output directory (default: <repo>/.dari-docs)")
+	flags.IntVar(&opts.Parallel, "parallel", opts.Parallel, "number of feedback sessions per self-managed batch")
+	flags.BoolVar(&opts.Apply, "apply", false, "copy updated docs back into the repo after downloading")
+	flags.BoolVar(&opts.LiveVerify, "live-verify", false, "allow agents to run safe live verification using provided runtime secrets")
+	flags.BoolVar(&opts.Managed, "managed", false, "run through the managed dari-docs service instead of a self-managed Dari org")
+	flags.IntVar(&opts.TimeoutMinutes, "timeout-minutes", opts.TimeoutMinutes, "managed CLI wait timeout in minutes")
+	if opts.Command == "check" {
+		flags.Bool("remote-editor", false, "ignored for check")
+	}
+}
+
+func checkOptimizeShort(command string) string {
+	if command == "check" {
+		return "Run docs checks"
+	}
+	return "Run docs checks and propose edits"
+}
+
+func runCheckOrOptimize(command string, args []string) error {
+	cmd := newCheckOptimizeCommand(command)
+	cmd.SetArgs(args)
+	return cmd.Execute()
+}
+
+func runCheckOrOptimizeOptions(ctx context.Context, opts *checkOptimizeOptions) error {
+	if err := opts.prepare(); err != nil {
 		return err
 	}
+	if opts.Managed {
+		return runManagedCheckOrOptimizeFromOptions(ctx, *opts)
+	}
+	return runSelfManagedCheckOrOptimize(ctx, *opts)
+}
 
-	repo := "."
-	if repoArg != "" {
-		repo = repoArg
-	} else if fs.NArg() > 0 {
-		repo = fs.Arg(0)
+func (opts *checkOptimizeOptions) prepare() error {
+	if err := opts.resolveRepoAndOutput(); err != nil {
+		return err
+	}
+	if err := opts.loadTasks(); err != nil {
+		return err
+	}
+	if err := opts.loadRuntimeSecrets(); err != nil {
+		return err
+	}
+	opts.resolveLLMFlags()
+	opts.BundleOptions = bundle.CreateOptions{Include: opts.BundleIncludes, Exclude: opts.BundleExcludes}
+	return nil
+}
+
+func (opts *checkOptimizeOptions) resolveRepoAndOutput() error {
+	repo := opts.RepoArg
+	if repo == "" {
+		repo = "."
 	}
 	absRepo, err := filepath.Abs(repo)
 	if err != nil {
 		return err
 	}
-	if outDir == "" {
-		outDir = filepath.Join(absRepo, ".dari-docs")
+	opts.RepoRoot = absRepo
+	if opts.OutDir == "" {
+		opts.OutDir = filepath.Join(absRepo, ".dari-docs")
 	}
-	allTasks := append([]string{}, tasks...)
-	for _, p := range taskFiles {
-		more, err := readTasksFile(p)
+	return nil
+}
+
+func (opts *checkOptimizeOptions) loadTasks() error {
+	tasks := append([]string{}, opts.TaskInputs...)
+	for _, path := range opts.TaskFiles {
+		more, err := readTasksFile(path)
 		if err != nil {
 			return err
 		}
-		allTasks = append(allTasks, more...)
+		tasks = append(tasks, more...)
 	}
-	if len(allTasks) == 0 {
+	if len(tasks) == 0 {
 		return fmt.Errorf("provide at least one --task or --tasks-file")
 	}
+	opts.Tasks = tasks
+	return nil
+}
+
+func (opts *checkOptimizeOptions) loadRuntimeSecrets() error {
 	secrets := map[string]string{}
-	for _, name := range secretEnvs {
+	for _, name := range opts.SecretEnvs {
 		val := os.Getenv(name)
 		if val == "" {
 			return fmt.Errorf("--secret-env %s requested but env var is empty", name)
 		}
 		secrets[name] = val
 	}
-	if len(secretEnvs) > 0 && !liveVerify {
+	if len(opts.SecretEnvs) > 0 && !opts.LiveVerify {
 		return fmt.Errorf("--secret-env requires --live-verify")
 	}
-	feedbackLLMList := expandFeedbackLLMList(feedbackLLMIDs)
-	if editorLLMID == "" {
-		editorLLMID = llmID
+	opts.RuntimeSecrets = secrets
+	return nil
+}
+
+func (opts *checkOptimizeOptions) resolveLLMFlags() {
+	opts.FeedbackLLMIDs = expandFeedbackLLMList(opts.FeedbackLLMRaw)
+	opts.EditorLLMID = opts.EditorLLMIDFlag
+	if opts.EditorLLMID == "" {
+		opts.EditorLLMID = opts.LLMID
 	}
-	if managedMode {
-		if apiKey != "" || apiBaseURL != "" || feedbackAgent != "" || editorAgent != "" {
-			return fmt.Errorf("--managed cannot be combined with --api-key, --api-base-url, --feedback-agent, or --editor-agent")
-		}
-		if _, err := loadManagedToken(); err != nil {
-			return err
-		}
-		if len(feedbackLLMList) == 0 && llmID != "" {
-			feedbackLLMList = []string{llmID}
-		}
-		return runManagedCheckOrOptimize(context.Background(), managedRunConfig{
-			Command: cmd, RepoRoot: absRepo, OutDir: outDir,
-			Tasks: allTasks, FeedbackLLMIDs: feedbackLLMList, EditorLLMID: editorLLMID, Apply: apply,
-			LiveVerify: liveVerify, RuntimeSecrets: secrets, Timeout: time.Duration(timeoutMinutes) * time.Minute,
-			BundleOptions: bundle.CreateOptions{Include: bundleIncludes, Exclude: bundleExcludes},
-		})
+}
+
+func runManagedCheckOrOptimizeFromOptions(ctx context.Context, opts checkOptimizeOptions) error {
+	if opts.APIKey != "" || opts.APIBaseURL != "" || opts.FeedbackAgent != "" || opts.EditorAgent != "" {
+		return fmt.Errorf("--managed cannot be combined with --api-key, --api-base-url, --feedback-agent, or --editor-agent")
 	}
-	if len(feedbackLLMList) == 0 {
-		if llmID != "" {
-			feedbackLLMList = []string{llmID}
-		} else {
-			feedbackLLMList = defaultFeedbackLLMIDs()
-		}
-	}
-	if c, ok, err := appconfig.Load(absRepo); err != nil {
+	if _, err := loadManagedToken(); err != nil {
 		return err
-	} else if ok {
-		if feedbackAgent == "" {
-			feedbackAgent = c.TesterAgentID
-		}
-		if editorAgent == "" {
-			editorAgent = c.EditorAgentID
-		}
 	}
-	if feedbackAgent == "" {
-		return fmt.Errorf("missing tester agent ID; run `dari-docs init --deploy` or pass --feedback-agent")
+	feedbackLLMIDs := opts.FeedbackLLMIDs
+	if len(feedbackLLMIDs) == 0 && opts.LLMID != "" {
+		feedbackLLMIDs = []string{opts.LLMID}
 	}
-	if cmd != "check" && editorAgent == "" {
-		return fmt.Errorf("missing tester/editor agent IDs; run `dari-docs init --deploy` or pass --feedback-agent and --editor-agent")
+	return runManagedCheckOrOptimize(ctx, managedRunConfig{
+		Command:        opts.Command,
+		RepoRoot:       opts.RepoRoot,
+		OutDir:         opts.OutDir,
+		Tasks:          opts.Tasks,
+		FeedbackLLMIDs: feedbackLLMIDs,
+		EditorLLMID:    opts.EditorLLMID,
+		Apply:          opts.Apply,
+		LiveVerify:     opts.LiveVerify,
+		RuntimeSecrets: opts.RuntimeSecrets,
+		Timeout:        time.Duration(opts.TimeoutMinutes) * time.Minute,
+		BundleOptions:  opts.BundleOptions,
+	})
+}
+
+func runSelfManagedCheckOrOptimize(ctx context.Context, opts checkOptimizeOptions) error {
+	if err := resolveSelfManagedCheckOptimizeConfig(&opts); err != nil {
+		return err
 	}
-	if apiKey == "" && apiKeyEnv != "" {
-		apiKey = os.Getenv(apiKeyEnv)
-	}
-	if apiKey == "" {
-		return fmt.Errorf("missing Dari API key; set %s or pass --api-key", apiKeyEnv)
-	}
-	cfg := runner.Config{
-		RepoRoot: absRepo, OutDir: outDir, APIKey: apiKey, APIBaseURL: apiBaseURL,
-		FeedbackAgent: feedbackAgent, EditorAgent: editorAgent, FeedbackLLMIDs: feedbackLLMList, EditorLLMID: editorLLMID, Tasks: allTasks, LiveVerify: liveVerify,
-		RuntimeSecrets: secrets, Parallel: parallel, Apply: apply, SkipEditor: cmd == "check", Timeout: time.Duration(timeoutMinutes) * time.Minute,
-		BundleOptions: bundle.CreateOptions{Include: bundleIncludes, Exclude: bundleExcludes},
-	}
-	res, err := runner.Run(context.Background(), cfg)
+	res, err := runner.Run(ctx, runner.Config{
+		RepoRoot:       opts.RepoRoot,
+		OutDir:         opts.OutDir,
+		APIKey:         opts.APIKey,
+		APIBaseURL:     opts.APIBaseURL,
+		FeedbackAgent:  opts.FeedbackAgent,
+		EditorAgent:    opts.EditorAgent,
+		FeedbackLLMIDs: opts.FeedbackLLMIDs,
+		EditorLLMID:    opts.EditorLLMID,
+		Tasks:          opts.Tasks,
+		LiveVerify:     opts.LiveVerify,
+		RuntimeSecrets: opts.RuntimeSecrets,
+		Parallel:       opts.Parallel,
+		Apply:          opts.Apply,
+		SkipEditor:     opts.Command == "check",
+		Timeout:        time.Duration(opts.TimeoutMinutes) * time.Minute,
+		BundleOptions:  opts.BundleOptions,
+	})
 	if err != nil {
 		return err
 	}
+	printCheckOptimizeResult(opts.Command, opts.OutDir, opts.Apply, res)
+	return nil
+}
+
+func resolveSelfManagedCheckOptimizeConfig(opts *checkOptimizeOptions) error {
+	if len(opts.FeedbackLLMIDs) == 0 {
+		if opts.LLMID != "" {
+			opts.FeedbackLLMIDs = []string{opts.LLMID}
+		} else {
+			opts.FeedbackLLMIDs = defaultFeedbackLLMIDs()
+		}
+	}
+	if c, ok, err := appconfig.Load(opts.RepoRoot); err != nil {
+		return err
+	} else if ok {
+		if opts.FeedbackAgent == "" {
+			opts.FeedbackAgent = c.TesterAgentID
+		}
+		if opts.EditorAgent == "" {
+			opts.EditorAgent = c.EditorAgentID
+		}
+	}
+	if opts.FeedbackAgent == "" {
+		return fmt.Errorf("missing tester agent ID; run `dari-docs init --deploy` or pass --feedback-agent")
+	}
+	if opts.Command != "check" && opts.EditorAgent == "" {
+		return fmt.Errorf("missing tester/editor agent IDs; run `dari-docs init --deploy` or pass --feedback-agent and --editor-agent")
+	}
+	if opts.APIKey == "" && opts.APIKeyEnv != "" {
+		opts.APIKey = os.Getenv(opts.APIKeyEnv)
+	}
+	if opts.APIKey == "" {
+		return fmt.Errorf("missing Dari API key; set %s or pass --api-key", opts.APIKeyEnv)
+	}
+	return nil
+}
+
+func printCheckOptimizeResult(command, outDir string, apply bool, res runner.Result) {
 	fmt.Println("\nDone.")
 	fmt.Printf("Bundle: %s\n", res.BundlePath)
 	fmt.Printf("Feedback: %s\n", filepath.Join(outDir, "aggregate-feedback.md"))
-	if cmd != "check" {
+	if command != "check" {
 		fmt.Printf("Editor session: %s\n", res.EditorSessionID)
 		fmt.Printf("Updated docs: %s\n", res.UpdatedDir)
 		if !apply {
 			fmt.Printf("Review and apply manually, or rerun with --apply.\n")
 		}
 	}
-	return nil
 }
