@@ -1,15 +1,6 @@
 package main
 
-import (
-	"strings"
-
-	"github.com/mupt-ai/dari-docs/internal/runner"
-)
-
-type repeated []string
-
-func (r *repeated) String() string     { return strings.Join(*r, ",") }
-func (r *repeated) Set(v string) error { *r = append(*r, v); return nil }
+import "github.com/mupt-ai/dari-docs/internal/runner"
 
 func defaultFeedbackLLMIDs() []string {
 	return runner.DefaultFeedbackLLMIDs()
