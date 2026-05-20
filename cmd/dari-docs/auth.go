@@ -113,7 +113,7 @@ func newAuthTokenCreateCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "API key name, for example github-actions")
-	cmd.Flags().StringArrayVar(&scopes, "scope", nil, "API key scope; repeatable (default: managed:read, managed:check, and managed:optimize)")
+	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "API key scope; repeatable or comma-separated (default: managed:read, managed:check, and managed:optimize)")
 	cmd.Flags().StringVar(&expiresIn, "expires-in", "", "optional expiration such as 90d or 24h")
 	return cmd
 }
@@ -337,7 +337,7 @@ func runAuthTokenCreate(ctx context.Context, name string, scopes []string, expir
 	if err != nil {
 		return err
 	}
-	tokenScopes := expandCSVList(scopes)
+	tokenScopes := uniqueTrimmedList(scopes)
 	if len(tokenScopes) == 0 {
 		tokenScopes = []string{"managed:read", "managed:check", "managed:optimize"}
 	}

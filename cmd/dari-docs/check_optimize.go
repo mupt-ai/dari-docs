@@ -92,7 +92,7 @@ func bindCheckOptimizeFlags(cmd *cobra.Command, opts *checkOptimizeOptions) {
 	flags.StringVar(&opts.FeedbackAgent, "feedback-agent", "", "Dari docs user-test agent ID (defaults to .dari-docs/config.json)")
 	flags.StringVar(&opts.EditorAgent, "editor-agent", "", "Dari docs editor agent ID (defaults to .dari-docs/config.json)")
 	flags.StringVar(&opts.LLMID, "llm", "", "manifest LLM option ID to use for all sessions")
-	flags.StringArrayVar(&opts.FeedbackLLMRaw, "feedback-llm", nil, "manifest LLM option ID or group for feedback/tester sessions; repeat or comma-separate (groups: all, claude, gpt; overrides --llm)")
+	flags.StringSliceVar(&opts.FeedbackLLMRaw, "feedback-llm", nil, "manifest LLM option ID or group for feedback/tester sessions; repeat or comma-separate (groups: all, claude, gpt; overrides --llm)")
 	flags.StringVar(&opts.EditorLLMIDFlag, "editor-llm", "", "manifest LLM option ID for the editor session (overrides --llm)")
 	flags.StringVar(&opts.OutDir, "out", "", "output directory (default: <repo>/.dari-docs)")
 	flags.IntVar(&opts.Parallel, "parallel", opts.Parallel, "number of feedback sessions per self-managed batch")

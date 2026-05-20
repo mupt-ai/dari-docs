@@ -2,24 +2,22 @@ package main
 
 import "strings"
 
-func expandCSVList(values []string) []string {
+func uniqueTrimmedList(values []string) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, raw := range values {
-		for _, part := range strings.Split(raw, ",") {
-			v := strings.TrimSpace(part)
-			if v == "" || seen[v] {
-				continue
-			}
-			seen[v] = true
-			out = append(out, v)
+		v := strings.TrimSpace(raw)
+		if v == "" || seen[v] {
+			continue
 		}
+		seen[v] = true
+		out = append(out, v)
 	}
 	return out
 }
 
 func expandFeedbackLLMList(values []string) []string {
-	parts := expandCSVList(values)
+	parts := uniqueTrimmedList(values)
 	if len(parts) == 0 {
 		return nil
 	}

@@ -130,16 +130,16 @@ func TestDefaultFeedbackLLMIDsIncludesBundledMatrix(t *testing.T) {
 	}
 }
 
-func TestExpandCSVListTrimsDeduplicatesAndSplits(t *testing.T) {
-	got := expandCSVList([]string{"dumb-claude, medium-claude", "smart-gpt", "medium-claude"})
+func TestUniqueTrimmedListDeduplicates(t *testing.T) {
+	got := uniqueTrimmedList([]string{"dumb-claude", " medium-claude", "smart-gpt", "medium-claude"})
 	want := []string{"dumb-claude", "medium-claude", "smart-gpt"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("expandCSVList = %#v, want %#v", got, want)
+		t.Fatalf("uniqueTrimmedList = %#v, want %#v", got, want)
 	}
 }
 
 func TestExpandFeedbackLLMListSupportsGroups(t *testing.T) {
-	got := expandFeedbackLLMList([]string{"claude, medium-gpt", "gpt", "smart-claude"})
+	got := expandFeedbackLLMList([]string{"claude", "medium-gpt", "gpt", "smart-claude"})
 	want := []string{"dumb-claude", "medium-claude", "smart-claude", "medium-gpt", "dumb-gpt", "smart-gpt"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("expandFeedbackLLMList = %#v, want %#v", got, want)
