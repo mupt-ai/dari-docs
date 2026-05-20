@@ -21,10 +21,10 @@ import (
 
 	"github.com/mupt-ai/dari-docs/internal/agenttemplates"
 	"github.com/mupt-ai/dari-docs/internal/bundle"
-	appconfig "github.com/mupt-ai/dari-docs/internal/config"
 	"github.com/mupt-ai/dari-docs/internal/dari"
 	"github.com/mupt-ai/dari-docs/internal/managed"
 	"github.com/mupt-ai/dari-docs/internal/platformauth"
+	"github.com/mupt-ai/dari-docs/internal/projectconfig"
 	"github.com/mupt-ai/dari-docs/internal/runner"
 	"github.com/mupt-ai/dari-docs/internal/workspace"
 	"gopkg.in/yaml.v3"
@@ -207,7 +207,7 @@ func runCheckOrOptimize(cmd string, args []string) error {
 			feedbackLLMList = defaultFeedbackLLMIDs()
 		}
 	}
-	if c, ok, err := appconfig.Load(absRepo); err != nil {
+	if c, ok, err := projectconfig.Load(absRepo); err != nil {
 		return err
 	} else if ok {
 		if feedbackAgent == "" {
@@ -1395,7 +1395,7 @@ func runInit(args []string) error {
 		return fmt.Errorf("--llm-api-key-secret cannot be combined with provider-specific LLM key secret flags")
 	}
 
-	cfg := appconfig.Config{AgentsDir: agentsDir, LLMMode: "platform-managed", LLMAPIKeySecret: llmAPIKeySecret}
+	cfg := projectconfig.Config{AgentsDir: agentsDir, LLMMode: "platform-managed", LLMAPIKeySecret: llmAPIKeySecret}
 	if llmAPIKeySecret != "" {
 		cfg.LLMMode = "byok-publish-time"
 		if err := setLLMAPIKeySecret(filepath.Join(agentsDir, "docs-user-tester-agent", "dari.yml"), llmAPIKeySecret); err != nil {
@@ -1437,10 +1437,10 @@ func runInit(args []string) error {
 		fmt.Printf("Deployed tester agent: %s\n", testerID)
 		fmt.Printf("Deployed editor agent: %s\n", editorID)
 	}
-	if err := appconfig.Save(absRepo, cfg); err != nil {
+	if err := projectconfig.Save(absRepo, cfg); err != nil {
 		return err
 	}
-	fmt.Printf("Wrote %s\n", appconfig.Path(absRepo))
+	fmt.Printf("Wrote %s\n", projectconfig.Path(absRepo))
 	if !deploy {
 		fmt.Println("Run `dari-docs init --deploy` to deploy these agents into your Dari org.")
 	}
