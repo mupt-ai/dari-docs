@@ -146,12 +146,10 @@ func (s *Server) startNextSession(ctx context.Context, run queuedRun) error {
 func (s *Server) startSingleSessionBatch(ctx context.Context, run queuedRun, next nextSession) error {
 	var secrets map[string]string
 	if shouldAttachRuntimeSecrets(run, next) {
-		secretJSON, err := s.runtimeSecretsJSON(ctx, run.ID)
+		var err error
+		secrets, err = s.runtimeSecrets(ctx, run.ID)
 		if err != nil {
 			return s.failStartedRun(ctx, run, persistedErrRuntimeSecretsLoadFailed, fmt.Errorf("load runtime secrets: %w", err))
-		}
-		if secretJSON != "" {
-			secrets = map[string]string{managedRuntimeSecretsName: secretJSON}
 		}
 	}
 	batch, err := s.dari.CreateSessionBatch(ctx, dari.CreateSessionBatchRequest{
@@ -218,12 +216,10 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun, items []te
 	b := bundle.Result{SHA256: run.BundleSHA256, Manifest: bundle.Manifest{Files: make([]bundle.FileRecord, run.BundleFiles)}}
 	var secrets map[string]string
 	if run.LiveVerify {
-		secretJSON, err := s.runtimeSecretsJSON(ctx, run.ID)
+		var err error
+		secrets, err = s.runtimeSecrets(ctx, run.ID)
 		if err != nil {
 			return s.failStartedRun(ctx, run, persistedErrRuntimeSecretsLoadFailed, fmt.Errorf("load runtime secrets: %w", err))
-		}
-		if secretJSON != "" {
-			secrets = map[string]string{managedRuntimeSecretsName: secretJSON}
 		}
 	}
 	batchReq := dari.CreateSessionBatchRequest{

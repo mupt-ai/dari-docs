@@ -57,12 +57,4 @@ Self-managed runs use all of these tester LLM options per task by default. Pass 
 
 ## Runtime product/API secrets
 
-Runtime product/API keys are separate from LLM credentials. Both agents declare:
-
-```yaml
-sandbox:
-  secrets:
-    - DARI_DOCS_RUNTIME_SECRETS_JSON
-```
-
-That lets `dari-docs --live-verify --secret-env NAME` pass runtime product/API keys at session creation.
+Runtime product/API keys are separate from LLM credentials. `dari-docs --live-verify --secret-env NAME` passes runtime product/API keys directly to sessions as environment variables for that run only.

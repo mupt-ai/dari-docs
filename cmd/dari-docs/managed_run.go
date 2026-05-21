@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -71,19 +70,11 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 	fmt.Fprintf(os.Stderr, "  Reserved before start: %s\n", formatCents(reserve))
 	fmt.Fprintln(os.Stderr, "  Final charge reconciles to actual session cost after completion.")
 
-	runtimeSecretJSON := ""
-	if cfg.LiveVerify && len(cfg.RuntimeSecrets) > 0 {
-		b, err := json.Marshal(cfg.RuntimeSecrets)
-		if err != nil {
-			return fmt.Errorf("encode runtime secrets: %w", err)
-		}
-		runtimeSecretJSON = string(b)
-	}
 	created, err := client.CreateRun(ctx, cfg.Command, cfg.Tasks, bundlePath, managed.CreateRunOptions{
-		LiveVerify:         cfg.LiveVerify,
-		RuntimeSecretsJSON: runtimeSecretJSON,
-		FeedbackLLMIDs:     feedbackLLMIDs,
-		EditorLLMID:        editorLLMID,
+		LiveVerify:     cfg.LiveVerify,
+		RuntimeSecrets: cfg.RuntimeSecrets,
+		FeedbackLLMIDs: feedbackLLMIDs,
+		EditorLLMID:    editorLLMID,
 	})
 	if err != nil {
 		return err

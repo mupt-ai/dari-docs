@@ -15,8 +15,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const managedRuntimeSecretsName = "DARI_DOCS_RUNTIME_SECRETS_JSON"
-
 func decodeRuntimeSecretsKey(raw string) ([]byte, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -48,33 +46,37 @@ func (s *Server) encryptRuntimeSecrets(plaintext []byte) ([]byte, []byte, error)
 	return nonce, gcm.Seal(nil, nonce, plaintext, nil), nil
 }
 
-func (s *Server) runtimeSecretsJSON(ctx context.Context, runID string) (string, error) {
+func (s *Server) runtimeSecrets(ctx context.Context, runID string) (map[string]string, error) {
 	var nonce, ciphertext []byte
 	err := s.db.QueryRow(ctx, `
 SELECT runtime_secrets_nonce, runtime_secrets_ciphertext FROM runs WHERE id=$1
 `, runID).Scan(&nonce, &ciphertext)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil
+		return nil, nil
 	}
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if len(nonce) == 0 || len(ciphertext) == 0 {
-		return "", nil
+		return nil, nil
 	}
 	block, err := aes.NewCipher(s.cfg.RuntimeSecretsKey)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return string(plaintext), nil
+	secrets, _, err := runtimeSecretsFromJSON(string(plaintext))
+	if err != nil {
+		return nil, err
+	}
+	return secrets, nil
 }
 
 func (s *Server) clearRuntimeSecrets(ctx context.Context, runID string) {
@@ -87,24 +89,31 @@ WHERE id=$1 AND runtime_secrets_ciphertext IS NOT NULL
 `, runID)
 }
 
-func runtimeSecretNamesFromJSON(raw string) ([]string, error) {
+func runtimeSecretsFromJSON(raw string) (map[string]string, []string, error) {
 	var values map[string]string
 	if err := json.Unmarshal([]byte(raw), &values); err != nil {
-		return nil, fmt.Errorf("runtime_secrets_json must be a JSON object")
+		return nil, nil, fmt.Errorf("runtime_secrets_json must be a JSON object")
 	}
+	secrets := make(map[string]string, len(values))
 	names := make([]string, 0, len(values))
 	for name, value := range values {
 		name = strings.TrimSpace(name)
 		if name == "" {
-			return nil, fmt.Errorf("runtime secret names must be non-empty")
+			return nil, nil, fmt.Errorf("runtime secret names must be non-empty")
 		}
 		if value == "" {
-			return nil, fmt.Errorf("runtime secret values must be non-empty")
+			return nil, nil, fmt.Errorf("runtime secret values must be non-empty")
 		}
+		secrets[name] = value
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	return names, nil
+	return secrets, names, nil
+}
+
+func runtimeSecretNamesFromJSON(raw string) ([]string, error) {
+	_, names, err := runtimeSecretsFromJSON(raw)
+	return names, err
 }
 
 func secretNameMap(names []string) map[string]string {
