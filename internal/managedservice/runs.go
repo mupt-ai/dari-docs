@@ -25,6 +25,7 @@ import (
 	"github.com/mupt-ai/dari-docs/internal/dari"
 	"github.com/mupt-ai/dari-docs/internal/publicdocs"
 	"github.com/mupt-ai/dari-docs/internal/runner"
+	"github.com/mupt-ai/dari-docs/internal/runtimeenv"
 )
 
 var (
@@ -178,12 +179,13 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 				writeError(w, http.StatusBadRequest, "runtime_secrets_json field is too large")
 				return
 			}
-			runtimeSecretJSON = v
-			runtimeSecretNames, err = runtimeSecretNamesFromJSON(v)
+			secrets, names, err := runtimeenv.ParseJSON(v)
 			if err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
+			runtimeSecretNames = names
+			runtimeSecretJSON = string(mustJSON(secrets))
 		case "feedback_llm_ids_json":
 			v, err := readTextPart(part, 1024)
 			if err != nil {
@@ -1378,13 +1380,16 @@ FROM runs WHERE id=$1 AND user_id=$2
 		rs.Sessions = []runSessionSummary{}
 	}
 	if rs.Status == statusCompleted || rs.Status == statusFailed {
-		reports, err := s.completedTesterReports(ctx, runID)
+		results, err := s.completedTesterResults(ctx, runID, rs.Tasks)
 		if err != nil {
 			return rs, err
 		}
-		rs.FeedbackReports = reports
-		if len(reports) > 0 {
-			rs.AggregateFeedback = runner.AggregateFeedback(reports)
+		rs.FeedbackReports = make([]string, 0, len(results))
+		for _, result := range results {
+			rs.FeedbackReports = append(rs.FeedbackReports, result.Report)
+		}
+		if len(results) > 0 {
+			rs.AggregateFeedback = runner.AggregateFeedbackByTask(results)
 		}
 	}
 	return rs, nil
@@ -1428,7 +1433,7 @@ ORDER BY CASE rs.kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, rs.t
 	return sessions, rows.Err()
 }
 
-func (s *Server) completedTesterReports(ctx context.Context, runID string) ([]string, error) {
+func (s *Server) completedTesterResults(ctx context.Context, runID string, tasks []string) ([]runner.FeedbackResult, error) {
 	rows, err := s.db.Query(ctx, `
 SELECT session_id,
        task_index,
@@ -1446,7 +1451,7 @@ ORDER BY task_index, llm_id, created_at
 		taskIndex int
 		llmID     string
 	}
-	var sessions []testerSession
+	sessions := []testerSession{}
 	for rows.Next() {
 		var session testerSession
 		if err := rows.Scan(&session.id, &session.taskIndex, &session.llmID); err != nil {
@@ -1457,15 +1462,27 @@ ORDER BY task_index, llm_id, created_at
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	reports := make([]string, 0, len(sessions))
+	results := make([]runner.FeedbackResult, 0, len(sessions))
 	for _, session := range sessions {
 		tr, err := s.dari.GetTranscript(ctx, session.id)
 		if err != nil {
 			return nil, fmt.Errorf("%w: get transcript %s: %v", errRunFeedbackLoad, session.id, err)
 		}
-		reports = append(reports, dari.FinalAssistantText(tr))
+		results = append(results, runner.FeedbackResult{
+			TaskIndex: session.taskIndex,
+			Task:      taskLabel(tasks, session.taskIndex),
+			LLMID:     session.llmID,
+			Report:    dari.FinalAssistantText(tr),
+		})
 	}
-	return reports, nil
+	return results, nil
+}
+
+func taskLabel(tasks []string, taskIndex int) string {
+	if taskIndex > 0 && taskIndex <= len(tasks) {
+		return strings.TrimSpace(tasks[taskIndex-1])
+	}
+	return ""
 }
 
 func readUploadedFormFile(r *http.Request, name string, maxBytes int64) ([]byte, error) {
