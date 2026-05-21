@@ -18,6 +18,7 @@ import (
 	"github.com/mupt-ai/dari-docs/internal/dari"
 	"github.com/mupt-ai/dari-docs/internal/llmoptions"
 	"github.com/mupt-ai/dari-docs/internal/publicdocs"
+	"github.com/mupt-ai/dari-docs/internal/runtimeenv"
 	"github.com/mupt-ai/dari-docs/internal/workspace"
 )
 
@@ -126,7 +127,12 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 
 	var sessionSecrets map[string]string
 	if cfg.LiveVerify && len(cfg.RuntimeSecrets) > 0 {
-		sessionSecrets = cfg.RuntimeSecrets
+		var err error
+		sessionSecrets, _, err = runtimeenv.NormalizeMap(cfg.RuntimeSecrets)
+		if err != nil {
+			return Result{}, err
+		}
+		cfg.RuntimeSecrets = sessionSecrets
 	}
 
 	reports, err := runFeedback(ctx, client, cfg, sessionSecrets, fileID, b)
@@ -439,6 +445,13 @@ func publicDocURLList(urls []string) string {
 	return strings.TrimSuffix(sb.String(), "\n")
 }
 
+type FeedbackResult struct {
+	TaskIndex int
+	Task      string
+	LLMID     string
+	Report    string
+}
+
 func AggregateFeedback(reports []string) string {
 	var sb strings.Builder
 	sb.WriteString("# Dari docs aggregate feedback\n\n")
@@ -446,6 +459,66 @@ func AggregateFeedback(reports []string) string {
 		sb.WriteString(fmt.Sprintf("\n\n---\n\n## Run %03d\n\n%s\n", i+1, r))
 	}
 	return sb.String()
+}
+
+func AggregateFeedbackByTask(results []FeedbackResult) string {
+	if len(results) == 0 {
+		return AggregateFeedback(nil)
+	}
+	var sb strings.Builder
+	sb.WriteString("# Dari docs aggregate feedback")
+	for _, group := range feedbackResultGroups(results) {
+		sb.WriteString(fmt.Sprintf("\n\n---\n\n## Task %d\n", group.TaskIndex))
+		if group.Task != "" {
+			sb.WriteString("\n")
+			sb.WriteString(group.Task)
+			sb.WriteString("\n")
+		}
+		for _, result := range group.Results {
+			if result.LLMID != "" {
+				sb.WriteString("\n### Tester LLM: ")
+				sb.WriteString(result.LLMID)
+				sb.WriteString("\n")
+			}
+			sb.WriteString("\n")
+			sb.WriteString(result.Report)
+			sb.WriteString("\n")
+		}
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+type feedbackResultGroup struct {
+	TaskIndex int
+	Task      string
+	Results   []FeedbackResult
+}
+
+func feedbackResultGroups(results []FeedbackResult) []feedbackResultGroup {
+	groupsByTask := map[int]*feedbackResultGroup{}
+	for _, result := range results {
+		taskIndex := result.TaskIndex
+		if taskIndex <= 0 {
+			taskIndex = 1
+		}
+		group := groupsByTask[taskIndex]
+		if group == nil {
+			group = &feedbackResultGroup{TaskIndex: taskIndex, Task: strings.TrimSpace(result.Task)}
+			groupsByTask[taskIndex] = group
+		}
+		result.TaskIndex = taskIndex
+		group.Results = append(group.Results, result)
+	}
+	indexes := make([]int, 0, len(groupsByTask))
+	for taskIndex := range groupsByTask {
+		indexes = append(indexes, taskIndex)
+	}
+	sort.Ints(indexes)
+	groups := make([]feedbackResultGroup, 0, len(indexes))
+	for _, taskIndex := range indexes {
+		groups = append(groups, *groupsByTask[taskIndex])
+	}
+	return groups
 }
 
 func writeAggregate(outDir string, reports []string) error {

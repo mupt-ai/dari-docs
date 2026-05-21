@@ -6,13 +6,11 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/mupt-ai/dari-docs/internal/runtimeenv"
 )
 
 func decodeRuntimeSecretsKey(raw string) ([]byte, error) {
@@ -72,7 +70,7 @@ SELECT runtime_secrets_nonce, runtime_secrets_ciphertext FROM runs WHERE id=$1
 	if err != nil {
 		return nil, err
 	}
-	secrets, _, err := runtimeSecretsFromJSON(string(plaintext))
+	secrets, _, err := runtimeenv.ParseJSON(string(plaintext))
 	if err != nil {
 		return nil, err
 	}
@@ -87,33 +85,6 @@ SET runtime_secrets_nonce=NULL,
     runtime_secrets_cleared_at=coalesce(runtime_secrets_cleared_at, now())
 WHERE id=$1 AND runtime_secrets_ciphertext IS NOT NULL
 `, runID)
-}
-
-func runtimeSecretsFromJSON(raw string) (map[string]string, []string, error) {
-	var values map[string]string
-	if err := json.Unmarshal([]byte(raw), &values); err != nil {
-		return nil, nil, fmt.Errorf("runtime_secrets_json must be a JSON object")
-	}
-	secrets := make(map[string]string, len(values))
-	names := make([]string, 0, len(values))
-	for name, value := range values {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			return nil, nil, fmt.Errorf("runtime secret names must be non-empty")
-		}
-		if value == "" {
-			return nil, nil, fmt.Errorf("runtime secret values must be non-empty")
-		}
-		secrets[name] = value
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return secrets, names, nil
-}
-
-func runtimeSecretNamesFromJSON(raw string) ([]string, error) {
-	_, names, err := runtimeSecretsFromJSON(raw)
-	return names, err
 }
 
 func secretNameMap(names []string) map[string]string {

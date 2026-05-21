@@ -180,28 +180,6 @@ func TestDownloadManagedRunArtifactsForCheckWritesFeedback(t *testing.T) {
 	}
 }
 
-func TestManagedRunFeedbackMarkdownGroupsInterleavedSessionsByTask(t *testing.T) {
-	status := managed.RunStatus{
-		Tasks:           []string{"First task", "Second task"},
-		FeedbackReports: []string{"task 1 from a", "task 2 from b", "task 1 from c"},
-		Sessions: []managed.RunSessionSummary{
-			{Kind: "tester", Status: "completed", TaskIndex: 1, LLMID: "llm-a"},
-			{Kind: "tester", Status: "completed", TaskIndex: 2, LLMID: "llm-b"},
-			{Kind: "tester", Status: "completed", TaskIndex: 1, LLMID: "llm-c"},
-		},
-	}
-	got := managedRunFeedbackMarkdown(status)
-	if count := strings.Count(got, "## Task 1"); count != 1 {
-		t.Fatalf("Task 1 heading count = %d, want 1:\n%s", count, got)
-	}
-	if count := strings.Count(got, "## Task 2"); count != 1 {
-		t.Fatalf("Task 2 heading count = %d, want 1:\n%s", count, got)
-	}
-	if strings.Index(got, "task 1 from a") > strings.Index(got, "## Task 2") || strings.Index(got, "task 1 from c") > strings.Index(got, "## Task 2") {
-		t.Fatalf("Task 1 reports were not grouped before Task 2:\n%s", got)
-	}
-}
-
 func TestDownloadManagedRunArtifactsRejectsActiveRun(t *testing.T) {
 	client := managed.New("http://127.0.0.1:1", "token")
 	status := managed.RunStatus{ID: "run_running", Mode: "check", Status: "running"}

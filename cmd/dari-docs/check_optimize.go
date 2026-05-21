@@ -11,6 +11,7 @@ import (
 	"github.com/mupt-ai/dari-docs/internal/projectconfig"
 	"github.com/mupt-ai/dari-docs/internal/publicdocs"
 	"github.com/mupt-ai/dari-docs/internal/runner"
+	"github.com/mupt-ai/dari-docs/internal/runtimeenv"
 	"github.com/mupt-ai/dari-docs/internal/workspace"
 	"github.com/spf13/cobra"
 )
@@ -211,8 +212,15 @@ func (opts *checkOptimizeOptions) loadTasks() error {
 }
 
 func (opts *checkOptimizeOptions) loadRuntimeSecrets() error {
-	secrets := map[string]string{}
-	for _, name := range opts.SecretEnvs {
+	secrets := make(map[string]string, len(opts.SecretEnvs))
+	for _, rawName := range opts.SecretEnvs {
+		name, err := runtimeenv.ValidateName(rawName)
+		if err != nil {
+			return err
+		}
+		if _, ok := secrets[name]; ok {
+			return fmt.Errorf("runtime secret name %q is duplicated", name)
+		}
 		val := os.Getenv(name)
 		if val == "" {
 			return fmt.Errorf("--secret-env %s requested but env var is empty", name)
