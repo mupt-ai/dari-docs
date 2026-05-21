@@ -20,6 +20,8 @@ sandbox:
       - file
       - git
       - jq
+      - python3-pip
+      - python3-venv
       - procps
       - ripgrep
       - unzip
