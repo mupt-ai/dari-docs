@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -97,7 +98,7 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 	if err != nil {
 		return err
 	}
-	if err := writeManagedFeedback(cfg.OutDir, status.FeedbackReports, status.AggregateFeedback); err != nil {
+	if err := writeManagedFeedback(cfg.OutDir, status); err != nil {
 		return err
 	}
 	if status.Status == "failed" {
@@ -268,27 +269,117 @@ func validateManagedLLMID(llmID string, allowed []string) (string, error) {
 	return "", fmt.Errorf("managed mode supports only these LLM IDs: %s", strings.Join(allowed, ", "))
 }
 
-func writeManagedFeedback(outDir string, reports []string, aggregate string) error {
-	if aggregate == "" {
-		aggregate = runner.AggregateFeedback(reports)
-	}
+func writeManagedFeedback(outDir string, status managed.RunStatus) error {
 	if err := os.MkdirAll(filepath.Join(outDir, "runs"), 0o755); err != nil {
 		return err
 	}
-	for i, report := range reports {
+	for i, report := range status.FeedbackReports {
 		path := filepath.Join(outDir, "runs", fmt.Sprintf("feedback-%03d.md", i+1))
 		if err := os.WriteFile(path, []byte(report+"\n"), 0o644); err != nil {
 			return err
 		}
 	}
-	return os.WriteFile(filepath.Join(outDir, "aggregate-feedback.md"), []byte(aggregate), 0o644)
+	return os.WriteFile(filepath.Join(outDir, "aggregate-feedback.md"), []byte(managedRunFeedbackMarkdown(status)), 0o644)
+}
+
+func managedRunFeedbackMarkdown(status managed.RunStatus) string {
+	if status.AggregateFeedback != "" {
+		return status.AggregateFeedback
+	}
+	if len(status.FeedbackReports) == 0 {
+		return runner.AggregateFeedback(nil)
+	}
+	groups := managedRunFeedbackGroups(status)
+	if len(groups) == 0 {
+		return runner.AggregateFeedback(status.FeedbackReports)
+	}
+	var sb strings.Builder
+	sb.WriteString("# Dari docs aggregate feedback\n")
+	for _, group := range groups {
+		sb.WriteString(fmt.Sprintf("\n\n---\n\n## Task %d\n", group.taskIndex))
+		if group.task != "" {
+			sb.WriteString("\n")
+			sb.WriteString(group.task)
+			sb.WriteString("\n")
+		}
+		for _, result := range group.results {
+			if result.llmID != "" {
+				sb.WriteString("\n### Tester LLM: ")
+				sb.WriteString(result.llmID)
+				sb.WriteString("\n")
+			}
+			sb.WriteString("\n")
+			sb.WriteString(result.report)
+			sb.WriteString("\n")
+		}
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+type managedFeedbackGroup struct {
+	taskIndex int
+	task      string
+	results   []managedFeedbackResult
+}
+
+type managedFeedbackResult struct {
+	llmID  string
+	report string
+}
+
+func managedRunFeedbackGroups(status managed.RunStatus) []managedFeedbackGroup {
+	completedSessions := make([]managed.RunSessionSummary, 0, len(status.Sessions))
+	for _, session := range status.Sessions {
+		if session.Kind == "tester" && session.Status == "completed" {
+			completedSessions = append(completedSessions, session)
+		}
+	}
+	if len(completedSessions) == 0 {
+		return nil
+	}
+	groupsByTask := map[int]*managedFeedbackGroup{}
+	for i, session := range completedSessions {
+		if i >= len(status.FeedbackReports) {
+			break
+		}
+		taskIndex := session.TaskIndex
+		if taskIndex <= 0 {
+			taskIndex = 1
+		}
+		group := groupsByTask[taskIndex]
+		if group == nil {
+			group = &managedFeedbackGroup{taskIndex: taskIndex, task: managedTaskLabel(status.Tasks, taskIndex)}
+			groupsByTask[taskIndex] = group
+		}
+		group.results = append(group.results, managedFeedbackResult{llmID: session.LLMID, report: status.FeedbackReports[i]})
+	}
+	if len(groupsByTask) == 0 {
+		return nil
+	}
+	indexes := make([]int, 0, len(groupsByTask))
+	for taskIndex := range groupsByTask {
+		indexes = append(indexes, taskIndex)
+	}
+	sort.Ints(indexes)
+	groups := make([]managedFeedbackGroup, 0, len(indexes))
+	for _, taskIndex := range indexes {
+		groups = append(groups, *groupsByTask[taskIndex])
+	}
+	return groups
+}
+
+func managedTaskLabel(tasks []string, taskIndex int) string {
+	if taskIndex > 0 && taskIndex <= len(tasks) {
+		return strings.TrimSpace(tasks[taskIndex-1])
+	}
+	return ""
 }
 
 func downloadManagedRunArtifacts(ctx context.Context, client *managed.Client, status managed.RunStatus, outDir string) (string, error) {
 	if !isTerminalManagedRunStatus(status.Status) {
 		return "", fmt.Errorf("managed run %s is %s; artifacts are available after the run finishes", status.ID, status.Status)
 	}
-	if err := writeManagedFeedback(outDir, status.FeedbackReports, status.AggregateFeedback); err != nil {
+	if err := writeManagedFeedback(outDir, status); err != nil {
 		return "", err
 	}
 	// Failed terminal runs can still have tester feedback; updated docs only exist for completed optimize runs.
