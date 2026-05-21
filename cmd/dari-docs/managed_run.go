@@ -25,6 +25,8 @@ type managedRunConfig struct {
 	EditorLLMID    string
 	LiveVerify     bool
 	RuntimeSecrets map[string]string
+	PublicDocURLs  []string
+	PublicDocsOnly bool
 	Apply          bool
 	Wait           bool
 	Timeout        time.Duration
@@ -48,13 +50,18 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 	if err != nil {
 		return err
 	}
-	bundlePath := filepath.Join(cfg.OutDir, "input-docs-bundle.tar.gz")
-	cfg.BundleOptions.MaxFileBytes = runCfg.BundleMaxFileBytes
-	b, err := bundle.CreateWithOptions(cfg.RepoRoot, bundlePath, cfg.BundleOptions)
-	if err != nil {
-		return err
+	bundlePath := ""
+	submittedBundlePath := ""
+	if !cfg.PublicDocsOnly {
+		bundlePath = filepath.Join(cfg.OutDir, "input-docs-bundle.tar.gz")
+		cfg.BundleOptions.MaxFileBytes = runCfg.BundleMaxFileBytes
+		b, err := bundle.CreateWithOptions(cfg.RepoRoot, bundlePath, cfg.BundleOptions)
+		if err != nil {
+			return err
+		}
+		bundle.WriteSummary(os.Stderr, b)
+		submittedBundlePath = bundlePath
 	}
-	bundle.WriteSummary(os.Stderr, b)
 
 	bal, err := client.Balance(ctx)
 	if err != nil {
@@ -79,9 +86,10 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 		}
 		runtimeSecretJSON = string(b)
 	}
-	created, err := client.CreateRun(ctx, cfg.Command, cfg.Tasks, bundlePath, managed.CreateRunOptions{
+	created, err := client.CreateRun(ctx, cfg.Command, cfg.Tasks, submittedBundlePath, managed.CreateRunOptions{
 		LiveVerify:         cfg.LiveVerify,
 		RuntimeSecretsJSON: runtimeSecretJSON,
+		PublicDocURLs:      cfg.PublicDocURLs,
 		FeedbackLLMIDs:     feedbackLLMIDs,
 		EditorLLMID:        editorLLMID,
 	})
@@ -105,7 +113,9 @@ func runManagedCheckOrOptimize(ctx context.Context, cfg managedRunConfig) error 
 		return fmt.Errorf("managed run %s failed: %s", status.ID, status.Error)
 	}
 	fmt.Println("\nDone.")
-	fmt.Printf("Bundle: %s\n", bundlePath)
+	if bundlePath != "" {
+		fmt.Printf("Bundle: %s\n", bundlePath)
+	}
 	fmt.Printf("Feedback: %s\n", filepath.Join(cfg.OutDir, "aggregate-feedback.md"))
 	fmt.Printf("Managed run: %s\n", status.ID)
 	fmt.Printf("Charged: %s\n", formatCents(status.ChargedCents))
