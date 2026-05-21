@@ -48,6 +48,7 @@ func TestRunCheckE2EDefaultFeedbackLLMMatrix(t *testing.T) {
 					AgentID  string            `json:"agent_id"`
 					LLMID    string            `json:"llm_id"`
 					Metadata map[string]string `json:"metadata"`
+					Secrets  map[string]string `json:"secrets"`
 				} `json:"items"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -61,6 +62,9 @@ func TestRunCheckE2EDefaultFeedbackLLMMatrix(t *testing.T) {
 				}
 				if item.Metadata["kind"] != "tester" || item.Metadata["task_index"] != "1" {
 					t.Fatalf("batch item metadata = %#v", item.Metadata)
+				}
+				if item.Secrets["STRIPE_TEST_SECRET_KEY"] != "sk_test_123" {
+					t.Fatalf("batch item secrets = %#v", item.Secrets)
 				}
 				llmIDs = append(llmIDs, item.LLMID)
 				sessionID := fmt.Sprintf("sess_%02d", len(llmIDs))
@@ -107,15 +111,17 @@ func TestRunCheckE2EDefaultFeedbackLLMMatrix(t *testing.T) {
 	defer server.Close()
 
 	res, err := Run(context.Background(), Config{
-		RepoRoot:      repo,
-		OutDir:        outDir,
-		APIKey:        "dari_test",
-		APIBaseURL:    server.URL,
-		FeedbackAgent: "agt_tester",
-		Tasks:         []string{"do task"},
-		SkipEditor:    true,
-		Parallel:      6,
-		Timeout:       0,
+		RepoRoot:       repo,
+		OutDir:         outDir,
+		APIKey:         "dari_test",
+		APIBaseURL:     server.URL,
+		FeedbackAgent:  "agt_tester",
+		Tasks:          []string{"do task"},
+		SkipEditor:     true,
+		LiveVerify:     true,
+		RuntimeSecrets: map[string]string{"STRIPE_TEST_SECRET_KEY": "sk_test_123"},
+		Parallel:       6,
+		Timeout:        0,
 	})
 	if err != nil {
 		t.Fatal(err)

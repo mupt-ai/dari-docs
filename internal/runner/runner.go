@@ -6,10 +6,10 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/template"
 	"time"
@@ -20,8 +20,6 @@ import (
 	"github.com/mupt-ai/dari-docs/internal/publicdocs"
 	"github.com/mupt-ai/dari-docs/internal/workspace"
 )
-
-const RuntimeSecretsName = "DARI_DOCS_RUNTIME_SECRETS_JSON"
 
 const maxSessionBatchItems = 100
 
@@ -128,11 +126,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 
 	var sessionSecrets map[string]string
 	if cfg.LiveVerify && len(cfg.RuntimeSecrets) > 0 {
-		secretJSON, err := json.Marshal(cfg.RuntimeSecrets)
-		if err != nil {
-			return Result{}, fmt.Errorf("encode runtime secrets: %w", err)
-		}
-		sessionSecrets = map[string]string{RuntimeSecretsName: string(secretJSON)}
+		sessionSecrets = cfg.RuntimeSecrets
 	}
 
 	reports, err := runFeedback(ctx, client, cfg, sessionSecrets, fileID, b)
@@ -418,10 +412,15 @@ func feedbackLiveText(live bool, secrets map[string]string) string {
 	for k := range secrets {
 		names = append(names, k)
 	}
+	sort.Strings(names)
+	availableNames := "none"
+	if len(names) > 0 {
+		availableNames = strings.Join(names, ", ")
+	}
 	return strings.Join([]string{
 		"Live verification is enabled.",
-		"Runtime secrets, if present, are provided inside DARI_DOCS_RUNTIME_SECRETS_JSON as JSON.",
-		"Available secret names: " + strings.Join(names, ", ") + ".",
+		"Runtime secrets, if present, are provided directly as environment variables named below.",
+		"Available secret names: " + availableNames + ".",
 		"Never print values.",
 		"Only run safe/test-mode/read-only checks unless explicitly instructed otherwise.",
 	}, " ")
