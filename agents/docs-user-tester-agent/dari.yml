@@ -7,8 +7,6 @@ instructions:
 sandbox:
   provider: e2b
   internet_access: true
-  secrets:
-    - DARI_DOCS_RUNTIME_SECRETS_JSON
   runtimes:
     python: "3.13"
     node: "22"
@@ -20,6 +18,8 @@ sandbox:
       - file
       - git
       - jq
+      - python3-pip
+      - python3-venv
       - procps
       - ripgrep
       - unzip

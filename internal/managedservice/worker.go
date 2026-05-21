@@ -25,6 +25,7 @@ type queuedRun struct {
 	BundleFileID  string
 	BundleSHA256  string
 	BundleFiles   int
+	PublicDocURLs []string
 	LiveVerify    bool
 	SecretNames   []string
 	ReservedCents int64
@@ -146,12 +147,10 @@ func (s *Server) startNextSession(ctx context.Context, run queuedRun) error {
 func (s *Server) startSingleSessionBatch(ctx context.Context, run queuedRun, next nextSession) error {
 	var secrets map[string]string
 	if shouldAttachRuntimeSecrets(run, next) {
-		secretJSON, err := s.runtimeSecretsJSON(ctx, run.ID)
+		var err error
+		secrets, err = s.runtimeSecrets(ctx, run.ID)
 		if err != nil {
 			return s.failStartedRun(ctx, run, persistedErrRuntimeSecretsLoadFailed, fmt.Errorf("load runtime secrets: %w", err))
-		}
-		if secretJSON != "" {
-			secrets = map[string]string{managedRuntimeSecretsName: secretJSON}
 		}
 	}
 	batch, err := s.dari.CreateSessionBatch(ctx, dari.CreateSessionBatchRequest{
@@ -161,10 +160,7 @@ func (s *Server) startSingleSessionBatch(ctx context.Context, run queuedRun, nex
 			LLMID:    managedLLMIDOrDefault(next.LLMID),
 			Metadata: managedSessionMetadata(run, next),
 			Secrets:  secrets,
-			Message: dari.CreateSessionBatchMessage{Content: []dari.ContentBlock{
-				dari.TextBlock(next.Prompt),
-				dari.FileBlock(run.BundleFileID),
-			}},
+			Message:  dari.CreateSessionBatchMessage{Content: managedSessionContent(next.Prompt, run.BundleFileID)},
 		}},
 	})
 	if err != nil {
@@ -193,6 +189,14 @@ func (s *Server) startSingleSessionBatch(ctx context.Context, run queuedRun, nex
 	return store.MarkRunRunningFromStarting(ctx, run.ID)
 }
 
+func managedSessionContent(prompt string, fileID string) []dari.ContentBlock {
+	content := []dari.ContentBlock{dari.TextBlock(prompt)}
+	if fileID != "" {
+		content = append(content, dari.FileBlock(fileID))
+	}
+	return content
+}
+
 func singleBatchSessionStarted(batch dari.SessionBatch) bool {
 	return len(batch.Sessions) == 1 &&
 		batch.Sessions[0].SessionID != "" &&
@@ -218,12 +222,10 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun, items []te
 	b := bundle.Result{SHA256: run.BundleSHA256, Manifest: bundle.Manifest{Files: make([]bundle.FileRecord, run.BundleFiles)}}
 	var secrets map[string]string
 	if run.LiveVerify {
-		secretJSON, err := s.runtimeSecretsJSON(ctx, run.ID)
+		var err error
+		secrets, err = s.runtimeSecrets(ctx, run.ID)
 		if err != nil {
 			return s.failStartedRun(ctx, run, persistedErrRuntimeSecretsLoadFailed, fmt.Errorf("load runtime secrets: %w", err))
-		}
-		if secretJSON != "" {
-			secrets = map[string]string{managedRuntimeSecretsName: secretJSON}
 		}
 	}
 	batchReq := dari.CreateSessionBatchRequest{
@@ -237,15 +239,13 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun, items []te
 			"task_index":     fmt.Sprintf("%d", item.taskIndex+1),
 			"llm_id":         item.llmID,
 		}
+		prompt := runner.FeedbackPromptForSource(item.task, b, run.PublicDocURLs, run.LiveVerify, secretNameMap(run.SecretNames))
 		batchReq.Items = append(batchReq.Items, dari.CreateSessionBatchItem{
 			AgentID:  run.TesterAgentID,
 			LLMID:    item.llmID,
 			Metadata: metadata,
 			Secrets:  secrets,
-			Message: dari.CreateSessionBatchMessage{Content: []dari.ContentBlock{
-				dari.TextBlock(runner.FeedbackPrompt(item.task, b, run.LiveVerify, secretNameMap(run.SecretNames))),
-				dari.FileBlock(run.BundleFileID),
-			}},
+			Message:  dari.CreateSessionBatchMessage{Content: managedSessionContent(prompt, run.BundleFileID)},
 		})
 	}
 	batch, err := s.dari.CreateSessionBatch(ctx, batchReq)

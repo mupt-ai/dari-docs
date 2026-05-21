@@ -3,8 +3,10 @@ package managedservice
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -107,7 +109,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		tmpPath            string
 		sourceRoot         string
 		sourcePaths        []string
-		sourceURLs         []string
+		publicDocURLs      []string
 		sourceFilesSeen    int
 		sourceUploadBytes  int64
 		sourceInclude      []string
@@ -238,7 +240,19 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 				writeError(w, http.StatusBadRequest, "source_url must be an http or https URL")
 				return
 			}
-			sourceURLs = append(sourceURLs, strings.TrimSpace(v))
+			publicDocURLs = append(publicDocURLs, strings.TrimSpace(v))
+		case "public_doc_urls_json":
+			v, err := readTextPart(part, 64*1024)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "public_doc_urls_json field is too large")
+				return
+			}
+			urls, err := parseStringListJSON(v, "public_doc_urls_json")
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			publicDocURLs = append(publicDocURLs, urls...)
 		case "source_files_json":
 			if sourceRoot != "" {
 				writeError(w, http.StatusBadRequest, "source_files_json must be sent before source_file")
@@ -297,7 +311,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 			}
 			sourceFilesSeen++
 		case "bundle":
-			if sourceRoot != "" || len(sourcePaths) > 0 || len(sourceURLs) > 0 || len(sourceInclude) > 0 || len(sourceExclude) > 0 {
+			if sourceRoot != "" || len(sourcePaths) > 0 || len(sourceInclude) > 0 || len(sourceExclude) > 0 {
 				writeError(w, http.StatusBadRequest, "send either bundle or source files, not both")
 				return
 			}
@@ -340,11 +354,11 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusBadRequest, "tasks_json must be a JSON string array")
 		return
 	}
-	if mode == "optimize" && len(sourceURLs) > 0 {
+	if mode == "optimize" && len(publicDocURLs) > 0 {
 		writeError(w, http.StatusBadRequest, "public docs URLs support check only; optimize requires local docs files")
 		return
 	}
-	if sourceRoot != "" || len(sourcePaths) > 0 || len(sourceURLs) > 0 {
+	if sourceRoot != "" || len(sourcePaths) > 0 {
 		if sourceRoot == "" && len(sourcePaths) > 0 {
 			writeError(w, http.StatusBadRequest, "source_file is required")
 			return
@@ -361,21 +375,11 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 			}
 			defer os.RemoveAll(sourceRoot)
 		}
-		extraFiles := []bundle.ExtraFile(nil)
-		if len(sourceURLs) > 0 {
-			files, _, err := publicdocs.SourceFiles(sourceURLs)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-			extraFiles = files
-		}
 		var err error
 		tmpPath, b, err = s.stageManagedSourceBundle(sourceRoot, bundle.CreateOptions{
 			Include:      sourceInclude,
 			Exclude:      sourceExclude,
 			MaxFileBytes: s.cfg.BundleMaxFileBytes,
-			ExtraFiles:   extraFiles,
 		})
 		if err != nil {
 			if errors.Is(err, errBundleTooLarge) {
@@ -396,9 +400,21 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusBadRequest, "bundle include/exclude options require source files")
 		return
 	}
+	if len(publicDocURLs) > 0 {
+		var err error
+		publicDocURLs, err = publicdocs.NormalizeURLs(publicDocURLs)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	if tmpPath == "" {
-		writeError(w, http.StatusBadRequest, "bundle file is required")
-		return
+		if len(publicDocURLs) == 0 {
+			writeError(w, http.StatusBadRequest, "bundle file is required")
+			return
+		}
+		b = publicDocsBundleResult(publicDocURLs)
+		runSource = runSourceWeb
 	}
 	// Reserve only after reading every part. Multipart clients may send scalar fields after the bundle.
 	if runtimeSecretJSON != "" && !liveVerify {
@@ -449,7 +465,12 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		writeLoggedError(w, http.StatusInternalServerError, "could not encode runtime secret names", err)
 		return
 	}
-	if err := s.reserveRun(r.Context(), u.ID, runID, mode, taskJSON, testerLLMIDsJSON, editorLLMID, runSource, b, reserve, liveVerify, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
+	publicDocURLsJSON, err := json.Marshal(publicDocURLs)
+	if err != nil {
+		writeLoggedError(w, http.StatusInternalServerError, "could not encode public docs URLs", err)
+		return
+	}
+	if err := s.reserveRun(r.Context(), u.ID, runID, mode, taskJSON, testerLLMIDsJSON, editorLLMID, runSource, b, reserve, liveVerify, publicDocURLsJSON, secretNamesJSON, runtimeNonce, runtimeCiphertext); err != nil {
 		if errors.Is(err, errManagedAgentsNotConfigured) {
 			writeError(w, http.StatusServiceUnavailable, "managed agents are not configured")
 			return
@@ -467,28 +488,43 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 		writeLoggedError(w, http.StatusInternalServerError, "could not reserve managed run", err)
 		return
 	}
-	f, err := os.Open(tmpPath)
-	if err != nil {
-		s.failBeforeQueue(r.Context(), runID, reserve, persistedErrBundleStageFailed)
-		writeLoggedError(w, http.StatusInternalServerError, "could not read staged bundle", err)
-		return
-	}
-	up, err := s.dari.UploadReader(r.Context(), bundleName, f)
-	_ = f.Close()
-	if err != nil {
-		s.failBeforeQueue(r.Context(), runID, reserve, persistedErrBundleUploadFailed)
-		writeLoggedError(w, http.StatusBadGateway, "could not upload bundle to Dari", err)
-		return
+	bundleFileID := ""
+	if tmpPath != "" {
+		f, err := os.Open(tmpPath)
+		if err != nil {
+			s.failBeforeQueue(r.Context(), runID, reserve, persistedErrBundleStageFailed)
+			writeLoggedError(w, http.StatusInternalServerError, "could not read staged bundle", err)
+			return
+		}
+		up, err := s.dari.UploadReader(r.Context(), bundleName, f)
+		_ = f.Close()
+		if err != nil {
+			s.failBeforeQueue(r.Context(), runID, reserve, persistedErrBundleUploadFailed)
+			writeLoggedError(w, http.StatusBadGateway, "could not upload bundle to Dari", err)
+			return
+		}
+		bundleFileID = up.ID
 	}
 	_, err = s.db.Exec(r.Context(), `
-UPDATE runs SET status=$2, bundle_file_id=$3, updated_at=now() WHERE id=$1
-`, runID, statusQueued, up.ID)
+UPDATE runs SET status=$2, bundle_file_id=NULLIF($3, ''), updated_at=now() WHERE id=$1
+`, runID, statusQueued, bundleFileID)
 	if err != nil {
 		s.failBeforeQueue(r.Context(), runID, reserve, persistedErrRunQueueFailed)
 		writeLoggedError(w, http.StatusInternalServerError, "could not queue managed run", err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": runID, "status": statusQueued})
+}
+
+func publicDocsBundleResult(urls []string) bundle.Result {
+	h := sha256.New()
+	for _, u := range urls {
+		fmt.Fprintln(h, u)
+	}
+	return bundle.Result{
+		SHA256:   hex.EncodeToString(h.Sum(nil)),
+		Manifest: bundle.Manifest{Files: []bundle.FileRecord{}},
+	}
 }
 
 type runListResponse struct {
@@ -1050,7 +1086,23 @@ WHERE id=$1
 	return limits, nil
 }
 
-func (s *Server) reserveRun(ctx context.Context, userID, runID, mode string, taskJSON, testerLLMIDsJSON []byte, editorLLMID string, source string, b bundle.Result, reserve int64, liveVerify bool, secretNamesJSON, runtimeNonce, runtimeCiphertext []byte) error {
+func (s *Server) reserveRun(
+	ctx context.Context,
+	userID string,
+	runID string,
+	mode string,
+	taskJSON []byte,
+	testerLLMIDsJSON []byte,
+	editorLLMID string,
+	source string,
+	b bundle.Result,
+	reserve int64,
+	liveVerify bool,
+	publicDocURLsJSON []byte,
+	secretNamesJSON []byte,
+	runtimeNonce []byte,
+	runtimeCiphertext []byte,
+) error {
 	agents, err := s.configuredManagedAgents()
 	if err != nil {
 		return err
@@ -1092,8 +1144,8 @@ FOR UPDATE
 		editorLLMID = defaultManagedEditorLLMID()
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO runs (id, user_id, mode, source, status, tasks, tester_llm_ids, editor_llm_id, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files, reserved_cents, live_verify, runtime_secret_names, runtime_secrets_nonce, runtime_secrets_ciphertext)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+		INSERT INTO runs (id, user_id, mode, source, status, tasks, tester_llm_ids, editor_llm_id, tester_agent_id, tester_version_id, editor_agent_id, editor_version_id, bundle_sha256, bundle_files, reserved_cents, live_verify, public_doc_urls, runtime_secret_names, runtime_secrets_nonce, runtime_secrets_ciphertext)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 		`,
 		runID,
 		userID,
@@ -1111,6 +1163,7 @@ FOR UPDATE
 		len(b.Manifest.Files),
 		reserve,
 		liveVerify,
+		publicDocURLsJSON,
 		secretNamesJSON,
 		runtimeNonce,
 		runtimeCiphertext,

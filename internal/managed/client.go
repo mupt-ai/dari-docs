@@ -142,10 +142,11 @@ type CreateRunResponse struct {
 }
 
 type CreateRunOptions struct {
-	LiveVerify         bool
-	RuntimeSecretsJSON string
-	FeedbackLLMIDs     []string
-	EditorLLMID        string
+	LiveVerify     bool
+	RuntimeSecrets map[string]string
+	PublicDocURLs  []string
+	FeedbackLLMIDs []string
+	EditorLLMID    string
 }
 
 type RunStatus struct {
@@ -290,8 +291,21 @@ func (c *Client) CreateRun(ctx context.Context, mode string, tasks []string, bun
 			return CreateRunResponse{}, err
 		}
 	}
-	if opts.RuntimeSecretsJSON != "" {
-		if err := mw.WriteField("runtime_secrets_json", opts.RuntimeSecretsJSON); err != nil {
+	if len(opts.RuntimeSecrets) > 0 {
+		secretJSON, err := json.Marshal(opts.RuntimeSecrets)
+		if err != nil {
+			return CreateRunResponse{}, err
+		}
+		if err := mw.WriteField("runtime_secrets_json", string(secretJSON)); err != nil {
+			return CreateRunResponse{}, err
+		}
+	}
+	if len(opts.PublicDocURLs) > 0 {
+		urlJSON, err := json.Marshal(opts.PublicDocURLs)
+		if err != nil {
+			return CreateRunResponse{}, err
+		}
+		if err := mw.WriteField("public_doc_urls_json", string(urlJSON)); err != nil {
 			return CreateRunResponse{}, err
 		}
 	}
@@ -309,8 +323,10 @@ func (c *Client) CreateRun(ctx context.Context, mode string, tasks []string, bun
 			return CreateRunResponse{}, err
 		}
 	}
-	if err := addMultipartFile(mw, "bundle", bundlePath); err != nil {
-		return CreateRunResponse{}, err
+	if bundlePath != "" {
+		if err := addMultipartFile(mw, "bundle", bundlePath); err != nil {
+			return CreateRunResponse{}, err
+		}
 	}
 	if err := mw.Close(); err != nil {
 		return CreateRunResponse{}, err

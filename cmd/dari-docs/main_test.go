@@ -197,6 +197,28 @@ func TestDownloadManagedRunArtifactsForCheckWritesFeedback(t *testing.T) {
 	}
 }
 
+func TestManagedRunFeedbackMarkdownGroupsInterleavedSessionsByTask(t *testing.T) {
+	status := managed.RunStatus{
+		Tasks:           []string{"First task", "Second task"},
+		FeedbackReports: []string{"task 1 from a", "task 2 from b", "task 1 from c"},
+		Sessions: []managed.RunSessionSummary{
+			{Kind: "tester", Status: "completed", TaskIndex: 1, LLMID: "llm-a"},
+			{Kind: "tester", Status: "completed", TaskIndex: 2, LLMID: "llm-b"},
+			{Kind: "tester", Status: "completed", TaskIndex: 1, LLMID: "llm-c"},
+		},
+	}
+	got := managedRunFeedbackMarkdown(status)
+	if count := strings.Count(got, "## Task 1"); count != 1 {
+		t.Fatalf("Task 1 heading count = %d, want 1:\n%s", count, got)
+	}
+	if count := strings.Count(got, "## Task 2"); count != 1 {
+		t.Fatalf("Task 2 heading count = %d, want 1:\n%s", count, got)
+	}
+	if strings.Index(got, "task 1 from a") > strings.Index(got, "## Task 2") || strings.Index(got, "task 1 from c") > strings.Index(got, "## Task 2") {
+		t.Fatalf("Task 1 reports were not grouped before Task 2:\n%s", got)
+	}
+}
+
 func TestDownloadManagedRunArtifactsRejectsActiveRun(t *testing.T) {
 	client := managed.New("http://127.0.0.1:1", "token")
 	status := managed.RunStatus{ID: "run_running", Mode: "check", Status: "running"}
@@ -283,7 +305,7 @@ func writeUpdatedDocsZip(w http.ResponseWriter, files map[string]string) error {
 	return err
 }
 
-func TestPrepareAddsPublicDocsSourceWithoutBundlingCWD(t *testing.T) {
+func TestPrepareUsesPublicDocsURLWithoutBundlingCWD(t *testing.T) {
 	cwd := t.TempDir()
 	t.Chdir(cwd)
 	if err := os.WriteFile(filepath.Join(cwd, "README.md"), []byte("# Local\n"), 0o644); err != nil {
@@ -300,11 +322,14 @@ func TestPrepareAddsPublicDocsSourceWithoutBundlingCWD(t *testing.T) {
 	if !opts.PublicDocsOnly {
 		t.Fatal("expected public-docs-only source")
 	}
-	if len(opts.BundleOptions.ExtraFiles) != 1 {
-		t.Fatalf("extra files = %#v, want source file", opts.BundleOptions.ExtraFiles)
+	if len(opts.BundleOptions.ExtraFiles) != 0 {
+		t.Fatalf("extra files = %#v, want no synthetic public docs file", opts.BundleOptions.ExtraFiles)
 	}
-	if opts.RepoRoot == cwd {
-		t.Fatalf("RepoRoot = cwd; public docs without repo arg should not bundle cwd")
+	if len(opts.PublicDocURLs) != 1 || opts.PublicDocURLs[0] != "https://docs.dari.dev/llms.txt" {
+		t.Fatalf("public doc URLs = %#v", opts.PublicDocURLs)
+	}
+	if opts.RepoRoot != cwd {
+		t.Fatalf("RepoRoot = %q, want cwd for config lookup", opts.RepoRoot)
 	}
 }
 

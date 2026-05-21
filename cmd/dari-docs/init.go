@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/mupt-ai/dari-docs/internal/agenttemplates"
 	"github.com/mupt-ai/dari-docs/internal/projectconfig"
@@ -110,7 +109,6 @@ func runInitWithOptions(ctx context.Context, opts initOptions) error {
 			return fmt.Errorf("missing Dari API key for deploy; set %s or pass --api-key", opts.APIKeyEnv)
 		}
 		env := append(os.Environ(), "DARI_API_URL=https://api.dari.dev", "DARI_API_KEY="+apiKey)
-		ensureCredential(env, "DARI_DOCS_RUNTIME_SECRETS_JSON", "{}")
 		testerID, err := deployAgent(env, filepath.Join(agentsDir, "docs-user-tester-agent"))
 		if err != nil {
 			return err
@@ -132,17 +130,6 @@ func runInitWithOptions(ctx context.Context, opts initOptions) error {
 		fmt.Println("Run `dari-docs init --deploy` to deploy these agents into your Dari org.")
 	}
 	return nil
-}
-
-func ensureCredential(env []string, name, value string) {
-	cmd := exec.Command("dari", "credentials", "add", name, value)
-	cmd.Env = env
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not create credential %s (it may already exist): %s\n", name, strings.TrimSpace(out.String()))
-	}
 }
 
 func deployAgent(env []string, dir string) (string, error) {

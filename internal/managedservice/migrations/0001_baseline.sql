@@ -67,6 +67,7 @@ CREATE TABLE runs (
   bundle_file_id TEXT,
   bundle_sha256 TEXT NOT NULL,
   bundle_files INTEGER NOT NULL,
+  public_doc_urls JSONB NOT NULL DEFAULT '[]'::jsonb,
   live_verify BOOLEAN NOT NULL DEFAULT false,
   runtime_secret_names JSONB NOT NULL DEFAULT '[]'::jsonb,
   runtime_secrets_nonce BYTEA,
