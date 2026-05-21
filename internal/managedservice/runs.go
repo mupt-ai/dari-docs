@@ -20,8 +20,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/mupt-ai/dari-docs/internal/bundle"
-	"github.com/mupt-ai/dari-docs/internal/dari"
 	"github.com/mupt-ai/dari-docs/internal/publicdocs"
+	"github.com/mupt-ai/dari-docs/internal/redact"
 	"github.com/mupt-ai/dari-docs/internal/runner"
 )
 
@@ -1218,10 +1218,17 @@ func (s *Server) handleRunSessionTranscript(
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	raw, err := s.dari.GetTranscriptRaw(r.Context(), sessionID)
+	raw, ok, err := s.redactedTranscriptRaw(r.Context(), sessionID)
 	if err != nil {
-		writeLoggedError(w, http.StatusBadGateway, "could not load session transcript", err)
+		writeLoggedError(w, http.StatusInternalServerError, "could not load redacted session transcript", err)
 		return
+	}
+	if !ok {
+		raw, err = s.dari.GetTranscriptRaw(r.Context(), sessionID)
+		if err != nil {
+			writeLoggedError(w, http.StatusBadGateway, "could not load session transcript", err)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -1406,11 +1413,11 @@ ORDER BY task_index, llm_id, created_at
 	}
 	reports := make([]string, 0, len(sessions))
 	for _, session := range sessions {
-		tr, err := s.dari.GetTranscript(ctx, session.id)
+		report, err := s.sessionAssistantText(ctx, session.id, redact.Redactor{})
 		if err != nil {
 			return nil, fmt.Errorf("%w: get transcript %s: %v", errRunFeedbackLoad, session.id, err)
 		}
-		reports = append(reports, dari.FinalAssistantText(tr))
+		reports = append(reports, report)
 	}
 	return reports, nil
 }

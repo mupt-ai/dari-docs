@@ -93,7 +93,7 @@ func TestRunCheckE2EDefaultFeedbackLLMMatrix(t *testing.T) {
 			writeJSON(t, w, map[string]any{
 				"timeline": map[string]any{"items": []any{map[string]any{
 					"type": "assistant_message", "status": "completed",
-					"content": []any{map[string]any{"type": "text", "text": "feedback from " + llmID}},
+					"content": []any{map[string]any{"type": "text", "text": "feedback from " + llmID + " leaked sk_test_123"}},
 				}}},
 			})
 
@@ -144,6 +144,12 @@ func TestRunCheckE2EDefaultFeedbackLLMMatrix(t *testing.T) {
 	aggregate, err := os.ReadFile(filepath.Join(outDir, "aggregate-feedback.md"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if strings.Contains(string(aggregate), "sk_test_123") {
+		t.Fatalf("aggregate leaked runtime secret:\n%s", aggregate)
+	}
+	if !strings.Contains(string(aggregate), "[REDACTED]") {
+		t.Fatalf("aggregate did not redact runtime secret:\n%s", aggregate)
 	}
 	for _, llmID := range wantLLMs {
 		if !strings.Contains(string(aggregate), "Tester LLM: "+llmID) {

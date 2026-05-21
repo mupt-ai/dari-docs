@@ -188,7 +188,11 @@ LIMIT $2
 	return scanRunSessionRecords(rows)
 }
 
-func (store *managedRunStore) MarkSessionCompleted(ctx context.Context, sessionID string, llmID string) error {
+func (store *managedRunStore) MarkSessionCompleted(ctx context.Context, sessionID string, llmID string, redactedTranscript []byte) error {
+	var redactedTranscriptJSON any
+	if len(redactedTranscript) > 0 {
+		redactedTranscriptJSON = string(redactedTranscript)
+	}
 	_, err := store.db.Exec(ctx, `
 UPDATE run_sessions
 SET status=$1,
@@ -196,10 +200,11 @@ SET status=$1,
     last_polled_at=now(),
     last_poll_error_at=NULL,
     last_poll_error=NULL,
-    llm_id=COALESCE(NULLIF($2, ''), llm_id)
-WHERE session_id=$3
-  AND status=$4
-`, statusCompleted, llmID, sessionID, statusRunning)
+    llm_id=COALESCE(NULLIF($2, ''), llm_id),
+    redacted_transcript=COALESCE($3::jsonb, redacted_transcript)
+WHERE session_id=$4
+  AND status=$5
+`, statusCompleted, llmID, redactedTranscriptJSON, sessionID, statusRunning)
 	return err
 }
 

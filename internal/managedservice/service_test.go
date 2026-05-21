@@ -409,47 +409,6 @@ func TestRuntimeSecretNamesFromJSON(t *testing.T) {
 	}
 }
 
-func TestIsFinalSecretBearingSession(t *testing.T) {
-	tests := []struct {
-		name string
-		run  queuedRun
-		next nextSession
-		want bool
-	}{
-		{
-			name: "optimize first tester is not final",
-			run:  queuedRun{Mode: "optimize", Tasks: []string{"one", "two"}},
-			next: nextSession{Kind: "tester", TaskIndex: 1},
-			want: false,
-		},
-		{
-			name: "optimize last tester is not final",
-			run:  queuedRun{Mode: "optimize", Tasks: []string{"one", "two"}},
-			next: nextSession{Kind: "tester", TaskIndex: 2},
-			want: false,
-		},
-		{
-			name: "optimize editor is final",
-			run:  queuedRun{Mode: "optimize", Tasks: []string{"one", "two"}},
-			next: nextSession{Kind: "editor"},
-			want: true,
-		},
-		{
-			name: "check last tester is final",
-			run:  queuedRun{Mode: "check", Tasks: []string{"one", "two"}},
-			next: nextSession{Kind: "tester", TaskIndex: 2},
-			want: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isFinalSecretBearingSession(tt.run, tt.next); got != tt.want {
-				t.Fatalf("isFinalSecretBearingSession() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestShouldAttachRuntimeSecretsOnlyForLiveVerifySessions(t *testing.T) {
 	tests := []struct {
 		name string
