@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,6 +26,7 @@ func newRunsCommand() *cobra.Command {
 	cmd.AddCommand(
 		newRunsStatusCommand(),
 		newRunsWaitCommand(),
+		newRunsFeedbackCommand(),
 		newRunsDownloadCommand(),
 		newRunsApplyCommand(),
 	)
@@ -63,6 +66,19 @@ func newRunsWaitCommand() *cobra.Command {
 	}
 	cmd.Flags().IntVar(&timeoutMinutes, "timeout-minutes", 30, "managed CLI wait timeout in minutes")
 	return cmd
+}
+
+func newRunsFeedbackCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:           "feedback <run-id>",
+		Short:         "Print run feedback",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runRunsFeedback(cmd.Context(), cmd.OutOrStdout(), args[0])
+		},
+	}
 }
 
 func newRunsDownloadCommand() *cobra.Command {
@@ -151,6 +167,23 @@ func runRunsWait(ctx context.Context, runID string, timeoutMinutes int) error {
 	return nil
 }
 
+func runRunsFeedback(ctx context.Context, out io.Writer, runID string) error {
+	client, err := managedClientWithToken()
+	if err != nil {
+		return err
+	}
+	status, err := client.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	feedback, err := managedRunFeedbackMarkdown(status)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprint(out, feedback)
+	return err
+}
+
 func runRunsDownload(ctx context.Context, runID string, repo string, outDir string) error {
 	repoRoot, outDir, err := resolveRunArtifactPaths(repo, outDir)
 	if err != nil {
@@ -194,6 +227,97 @@ func runRunsApply(ctx context.Context, runID string, repo string, outDir string)
 	}
 	fmt.Printf("Feedback: %s\n", filepath.Join(outDir, "aggregate-feedback.md"))
 	return nil
+}
+
+func managedRunFeedbackMarkdown(status managed.RunStatus) (string, error) {
+	if len(status.FeedbackReports) == 0 {
+		if strings.TrimSpace(status.AggregateFeedback) != "" {
+			return ensureTrailingNewline(status.AggregateFeedback), nil
+		}
+		if !isTerminalManagedRunStatus(status.Status) {
+			return "", fmt.Errorf("managed run %s is %s; feedback is available after the run finishes", status.ID, status.Status)
+		}
+		return "", fmt.Errorf("no feedback available for managed run %s", status.ID)
+	}
+
+	completedSessions := completedTesterSessions(status)
+	var sb strings.Builder
+	sb.WriteString("# Dari Docs Feedback\n\n")
+	sb.WriteString("Run: " + status.ID + "\n")
+	if status.Status != "" {
+		sb.WriteString("Status: " + status.Status + "\n")
+	}
+	if status.Mode != "" {
+		sb.WriteString("Type: " + status.Mode + "\n")
+	}
+	if status.CompletedAt != nil {
+		sb.WriteString("Completed: " + formatCLITime(*status.CompletedAt) + "\n")
+	}
+	sb.WriteString("\n")
+
+	lastTaskIndex := 0
+	for i, report := range status.FeedbackReports {
+		report = strings.TrimSpace(report)
+		if report == "" {
+			continue
+		}
+		if i < len(completedSessions) {
+			session := completedSessions[i]
+			taskIndex := session.TaskIndex
+			if taskIndex <= 0 {
+				taskIndex = 1
+			}
+			if taskIndex != lastTaskIndex {
+				if lastTaskIndex != 0 {
+					sb.WriteString("\n")
+				}
+				sb.WriteString(fmt.Sprintf("## Task %d\n\n", taskIndex))
+				if taskIndex <= len(status.Tasks) && strings.TrimSpace(status.Tasks[taskIndex-1]) != "" {
+					sb.WriteString(strings.TrimSpace(status.Tasks[taskIndex-1]) + "\n\n")
+				}
+				lastTaskIndex = taskIndex
+			}
+			label := strings.TrimSpace(session.LLMID)
+			if label == "" {
+				label = "default"
+			}
+			sb.WriteString(fmt.Sprintf("### %s Feedback\n\n", label))
+			sb.WriteString(report + "\n\n")
+			continue
+		}
+		if lastTaskIndex != 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(fmt.Sprintf("## Feedback %03d\n\n%s\n", i+1, report))
+		lastTaskIndex = 0
+	}
+	return ensureTrailingNewline(sb.String()), nil
+}
+
+func completedTesterSessions(status managed.RunStatus) []managed.RunSessionSummary {
+	out := make([]managed.RunSessionSummary, 0, len(status.Sessions))
+	for _, session := range status.Sessions {
+		if session.Kind == "tester" && session.Status == "completed" {
+			out = append(out, session)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].TaskIndex != out[j].TaskIndex {
+			return out[i].TaskIndex < out[j].TaskIndex
+		}
+		if out[i].LLMID != out[j].LLMID {
+			return out[i].LLMID < out[j].LLMID
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	return out
+}
+
+func ensureTrailingNewline(s string) string {
+	if strings.HasSuffix(s, "\n") {
+		return s
+	}
+	return s + "\n"
 }
 
 func resolveRunArtifactPaths(repo string, outDir string) (string, string, error) {

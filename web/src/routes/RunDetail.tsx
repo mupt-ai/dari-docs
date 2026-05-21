@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ChevronDown, ChevronRight, Download, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, Download, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -23,7 +23,10 @@ export default function RunDetail() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [copyFeedbackError, setCopyFeedbackError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const [copiedFeedback, setCopiedFeedback] = useState(false);
+  const copiedFeedbackTimerRef = useRef<number | null>(null);
   const [selectedTaskIndex, setSelectedTaskIndex] = useState(1);
   const [selectedResultKey, setSelectedResultKey] = useState("");
 
@@ -53,6 +56,37 @@ export default function RunDetail() {
     }, 7000);
     return () => window.clearInterval(id);
   }, [refresh, run]);
+
+  const handleCopyAllFeedback = async () => {
+    if (!run) return;
+    const text = allFeedbackMarkdown(run);
+    if (!text) {
+      setCopyFeedbackError("No Feedback Available To Copy.");
+      return;
+    }
+    setCopyFeedbackError(null);
+    try {
+      await copyTextToClipboard(text);
+      setCopiedFeedback(true);
+      if (copiedFeedbackTimerRef.current !== null) {
+        window.clearTimeout(copiedFeedbackTimerRef.current);
+      }
+      copiedFeedbackTimerRef.current = window.setTimeout(() => {
+        setCopiedFeedback(false);
+        copiedFeedbackTimerRef.current = null;
+      }, 1800);
+    } catch (e) {
+      setCopyFeedbackError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (copiedFeedbackTimerRef.current !== null) {
+        window.clearTimeout(copiedFeedbackTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleDownload = async () => {
     if (!run) return;
@@ -98,6 +132,12 @@ export default function RunDetail() {
           <h1 className="mt-2 break-all text-xl font-medium">{runId}</h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {run && allFeedbackMarkdown(run) && (
+            <Button type="button" variant="outline" size="sm" onClick={handleCopyAllFeedback}>
+              <Copy className="mr-1.5 h-3.5 w-3.5" />
+              {copiedFeedback ? "Copied" : "Copy All Feedback"}
+            </Button>
+          )}
           {run?.updated_docs_available && (
             <Button type="button" variant="outline" size="sm" onClick={handleDownload} disabled={downloading}>
               <Download className="mr-1.5 h-3.5 w-3.5" />
@@ -125,6 +165,11 @@ export default function RunDetail() {
       {downloadError && (
         <div className="mb-6 border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive-foreground">
           {downloadError}
+        </div>
+      )}
+      {copyFeedbackError && (
+        <div className="mb-6 border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive-foreground">
+          {copyFeedbackError}
         </div>
       )}
 
@@ -284,6 +329,62 @@ function uniqueStrings(values: string[]): string[] {
     out.push(value);
   }
   return out;
+}
+
+function allFeedbackMarkdown(run: RunStatus): string {
+  const groups = taskGroups(run);
+  const sections: string[] = [];
+
+  for (const group of groups) {
+    const feedbackResults = group.results.filter((result) => result.feedback?.trim());
+    if (feedbackResults.length === 0) continue;
+
+    const taskParts = [`## Task ${group.taskIndex}`];
+    const task = group.task.trim();
+    if (task) taskParts.push(task);
+
+    for (const result of feedbackResults) {
+      taskParts.push(`### ${formatLLMID(result.llmID)} Feedback`);
+      taskParts.push(result.feedback!.trim());
+    }
+    sections.push(taskParts.join("\n\n"));
+  }
+
+  if (sections.length === 0) return "";
+
+  const meta = [
+    "# Dari Docs Feedback",
+    `Run: ${run.id}`,
+    `Status: ${toTitleCase(run.status)}`,
+    `Type: ${toTitleCase(run.mode)}`,
+  ];
+  if (run.completed_at) meta.push(`Completed: ${formatDate(run.completed_at)}`);
+  return `${meta.join("\n")}\n\n${sections.join("\n\n")}\n`;
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall through to the textarea fallback for browsers that expose but block Clipboard API.
+    }
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) {
+    throw new Error("Could Not Copy Feedback To Clipboard.");
+  }
 }
 
 function TaskResults({

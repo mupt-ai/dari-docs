@@ -17,6 +17,7 @@ Usage:
   dari-docs billing balance
   dari-docs runs status <run-id>
   dari-docs runs wait <run-id>
+  dari-docs runs feedback <run-id>
   dari-docs runs download <run-id> [repo]
   dari-docs runs apply <run-id> [repo]
   dari-docs optimize [repo|docs-url] --task "Implement auth" [--task "Set up webhooks"] [flags]

@@ -147,6 +147,39 @@ func TestExpandFeedbackLLMListSupportsGroups(t *testing.T) {
 	}
 }
 
+func TestManagedRunFeedbackMarkdownLabelsTasksAndLLMs(t *testing.T) {
+	completedAt := time.Date(2026, 5, 21, 10, 30, 0, 0, time.UTC)
+	createdAt := time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC)
+	status := managed.RunStatus{
+		ID:              "run_123",
+		Mode:            "check",
+		Status:          "completed",
+		Tasks:           []string{"Install the SDK", "Configure webhooks"},
+		CompletedAt:     &completedAt,
+		FeedbackReports: []string{"sdk feedback", "webhook feedback"},
+		Sessions: []managed.RunSessionSummary{
+			{Kind: "tester", TaskIndex: 2, Status: "completed", LLMID: "gpt-5.1", CreatedAt: createdAt.Add(time.Minute)},
+			{Kind: "tester", TaskIndex: 1, Status: "completed", LLMID: "claude-sonnet-4-6", CreatedAt: createdAt},
+		},
+	}
+	got, err := managedRunFeedbackMarkdown(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"# Dari Docs Feedback",
+		"Run: run_123",
+		"## Task 1\n\nInstall the SDK",
+		"### claude-sonnet-4-6 Feedback\n\nsdk feedback",
+		"## Task 2\n\nConfigure webhooks",
+		"### gpt-5.1 Feedback\n\nwebhook feedback",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("feedback markdown missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestDownloadManagedRunArtifactsForCheckWritesFeedback(t *testing.T) {
 	outDir := t.TempDir()
 	client := managed.New("http://127.0.0.1:1", "token")
