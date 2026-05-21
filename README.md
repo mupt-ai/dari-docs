@@ -24,7 +24,7 @@ When the reader is an agent, ambiguity becomes measurable. Inconsistent terminol
 
 ## Install
 
-Install the latest `dari-docs` binary with the install script, then verify the CLI is available:
+Install the latest native macOS/Linux `dari-docs` binary with the install script, then verify the CLI is available:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mupt-ai/dari-docs/main/install.sh | bash
