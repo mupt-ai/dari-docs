@@ -130,3 +130,10 @@ func secretNameMap(names []string) map[string]string {
 func shouldAttachRuntimeSecrets(run queuedRun, next nextSession) bool {
 	return run.LiveVerify && (next.Kind == "tester" || next.Kind == "editor")
 }
+
+func isFinalSecretBearingSession(run queuedRun, next nextSession) bool {
+	if run.Mode == "optimize" {
+		return next.Kind == "editor"
+	}
+	return next.Kind == "tester" && next.TaskIndex == len(run.Tasks)
+}

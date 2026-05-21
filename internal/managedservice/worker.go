@@ -10,7 +10,6 @@ import (
 
 	"github.com/mupt-ai/dari-docs/internal/bundle"
 	"github.com/mupt-ai/dari-docs/internal/dari"
-	"github.com/mupt-ai/dari-docs/internal/redact"
 	"github.com/mupt-ai/dari-docs/internal/runner"
 )
 
@@ -146,14 +145,12 @@ func (s *Server) startNextSession(ctx context.Context, run queuedRun) error {
 
 func (s *Server) startSingleSessionBatch(ctx context.Context, run queuedRun, next nextSession) error {
 	var secrets map[string]string
-	redactor := redact.Redactor{}
 	if shouldAttachRuntimeSecrets(run, next) {
 		var err error
 		secrets, err = s.runtimeSecrets(ctx, run.ID)
 		if err != nil {
 			return s.failStartedRun(ctx, run, persistedErrRuntimeSecretsLoadFailed, fmt.Errorf("load runtime secrets: %w", err))
 		}
-		redactor = redact.NewSecrets(secrets)
 	}
 	batch, err := s.dari.CreateSessionBatch(ctx, dari.CreateSessionBatchRequest{
 		IdempotencyKey: "dari-docs-managed-" + run.ID + "-" + next.Kind,
@@ -169,12 +166,12 @@ func (s *Server) startSingleSessionBatch(ctx context.Context, run queuedRun, nex
 		}},
 	})
 	if err != nil {
-		return s.failStartedRun(ctx, run, persistedErrSessionCreateFailed, fmt.Errorf("create %s session batch: %s", next.Kind, redactor.String(err.Error())))
+		return s.failStartedRun(ctx, run, persistedErrSessionCreateFailed, fmt.Errorf("create %s session batch: %w", next.Kind, err))
 	}
 	if !singleBatchSessionStarted(batch) {
 		msg := "missing session"
 		if len(batch.Sessions) > 0 && batch.Sessions[0].Error != "" {
-			msg = redactor.String(batch.Sessions[0].Error)
+			msg = batch.Sessions[0].Error
 		}
 		return s.failStartedRun(ctx, run, persistedErrSessionCreateFailed, fmt.Errorf("create %s session: %s", next.Kind, msg))
 	}
@@ -187,6 +184,9 @@ func (s *Server) startSingleSessionBatch(ctx context.Context, run queuedRun, nex
 	}
 	if err := store.InsertStartedRunSession(ctx, item.SessionID, run.ID, next.Kind, next.TaskIndex, llmID); err != nil {
 		return err
+	}
+	if isFinalSecretBearingSession(run, next) {
+		s.clearRuntimeSecrets(ctx, run.ID)
 	}
 	return store.MarkRunRunningFromStarting(ctx, run.ID)
 }
@@ -215,14 +215,12 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun, items []te
 	}
 	b := bundle.Result{SHA256: run.BundleSHA256, Manifest: bundle.Manifest{Files: make([]bundle.FileRecord, run.BundleFiles)}}
 	var secrets map[string]string
-	redactor := redact.Redactor{}
 	if run.LiveVerify {
 		var err error
 		secrets, err = s.runtimeSecrets(ctx, run.ID)
 		if err != nil {
 			return s.failStartedRun(ctx, run, persistedErrRuntimeSecretsLoadFailed, fmt.Errorf("load runtime secrets: %w", err))
 		}
-		redactor = redact.NewSecrets(secrets)
 	}
 	batchReq := dari.CreateSessionBatchRequest{
 		IdempotencyKey: testerBatchIdempotencyKey(run, items),
@@ -248,7 +246,7 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun, items []te
 	}
 	batch, err := s.dari.CreateSessionBatch(ctx, batchReq)
 	if err != nil {
-		return s.failStartedRun(ctx, run, persistedErrSessionCreateFailed, fmt.Errorf("create tester session batch: %s", redactor.String(err.Error())))
+		return s.failStartedRun(ctx, run, persistedErrSessionCreateFailed, fmt.Errorf("create tester session batch: %w", err))
 	}
 	store, err := s.runs()
 	if err != nil {
@@ -262,7 +260,7 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun, items []te
 		expected := items[item.Index]
 		if item.Status == statusFailed || item.SessionID == "" || item.Error != "" {
 			if createErr == nil {
-				createErr = fmt.Errorf("create tester session %d: %s", item.Index+1, redactor.String(item.Error))
+				createErr = fmt.Errorf("create tester session %d: %s", item.Index+1, item.Error)
 			}
 			continue
 		}
@@ -275,6 +273,9 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun, items []te
 	}
 	if createErr != nil {
 		return s.failStartedRun(ctx, run, persistedErrSessionCreateFailed, createErr)
+	}
+	if run.Mode == "check" {
+		s.clearRuntimeSecrets(ctx, run.ID)
 	}
 	return store.MarkRunRunningFromStarting(ctx, run.ID)
 }
@@ -399,11 +400,7 @@ func (s *Server) reconcileSession(ctx context.Context, session runSessionRecord)
 	}
 	switch lastStatus {
 	case "completed":
-		redactedTranscript, err := s.redactedTranscriptForSession(ctx, session.RunID, session.ID)
-		if err != nil {
-			return err
-		}
-		if err := store.MarkSessionCompleted(ctx, session.ID, sessionLLMID(session.LLMID, remote), redactedTranscript); err != nil {
+		if err := store.MarkSessionCompleted(ctx, session.ID, sessionLLMID(session.LLMID, remote)); err != nil {
 			return err
 		}
 		return s.reconcileRunProgress(ctx, session.RunID)
@@ -572,11 +569,11 @@ func (s *Server) collectTesterReports(ctx context.Context, run queuedRun, sessio
 		if !expected[key] || seen[key] {
 			continue
 		}
-		report, err := s.sessionAssistantText(ctx, session.ID, redact.Redactor{})
+		tr, err := s.dari.GetTranscript(ctx, session.ID)
 		if err != nil {
 			return nil, false, fmt.Errorf("get transcript %s: %w", session.ID, err)
 		}
-		reports = append(reports, report)
+		reports = append(reports, dari.FinalAssistantText(tr))
 		seen[key] = true
 	}
 	for key := range expected {

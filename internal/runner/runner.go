@@ -15,7 +15,6 @@ import (
 	"github.com/mupt-ai/dari-docs/internal/bundle"
 	"github.com/mupt-ai/dari-docs/internal/dari"
 	"github.com/mupt-ai/dari-docs/internal/llmoptions"
-	"github.com/mupt-ai/dari-docs/internal/redact"
 	"github.com/mupt-ai/dari-docs/internal/workspace"
 )
 
@@ -113,8 +112,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		sessionSecrets = cfg.RuntimeSecrets
 	}
 
-	redactor := redact.NewSecrets(cfg.RuntimeSecrets)
-	reports, err := runFeedback(ctx, client, cfg, sessionSecrets, redactor, up.ID, b)
+	reports, err := runFeedback(ctx, client, cfg, sessionSecrets, up.ID, b)
 	if err != nil {
 		return Result{}, err
 	}
@@ -126,7 +124,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		return res, nil
 	}
 
-	editorSession, err := runEditor(ctx, client, cfg, sessionSecrets, redactor, up.ID, reports)
+	editorSession, err := runEditor(ctx, client, cfg, sessionSecrets, up.ID, reports)
 	if err != nil {
 		return res, err
 	}
@@ -154,7 +152,6 @@ func runFeedback(
 	client *dari.Client,
 	cfg Config,
 	secrets map[string]string,
-	redactor redact.Redactor,
 	fileID string,
 	b bundle.Result,
 ) ([]string, error) {
@@ -185,17 +182,17 @@ func runFeedback(
 		}
 		batch, err := client.CreateSessionBatch(ctx, batchReq)
 		if err != nil {
-			return nil, fmt.Errorf("create feedback session batch: %s", redactor.String(err.Error()))
+			return nil, fmt.Errorf("create feedback session batch: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Feedback batch: %s (%d sessions)\n", batch.BatchID, len(batch.Sessions))
-		if err := printFeedbackBatchSessions(batch, chunk, len(items), redactor); err != nil {
+		if err := printFeedbackBatchSessions(batch, chunk, len(items)); err != nil {
 			return nil, err
 		}
 		final, err := client.WaitForBatchCompletion(ctx, batch.BatchID, 5*time.Second, cfg.Timeout)
 		if err != nil {
-			return nil, fmt.Errorf("%s", redactor.String(err.Error()))
+			return nil, err
 		}
-		if err := ensureBatchSucceeded("feedback", final, chunk, redactor); err != nil {
+		if err := ensureBatchSucceeded("feedback", final, chunk); err != nil {
 			return nil, err
 		}
 		if len(final.Sessions) != len(chunk) {
@@ -213,7 +210,7 @@ func runFeedback(
 			if err != nil {
 				return nil, err
 			}
-			report := redactor.String(dari.FinalAssistantText(tr))
+			report := dari.FinalAssistantText(tr)
 			if err := writeFeedbackReport(cfg, item.idx, item.taskIndex, item.llmID, len(cfg.Tasks), report); err != nil {
 				return nil, err
 			}
@@ -264,14 +261,14 @@ func feedbackChunks(items []feedbackItem, size int) [][]feedbackItem {
 	return chunks
 }
 
-func printFeedbackBatchSessions(batch dari.SessionBatch, items []feedbackItem, total int, redactor redact.Redactor) error {
+func printFeedbackBatchSessions(batch dari.SessionBatch, items []feedbackItem, total int) error {
 	for _, session := range batch.Sessions {
 		if session.Index < 0 || session.Index >= len(items) {
 			return fmt.Errorf("feedback batch returned invalid item index %d", session.Index)
 		}
 		item := items[session.Index]
 		if session.Status == "failed" {
-			return fmt.Errorf("feedback batch item %d failed during creation: %s", session.Index+1, redactor.String(session.Error))
+			return fmt.Errorf("feedback batch item %d failed during creation: %s", session.Index+1, session.Error)
 		}
 		if session.SessionID == "" {
 			return fmt.Errorf("feedback batch item %d did not return a session", session.Index+1)
@@ -285,7 +282,7 @@ func printFeedbackBatchSessions(batch dari.SessionBatch, items []feedbackItem, t
 	return nil
 }
 
-func ensureBatchSucceeded(kind string, batch dari.SessionBatch, items []feedbackItem, redactor redact.Redactor) error {
+func ensureBatchSucceeded(kind string, batch dari.SessionBatch, items []feedbackItem) error {
 	if batch.Status == "completed" {
 		return nil
 	}
@@ -296,7 +293,7 @@ func ensureBatchSucceeded(kind string, batch dari.SessionBatch, items []feedback
 				idx = items[session.Index].idx + 1
 			}
 			if session.Error != "" {
-				return fmt.Errorf("%s batch item %d failed: %s", kind, idx, redactor.String(session.Error))
+				return fmt.Errorf("%s batch item %d failed: %s", kind, idx, session.Error)
 			}
 			return fmt.Errorf("%s batch item %d failed", kind, idx)
 		}
@@ -409,7 +406,6 @@ func runEditor(
 	client *dari.Client,
 	cfg Config,
 	secrets map[string]string,
-	redactor redact.Redactor,
 	fileID string,
 	reports []string,
 ) (string, error) {
@@ -426,7 +422,7 @@ func runEditor(
 		}},
 	})
 	if err != nil {
-		return "", fmt.Errorf("create editor session batch: %s", redactor.String(err.Error()))
+		return "", fmt.Errorf("create editor session batch: %w", err)
 	}
 	if len(batch.Sessions) != 1 || batch.Sessions[0].SessionID == "" {
 		return "", fmt.Errorf("editor batch %s did not return a session", batch.BatchID)
@@ -436,12 +432,12 @@ func runEditor(
 	fmt.Fprintf(os.Stderr, "Editor session: %s\n", sessionID)
 	final, err := client.WaitForBatchCompletion(ctx, batch.BatchID, 5*time.Second, cfg.Timeout)
 	if err != nil {
-		return "", fmt.Errorf("%s", redactor.String(err.Error()))
+		return "", err
 	}
 	if final.Status != "completed" {
 		for _, session := range final.Sessions {
 			if session.Error != "" {
-				return "", fmt.Errorf("editor session %s failed: %s", session.SessionID, redactor.String(session.Error))
+				return "", fmt.Errorf("editor session %s failed: %s", session.SessionID, session.Error)
 			}
 			if session.Status == "failed" || session.LastMessageStatus == "failed" {
 				return "", fmt.Errorf("editor session %s failed", session.SessionID)
@@ -453,7 +449,7 @@ func runEditor(
 	if err != nil {
 		return "", fmt.Errorf("get editor transcript: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(cfg.OutDir, "editor-output.md"), []byte(redactor.String(dari.FinalAssistantText(tr))+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(cfg.OutDir, "editor-output.md"), []byte(dari.FinalAssistantText(tr)+"\n"), 0o644); err != nil {
 		return "", fmt.Errorf("write editor output: %w", err)
 	}
 	return sessionID, nil

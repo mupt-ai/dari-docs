@@ -94,7 +94,6 @@ CREATE TABLE run_sessions (
   last_polled_at TIMESTAMPTZ,
   last_poll_error_at TIMESTAMPTZ,
   last_poll_error TEXT,
-  redacted_transcript JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   completed_at TIMESTAMPTZ
 );

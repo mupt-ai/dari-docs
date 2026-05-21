@@ -88,10 +88,10 @@ func TestManagedRunStoreExecOnlyMethodsPassSQLAndArgumentsInOrder(t *testing.T) 
 		{
 			name: "mark session completed",
 			run: func(ctx context.Context, store *managedRunStore) error {
-				return store.MarkSessionCompleted(ctx, "sess_test", "llm_test", []byte(`{"timeline":{"items":[]}}`))
+				return store.MarkSessionCompleted(ctx, "sess_test", "llm_test")
 			},
-			wantSQLContains: "WHERE session_id=$4",
-			wantArgs:        []any{statusCompleted, "llm_test", `{"timeline":{"items":[]}}`, "sess_test", statusRunning},
+			wantSQLContains: "WHERE session_id=$3",
+			wantArgs:        []any{statusCompleted, "llm_test", "sess_test", statusRunning},
 		},
 		{
 			name: "mark session failed",
