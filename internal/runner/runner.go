@@ -3,7 +3,9 @@ package runner
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +17,7 @@ import (
 	"github.com/mupt-ai/dari-docs/internal/bundle"
 	"github.com/mupt-ai/dari-docs/internal/dari"
 	"github.com/mupt-ai/dari-docs/internal/llmoptions"
+	"github.com/mupt-ai/dari-docs/internal/publicdocs"
 	"github.com/mupt-ai/dari-docs/internal/workspace"
 )
 
@@ -36,8 +39,9 @@ func GPTFeedbackLLMIDs() []string {
 var promptFS embed.FS
 
 var (
-	feedbackPromptTemplate = template.Must(template.ParseFS(promptFS, "prompts/feedback.md"))
-	editorPromptTemplate   = template.Must(template.ParseFS(promptFS, "prompts/editor.md"))
+	feedbackPromptTemplate       = template.Must(template.ParseFS(promptFS, "prompts/feedback.md"))
+	publicFeedbackPromptTemplate = template.Must(template.ParseFS(promptFS, "prompts/public-feedback.md"))
+	editorPromptTemplate         = template.Must(template.ParseFS(promptFS, "prompts/editor.md"))
 )
 
 type Config struct {
@@ -52,6 +56,8 @@ type Config struct {
 	Tasks          []string
 	LiveVerify     bool
 	RuntimeSecrets map[string]string
+	PublicDocURLs  []string
+	PublicDocsOnly bool
 	Parallel       int
 	SkipEditor     bool
 	Timeout        time.Duration
@@ -94,37 +100,48 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	}
 
 	client := dari.New(cfg.APIBaseURL, cfg.APIKey)
-	bundlePath := filepath.Join(cfg.OutDir, "input-docs-bundle.tar.gz")
-	b, err := bundle.CreateWithOptions(cfg.RepoRoot, bundlePath, cfg.BundleOptions)
-	if err != nil {
-		return Result{}, err
+	bundlePath := ""
+	var b bundle.Result
+	if cfg.PublicDocsOnly {
+		b = publicDocsBundleResult(cfg.PublicDocURLs)
+	} else {
+		bundlePath = filepath.Join(cfg.OutDir, "input-docs-bundle.tar.gz")
+		var err error
+		b, err = bundle.CreateWithOptions(cfg.RepoRoot, bundlePath, cfg.BundleOptions)
+		if err != nil {
+			return Result{}, err
+		}
+		bundle.WriteSummary(os.Stderr, b)
 	}
-	bundle.WriteSummary(os.Stderr, b)
 
-	up, err := client.UploadFile(ctx, bundlePath)
-	if err != nil {
-		return Result{}, fmt.Errorf("upload docs bundle: %w", err)
+	fileID := ""
+	if bundlePath != "" {
+		up, err := client.UploadFile(ctx, bundlePath)
+		if err != nil {
+			return Result{}, fmt.Errorf("upload docs bundle: %w", err)
+		}
+		fileID = up.ID
+		fmt.Fprintf(os.Stderr, "Uploaded docs bundle: %s\n", up.ID)
 	}
-	fmt.Fprintf(os.Stderr, "Uploaded docs bundle: %s\n", up.ID)
 
 	var sessionSecrets map[string]string
 	if cfg.LiveVerify && len(cfg.RuntimeSecrets) > 0 {
 		sessionSecrets = cfg.RuntimeSecrets
 	}
 
-	reports, err := runFeedback(ctx, client, cfg, sessionSecrets, up.ID, b)
+	reports, err := runFeedback(ctx, client, cfg, sessionSecrets, fileID, b)
 	if err != nil {
 		return Result{}, err
 	}
 	if err := writeAggregate(cfg.OutDir, reports); err != nil {
 		return Result{}, err
 	}
-	res := Result{BundlePath: bundlePath, BundleFileID: up.ID, FeedbackReports: reports}
+	res := Result{BundlePath: bundlePath, BundleFileID: fileID, FeedbackReports: reports}
 	if cfg.SkipEditor {
 		return res, nil
 	}
 
-	editorSession, err := runEditor(ctx, client, cfg, sessionSecrets, up.ID, reports)
+	editorSession, err := runEditor(ctx, client, cfg, sessionSecrets, fileID, reports)
 	if err != nil {
 		return res, err
 	}
@@ -171,13 +188,13 @@ func runFeedback(
 			if item.llmID != "" {
 				metadata["llm_id"] = item.llmID
 			}
-			prompt := FeedbackPrompt(item.task, b, cfg.LiveVerify, cfg.RuntimeSecrets)
+			prompt := FeedbackPromptForSource(item.task, b, cfg.PublicDocURLs, cfg.LiveVerify, cfg.RuntimeSecrets)
 			batchReq.Items = append(batchReq.Items, dari.CreateSessionBatchItem{
 				AgentID:  cfg.FeedbackAgent,
 				LLMID:    item.llmID,
 				Metadata: metadata,
 				Secrets:  secrets,
-				Message:  dari.CreateSessionBatchMessage{Content: []dari.ContentBlock{dari.TextBlock(prompt), dari.FileBlock(fileID)}},
+				Message:  dari.CreateSessionBatchMessage{Content: sessionContent(prompt, fileID)},
 			})
 		}
 		batch, err := client.CreateSessionBatch(ctx, batchReq)
@@ -356,7 +373,41 @@ func safeFilenamePart(s string) string {
 	return b.String()
 }
 
+func publicDocsBundleResult(urls []string) bundle.Result {
+	h := sha256.New()
+	for _, u := range urls {
+		fmt.Fprintln(h, u)
+	}
+	return bundle.Result{
+		SHA256:   hex.EncodeToString(h.Sum(nil)),
+		Manifest: bundle.Manifest{Files: []bundle.FileRecord{}},
+	}
+}
+
 func FeedbackPrompt(task string, b bundle.Result, live bool, secrets map[string]string) string {
+	return FeedbackPromptForSource(task, b, nil, live, secrets)
+}
+
+func FeedbackPromptForSource(task string, b bundle.Result, publicDocURLs []string, live bool, secrets map[string]string) string {
+	liveText := feedbackLiveText(live, secrets)
+	data := map[string]any{
+		"Task":      task,
+		"FileCount": len(b.Manifest.Files),
+		"SHA256":    b.SHA256,
+		"LiveText":  liveText,
+	}
+	if len(publicDocURLs) == 0 {
+		return executePrompt(feedbackPromptTemplate, "feedback.md", data)
+	}
+	data["PublicDocURLs"] = publicDocURLList(publicDocURLs)
+	data["HasBundle"] = len(b.Manifest.Files) > 0
+	return executePrompt(publicFeedbackPromptTemplate, "public-feedback.md", data)
+}
+
+func feedbackLiveText(live bool, secrets map[string]string) string {
+	if !live {
+		return "Live verification is disabled unless the docs provide a safe no-credential smoke test."
+	}
 	var names []string
 	for k := range secrets {
 		names = append(names, k)
@@ -366,22 +417,26 @@ func FeedbackPrompt(task string, b bundle.Result, live bool, secrets map[string]
 	if len(names) > 0 {
 		availableNames = strings.Join(names, ", ")
 	}
-	liveText := "Live verification is disabled unless the docs provide a safe no-credential smoke test."
-	if live {
-		liveText = strings.Join([]string{
-			"Live verification is enabled.",
-			"Runtime secrets, if present, are provided directly as environment variables named below.",
-			"Available secret names: " + availableNames + ".",
-			"Never print values.",
-			"Only run safe/test-mode/read-only checks unless explicitly instructed otherwise.",
-		}, " ")
+	return strings.Join([]string{
+		"Live verification is enabled.",
+		"Runtime secrets, if present, are provided directly as environment variables named below.",
+		"Available secret names: " + availableNames + ".",
+		"Never print values.",
+		"Only run safe/test-mode/read-only checks unless explicitly instructed otherwise.",
+	}, " ")
+}
+
+func publicDocURLList(urls []string) string {
+	var sb strings.Builder
+	for _, u := range urls {
+		sb.WriteString("- ")
+		sb.WriteString(u)
+		if publicdocs.IsLLMSTextURL(u) {
+			sb.WriteString(" — llms.txt manifest")
+		}
+		sb.WriteByte('\n')
 	}
-	return executePrompt(feedbackPromptTemplate, "feedback.md", map[string]any{
-		"Task":      task,
-		"FileCount": len(b.Manifest.Files),
-		"SHA256":    b.SHA256,
-		"LiveText":  liveText,
-	})
+	return strings.TrimSuffix(sb.String(), "\n")
 }
 
 func AggregateFeedback(reports []string) string {
@@ -418,7 +473,7 @@ func runEditor(
 			LLMID:    cfg.EditorLLMID,
 			Metadata: metadata,
 			Secrets:  secrets,
-			Message:  dari.CreateSessionBatchMessage{Content: []dari.ContentBlock{dari.TextBlock(prompt), dari.FileBlock(fileID)}},
+			Message:  dari.CreateSessionBatchMessage{Content: sessionContent(prompt, fileID)},
 		}},
 	})
 	if err != nil {
@@ -463,6 +518,14 @@ func EditorPrompt(reports []string) string {
 	return executePrompt(editorPromptTemplate, "editor.md", map[string]any{
 		"Feedback": feedback.String(),
 	})
+}
+
+func sessionContent(prompt string, fileID string) []dari.ContentBlock {
+	content := []dari.ContentBlock{dari.TextBlock(prompt)}
+	if fileID != "" {
+		content = append(content, dari.FileBlock(fileID))
+	}
+	return content
 }
 
 func executePrompt(t *template.Template, name string, data any) string {

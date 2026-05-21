@@ -144,6 +144,7 @@ type CreateRunResponse struct {
 type CreateRunOptions struct {
 	LiveVerify     bool
 	RuntimeSecrets map[string]string
+	PublicDocURLs  []string
 	FeedbackLLMIDs []string
 	EditorLLMID    string
 }
@@ -290,6 +291,15 @@ func (c *Client) CreateRun(ctx context.Context, mode string, tasks []string, bun
 			return CreateRunResponse{}, err
 		}
 	}
+	if len(opts.PublicDocURLs) > 0 {
+		urlJSON, err := json.Marshal(opts.PublicDocURLs)
+		if err != nil {
+			return CreateRunResponse{}, err
+		}
+		if err := mw.WriteField("public_doc_urls_json", string(urlJSON)); err != nil {
+			return CreateRunResponse{}, err
+		}
+	}
 	if len(opts.FeedbackLLMIDs) > 0 {
 		llmJSON, err := json.Marshal(opts.FeedbackLLMIDs)
 		if err != nil {
@@ -304,8 +314,10 @@ func (c *Client) CreateRun(ctx context.Context, mode string, tasks []string, bun
 			return CreateRunResponse{}, err
 		}
 	}
-	if err := addMultipartFile(mw, "bundle", bundlePath); err != nil {
-		return CreateRunResponse{}, err
+	if bundlePath != "" {
+		if err := addMultipartFile(mw, "bundle", bundlePath); err != nil {
+			return CreateRunResponse{}, err
+		}
 	}
 	if err := mw.Close(); err != nil {
 		return CreateRunResponse{}, err

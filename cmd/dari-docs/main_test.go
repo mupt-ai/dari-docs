@@ -266,7 +266,7 @@ func writeUpdatedDocsZip(w http.ResponseWriter, files map[string]string) error {
 	return err
 }
 
-func TestPrepareAddsPublicDocsSourceWithoutBundlingCWD(t *testing.T) {
+func TestPrepareUsesPublicDocsURLWithoutBundlingCWD(t *testing.T) {
 	cwd := t.TempDir()
 	t.Chdir(cwd)
 	if err := os.WriteFile(filepath.Join(cwd, "README.md"), []byte("# Local\n"), 0o644); err != nil {
@@ -283,11 +283,14 @@ func TestPrepareAddsPublicDocsSourceWithoutBundlingCWD(t *testing.T) {
 	if !opts.PublicDocsOnly {
 		t.Fatal("expected public-docs-only source")
 	}
-	if len(opts.BundleOptions.ExtraFiles) != 1 {
-		t.Fatalf("extra files = %#v, want source file", opts.BundleOptions.ExtraFiles)
+	if len(opts.BundleOptions.ExtraFiles) != 0 {
+		t.Fatalf("extra files = %#v, want no synthetic public docs file", opts.BundleOptions.ExtraFiles)
 	}
-	if opts.RepoRoot == cwd {
-		t.Fatalf("RepoRoot = cwd; public docs without repo arg should not bundle cwd")
+	if len(opts.PublicDocURLs) != 1 || opts.PublicDocURLs[0] != "https://docs.dari.dev/llms.txt" {
+		t.Fatalf("public doc URLs = %#v", opts.PublicDocURLs)
+	}
+	if opts.RepoRoot != cwd {
+		t.Fatalf("RepoRoot = %q, want cwd for config lookup", opts.RepoRoot)
 	}
 }
 

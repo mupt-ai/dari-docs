@@ -58,6 +58,7 @@ SELECT id,
        COALESCE(bundle_file_id, ''),
        bundle_sha256,
        bundle_files,
+       public_doc_urls,
        live_verify,
        runtime_secret_names,
        reserved_cents
@@ -309,6 +310,7 @@ SELECT id,
        COALESCE(bundle_file_id, ''),
        bundle_sha256,
        bundle_files,
+       public_doc_urls,
        live_verify,
        runtime_secret_names,
        reserved_cents
@@ -476,6 +478,7 @@ func scanQueuedRun(row pgx.Row) (queuedRun, error) {
 	var run queuedRun
 	var tasksJSON []byte
 	var testerLLMIDsJSON []byte
+	var publicDocURLsJSON []byte
 	var secretNamesJSON []byte
 	if err := row.Scan(
 		&run.ID,
@@ -489,6 +492,7 @@ func scanQueuedRun(row pgx.Row) (queuedRun, error) {
 		&run.BundleFileID,
 		&run.BundleSHA256,
 		&run.BundleFiles,
+		&publicDocURLsJSON,
 		&run.LiveVerify,
 		&secretNamesJSON,
 		&run.ReservedCents,
@@ -503,6 +507,11 @@ func scanQueuedRun(row pgx.Row) (queuedRun, error) {
 	if len(testerLLMIDsJSON) > 0 {
 		if err := json.Unmarshal(testerLLMIDsJSON, &run.TesterLLMIDs); err != nil {
 			return queuedRun{}, fmt.Errorf("decode tester LLM IDs: %w", err)
+		}
+	}
+	if len(publicDocURLsJSON) > 0 {
+		if err := json.Unmarshal(publicDocURLsJSON, &run.PublicDocURLs); err != nil {
+			return queuedRun{}, fmt.Errorf("decode public docs URLs: %w", err)
 		}
 	}
 	var err error

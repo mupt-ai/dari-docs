@@ -253,6 +253,7 @@ func TestBaselineMigrationMatchesManagedSQLShape(t *testing.T) {
 		"tasks JSONB NOT NULL",
 		"bundle_file_id TEXT",
 		"bundle_sha256 TEXT NOT NULL",
+		"public_doc_urls JSONB NOT NULL DEFAULT '[]'::jsonb",
 		"tester_version_id TEXT",
 		"editor_version_id TEXT",
 		"reserved_cents BIGINT NOT NULL DEFAULT 0",
@@ -1011,7 +1012,7 @@ func TestReserveRunStoresConfiguredHostedAgents(t *testing.T) {
 			{Path: "README.md", SizeBytes: 12, SHA256: "file_sha"},
 		}},
 	}
-	if err := s.reserveRun(ctx, userID, runID, "check", []byte(`["task"]`), []byte(`["claude-haiku-4-5","claude-opus-4-7"]`), "claude-opus-4-7", runSourceCLI, result, 150, false, []byte(`[]`), nil, nil); err != nil {
+	if err := s.reserveRun(ctx, userID, runID, "check", []byte(`["task"]`), []byte(`["claude-haiku-4-5","claude-opus-4-7"]`), "claude-opus-4-7", runSourceCLI, result, 150, false, []byte(`[]`), []byte(`[]`), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 

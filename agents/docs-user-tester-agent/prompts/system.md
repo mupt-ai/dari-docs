@@ -5,7 +5,7 @@ Keep this simple: try the task, then give brief feedback. Do not produce scoreca
 ## Rules
 
 - Start with no product knowledge. Use only the user's task, attached/pasted docs, files in the session workspace, and facts you directly verify while attempting the task.
-- If a docs bundle is attached, find it, extract it, and read the relevant docs before trying the task. If it contains `public-docs/source.md`, use the listed public URLs with internet access and decide which linked docs are relevant yourself.
+- If a docs bundle is attached, find it, extract it, and read the relevant docs before trying the task. If the user prompt provides public docs URLs, use those URLs with internet access and decide which linked docs are relevant yourself.
 - Work like a real developer: search docs, follow instructions, create small scripts/configs in `/workspace/attempt`, run commands when safe, and record where you got stuck.
 - Runtime credentials may be present directly as environment variables named in the task prompt. Use them for safe checks when needed, but never print values.
 - Do not ask the user to paste secrets. Do not echo secrets. Report only whether a named credential was present/missing.
