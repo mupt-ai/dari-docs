@@ -149,12 +149,12 @@ func (opts *checkOptimizeOptions) prepare() error {
 	}
 	opts.BundleOptions = bundle.CreateOptions{Include: opts.BundleIncludes, Exclude: opts.BundleExcludes}
 	if len(opts.PublicDocURLs) > 0 {
-		files, summary, err := publicdocs.SourceFiles(opts.PublicDocURLs)
+		urls, err := publicdocs.NormalizeURLs(opts.PublicDocURLs)
 		if err != nil {
 			return err
 		}
-		opts.BundleOptions.ExtraFiles = files
-		fmt.Fprintf(os.Stderr, "Added public docs source: %s\n", summary.SeedURLs[0])
+		opts.PublicDocURLs = urls
+		fmt.Fprintf(os.Stderr, "Using public docs source: %s\n", opts.PublicDocURLs[0])
 	}
 	return nil
 }
@@ -176,14 +176,7 @@ func (opts *checkOptimizeOptions) resolveRepoAndOutput() error {
 		if opts.OutDir == "" {
 			opts.OutDir = filepath.Join(cwd, ".dari-docs")
 		}
-		sourceRoot := filepath.Join(opts.OutDir, "public-source")
-		if err := os.RemoveAll(sourceRoot); err != nil {
-			return err
-		}
-		if err := os.MkdirAll(sourceRoot, 0o755); err != nil {
-			return err
-		}
-		opts.RepoRoot = sourceRoot
+		opts.RepoRoot = cwd
 		return nil
 	}
 	repo := opts.RepoArg
@@ -266,6 +259,8 @@ func runManagedCheckOrOptimizeFromOptions(ctx context.Context, opts checkOptimiz
 		Wait:           opts.Wait,
 		LiveVerify:     opts.LiveVerify,
 		RuntimeSecrets: opts.RuntimeSecrets,
+		PublicDocURLs:  opts.PublicDocURLs,
+		PublicDocsOnly: opts.PublicDocsOnly,
 		Timeout:        time.Duration(opts.TimeoutMinutes) * time.Minute,
 		BundleOptions:  opts.BundleOptions,
 	})
@@ -287,6 +282,8 @@ func runSelfManagedCheckOrOptimize(ctx context.Context, opts checkOptimizeOption
 		Tasks:          opts.Tasks,
 		LiveVerify:     opts.LiveVerify,
 		RuntimeSecrets: opts.RuntimeSecrets,
+		PublicDocURLs:  opts.PublicDocURLs,
+		PublicDocsOnly: opts.PublicDocsOnly,
 		Parallel:       opts.Parallel,
 		SkipEditor:     opts.Command == "check",
 		Timeout:        time.Duration(opts.TimeoutMinutes) * time.Minute,
@@ -340,7 +337,9 @@ func resolveSelfManagedCheckOptimizeConfig(opts *checkOptimizeOptions) error {
 
 func printCheckOptimizeResult(command, outDir string, apply bool, res runner.Result) {
 	fmt.Println("\nDone.")
-	fmt.Printf("Bundle: %s\n", res.BundlePath)
+	if res.BundlePath != "" {
+		fmt.Printf("Bundle: %s\n", res.BundlePath)
+	}
 	fmt.Printf("Feedback: %s\n", filepath.Join(outDir, "aggregate-feedback.md"))
 	if command != "check" {
 		fmt.Printf("Editor session: %s\n", res.EditorSessionID)

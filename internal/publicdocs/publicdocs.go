@@ -5,46 +5,9 @@ import (
 	"net/url"
 	"path"
 	"strings"
-
-	"github.com/mupt-ai/dari-docs/internal/bundle"
 )
 
-const sourceFilePath = "public-docs/source.md"
-
-type Summary struct {
-	SeedURLs []string
-}
-
-func SourceFiles(rawURLs []string) ([]bundle.ExtraFile, Summary, error) {
-	urls, err := normalizeURLs(rawURLs)
-	if err != nil {
-		return nil, Summary{}, err
-	}
-	if len(urls) == 0 {
-		return nil, Summary{}, nil
-	}
-	content := publicDocsSourceMarkdown(urls)
-	return []bundle.ExtraFile{{Path: sourceFilePath, Content: []byte(content), ContentType: "text/markdown"}}, Summary{SeedURLs: urls}, nil
-}
-
-func publicDocsSourceMarkdown(urls []string) string {
-	var sb strings.Builder
-	sb.WriteString("# Public Docs Source\n\n")
-	sb.WriteString("This run uses public documentation URLs. Internet access is required.\n\n")
-	sb.WriteString("Start from these URLs and choose the docs relevant to the task yourself:\n\n")
-	for _, u := range urls {
-		sb.WriteString("- ")
-		sb.WriteString(u)
-		if isLLMSTextURL(u) {
-			sb.WriteString(" — llms.txt manifest; read it and follow the relevant links for the task")
-		}
-		sb.WriteByte('\n')
-	}
-	sb.WriteString("\nDo not assume this bundle contains a full copy of the public docs. Use the live URLs above as the source of truth.\n")
-	return sb.String()
-}
-
-func normalizeURLs(rawURLs []string) ([]string, error) {
+func NormalizeURLs(rawURLs []string) ([]string, error) {
 	out := make([]string, 0, len(rawURLs))
 	seen := map[string]bool{}
 	for _, raw := range rawURLs {
@@ -70,7 +33,7 @@ func normalizeURLs(rawURLs []string) ([]string, error) {
 	return out, nil
 }
 
-func isLLMSTextURL(raw string) bool {
+func IsLLMSTextURL(raw string) bool {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return false
