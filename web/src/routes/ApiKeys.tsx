@@ -25,6 +25,7 @@ import {
   revokeAPIKey,
   type APIKeyInfo,
 } from "@/lib/api-keys";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { cn, formatDate } from "@/lib/utils";
 
 const scopeOptions = [
@@ -491,37 +492,6 @@ function StatusBanner({
       </button>
     </div>
   );
-}
-
-async function copyTextToClipboard(value: string): Promise<boolean> {
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(value);
-      return true;
-    } catch {
-      // Fall back below for browsers that block the async Clipboard API.
-    }
-  }
-
-  const textarea = document.createElement("textarea");
-  textarea.value = value;
-  textarea.setAttribute("readonly", "");
-  textarea.style.position = "fixed";
-  textarea.style.top = "0";
-  textarea.style.left = "0";
-  textarea.style.opacity = "0";
-
-  document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
-
-  try {
-    return document.execCommand("copy");
-  } catch {
-    return false;
-  } finally {
-    document.body.removeChild(textarea);
-  }
 }
 
 function automationAPIKeys(apiKeys: APIKeyInfo[]): APIKeyInfo[] {

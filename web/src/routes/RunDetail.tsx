@@ -13,6 +13,7 @@ import {
   type RunSessionTranscript,
   type RunStatus,
 } from "@/lib/runs";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { formatCents, formatDate, formatDuration, toTitleCase } from "@/lib/utils";
 import { StatusBadge } from "@/routes/Runs";
 
@@ -29,6 +30,7 @@ export default function RunDetail() {
   const copiedFeedbackTimerRef = useRef<number | null>(null);
   const [selectedTaskIndex, setSelectedTaskIndex] = useState(1);
   const [selectedResultKey, setSelectedResultKey] = useState("");
+  const feedbackMarkdown = run?.aggregate_feedback?.trim() ? run.aggregate_feedback : "";
 
   const refresh = useCallback(async (quiet = false) => {
     if (!runId) return;
@@ -58,26 +60,24 @@ export default function RunDetail() {
   }, [refresh, run]);
 
   const handleCopyAllFeedback = async () => {
-    if (!run) return;
-    const text = allFeedbackMarkdown(run);
-    if (!text) {
+    if (!feedbackMarkdown) {
       setCopyFeedbackError("No Feedback Available To Copy.");
       return;
     }
     setCopyFeedbackError(null);
-    try {
-      await copyTextToClipboard(text);
-      setCopiedFeedback(true);
-      if (copiedFeedbackTimerRef.current !== null) {
-        window.clearTimeout(copiedFeedbackTimerRef.current);
-      }
-      copiedFeedbackTimerRef.current = window.setTimeout(() => {
-        setCopiedFeedback(false);
-        copiedFeedbackTimerRef.current = null;
-      }, 1800);
-    } catch (e) {
-      setCopyFeedbackError(e instanceof Error ? e.message : String(e));
+    const didCopy = await copyTextToClipboard(feedbackMarkdown);
+    if (!didCopy) {
+      setCopyFeedbackError("Could Not Copy Feedback To Clipboard.");
+      return;
     }
+    setCopiedFeedback(true);
+    if (copiedFeedbackTimerRef.current !== null) {
+      window.clearTimeout(copiedFeedbackTimerRef.current);
+    }
+    copiedFeedbackTimerRef.current = window.setTimeout(() => {
+      setCopiedFeedback(false);
+      copiedFeedbackTimerRef.current = null;
+    }, 1800);
   };
 
   useEffect(() => {
@@ -132,7 +132,7 @@ export default function RunDetail() {
           <h1 className="mt-2 break-all text-xl font-medium">{runId}</h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {run && allFeedbackMarkdown(run) && (
+          {feedbackMarkdown && (
             <Button type="button" variant="outline" size="sm" onClick={handleCopyAllFeedback}>
               <Copy className="mr-1.5 h-3.5 w-3.5" />
               {copiedFeedback ? "Copied" : "Copy All Feedback"}
@@ -304,14 +304,11 @@ function plannedTesterLLMIDs(run: RunStatus): string[] {
 
 function completedFeedbackByKey(run: RunStatus): Map<string, string> {
   const out = new Map<string, string>();
-  const completedSessions = (run.sessions ?? [])
-    .filter((session) => session.kind === "tester" && session.status === "completed");
-  completedSessions.forEach((session, index) => {
-    const feedback = run.feedback_reports?.[index];
-    if (feedback) {
-      out.set(taskResultKey(session.task_index || 1, session.llm_id), feedback);
+  for (const feedback of run.feedback_results ?? []) {
+    if (feedback.report) {
+      out.set(taskResultKey(feedback.task_index || 1, feedback.llm_id), feedback.report);
     }
-  });
+  }
   return out;
 }
 
@@ -329,62 +326,6 @@ function uniqueStrings(values: string[]): string[] {
     out.push(value);
   }
   return out;
-}
-
-function allFeedbackMarkdown(run: RunStatus): string {
-  const groups = taskGroups(run);
-  const sections: string[] = [];
-
-  for (const group of groups) {
-    const feedbackResults = group.results.filter((result) => result.feedback?.trim());
-    if (feedbackResults.length === 0) continue;
-
-    const taskParts = [`## Task ${group.taskIndex}`];
-    const task = group.task.trim();
-    if (task) taskParts.push(task);
-
-    for (const result of feedbackResults) {
-      taskParts.push(`### ${formatLLMID(result.llmID)} Feedback`);
-      taskParts.push(result.feedback!.trim());
-    }
-    sections.push(taskParts.join("\n\n"));
-  }
-
-  if (sections.length === 0) return "";
-
-  const meta = [
-    "# Dari Docs Feedback",
-    `Run: ${run.id}`,
-    `Status: ${toTitleCase(run.status)}`,
-    `Type: ${toTitleCase(run.mode)}`,
-  ];
-  if (run.completed_at) meta.push(`Completed: ${formatDate(run.completed_at)}`);
-  return `${meta.join("\n")}\n\n${sections.join("\n\n")}\n`;
-}
-
-async function copyTextToClipboard(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return;
-    } catch {
-      // Fall through to the textarea fallback for browsers that expose but block Clipboard API.
-    }
-  }
-
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "");
-  textarea.style.position = "fixed";
-  textarea.style.left = "-9999px";
-  textarea.style.top = "0";
-  document.body.appendChild(textarea);
-  textarea.select();
-  const copied = document.execCommand("copy");
-  textarea.remove();
-  if (!copied) {
-    throw new Error("Could Not Copy Feedback To Clipboard.");
-  }
 }
 
 function TaskResults({

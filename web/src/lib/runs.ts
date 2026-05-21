@@ -18,6 +18,13 @@ export type RunSession = {
 
 export type RunSessionTranscript = Record<string, unknown>;
 
+export type RunFeedbackResult = {
+  session_id: string;
+  task_index: number;
+  llm_id: string;
+  report: string;
+};
+
 export type RunListItem = {
   id: string;
   mode: "check" | "optimize";
@@ -42,7 +49,7 @@ export type RunListResponse = {
 
 export type RunStatus = RunListItem & {
   sessions: RunSession[];
-  feedback_reports?: string[];
+  feedback_results?: RunFeedbackResult[];
   aggregate_feedback?: string;
 };
 

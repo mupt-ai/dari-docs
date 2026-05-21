@@ -147,70 +147,20 @@ func TestExpandFeedbackLLMListSupportsGroups(t *testing.T) {
 	}
 }
 
-func TestManagedRunFeedbackMarkdownLabelsTasksAndLLMs(t *testing.T) {
-	completedAt := time.Date(2026, 5, 21, 10, 30, 0, 0, time.UTC)
-	createdAt := time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC)
+func TestManagedRunFeedbackMarkdownPrintsCanonicalAggregate(t *testing.T) {
 	status := managed.RunStatus{
-		ID:              "run_123",
-		Mode:            "check",
-		Status:          "completed",
-		Tasks:           []string{"Install the SDK", "Configure webhooks"},
-		CompletedAt:     &completedAt,
-		FeedbackReports: []string{"webhook feedback", "sdk feedback"},
-		Sessions: []managed.RunSessionSummary{
-			{Kind: "tester", TaskIndex: 2, Status: "completed", LLMID: "gpt-5.1", CreatedAt: createdAt.Add(time.Minute)},
-			{Kind: "tester", TaskIndex: 1, Status: "completed", LLMID: "claude-sonnet-4-6", CreatedAt: createdAt},
-		},
+		ID:                "run_123",
+		Mode:              "check",
+		Status:            "completed",
+		AggregateFeedback: "# Dari Docs Feedback\n\n## Task 1\n\nfeedback",
 	}
 	got, err := managedRunFeedbackMarkdown(status)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{
-		"# Dari Docs Feedback",
-		"Run: run_123",
-		"## Task 2\n\nConfigure webhooks",
-		"### gpt-5.1 Feedback\n\nwebhook feedback",
-		"## Task 1\n\nInstall the SDK",
-		"### claude-sonnet-4-6 Feedback\n\nsdk feedback",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("feedback markdown missing %q:\n%s", want, got)
-		}
-	}
-}
-
-func TestManagedRunFeedbackMarkdownGroupsInterleavedTaskSessions(t *testing.T) {
-	status := managed.RunStatus{
-		ID:              "run_interleaved",
-		Mode:            "check",
-		Status:          "completed",
-		Tasks:           []string{"Task one", "Task two"},
-		FeedbackReports: []string{"task one a", "task two", "task one c"},
-		Sessions: []managed.RunSessionSummary{
-			{Kind: "tester", TaskIndex: 1, Status: "completed", LLMID: "llm-a"},
-			{Kind: "tester", TaskIndex: 2, Status: "completed", LLMID: "llm-b"},
-			{Kind: "tester", TaskIndex: 1, Status: "completed", LLMID: "llm-c"},
-		},
-	}
-	got, err := managedRunFeedbackMarkdown(status)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if count := strings.Count(got, "## Task 1"); count != 1 {
-		t.Fatalf("Task 1 heading count = %d, want 1:\n%s", count, got)
-	}
-	if count := strings.Count(got, "## Task 2"); count != 1 {
-		t.Fatalf("Task 2 heading count = %d, want 1:\n%s", count, got)
-	}
-	for _, want := range []string{
-		"### llm-a Feedback\n\ntask one a",
-		"### llm-c Feedback\n\ntask one c",
-		"### llm-b Feedback\n\ntask two",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("feedback markdown missing %q:\n%s", want, got)
-		}
+	want := "# Dari Docs Feedback\n\n## Task 1\n\nfeedback\n"
+	if got != want {
+		t.Fatalf("feedback markdown = %q, want %q", got, want)
 	}
 }
 

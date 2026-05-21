@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { ArrowDown, ArrowUp, Check, Copy, Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 import { firstLine, formatCents, formatDuration, formatRelativeTime, toTitleCase } from "@/lib/utils";
 import {
@@ -210,12 +211,10 @@ function EmptyRuns() {
 function CopyableCommand({ command }: { command: string }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopied(true);
+    const didCopy = await copyTextToClipboard(command);
+    setCopied(didCopy);
+    if (didCopy) {
       window.setTimeout(() => setCopied(false), 1600);
-    } catch {
-      setCopied(false);
     }
   };
 

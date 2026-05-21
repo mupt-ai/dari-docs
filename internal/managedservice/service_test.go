@@ -1588,6 +1588,34 @@ func TestRunStatusResponseSerializesEmptyLLMsAndSessionsAsArrays(t *testing.T) {
 	}
 }
 
+func TestManagedRunAggregateFeedbackMarkdownUsesTypedResults(t *testing.T) {
+	completedAt := time.Date(2026, 5, 21, 10, 30, 0, 0, time.UTC)
+	status := runStatusResponse{
+		ID:          "run_123",
+		Mode:        "check",
+		Status:      statusCompleted,
+		Tasks:       []string{"Install the SDK", "Configure webhooks"},
+		CompletedAt: &completedAt,
+	}
+	got := managedRunAggregateFeedbackMarkdown(status, []runFeedbackResult{
+		{SessionID: "sess_1", TaskIndex: 1, LLMID: "claude-sonnet-4-6", Report: "sdk feedback"},
+		{SessionID: "sess_2", TaskIndex: 2, LLMID: "gpt-5.1", Report: "webhook feedback"},
+	})
+	for _, want := range []string{
+		"# Dari Docs Feedback",
+		"Run: run_123",
+		"Completed: 2026-05-21T10:30:00Z",
+		"## Task 1\n\nInstall the SDK",
+		"### claude-sonnet-4-6 Feedback\n\nsdk feedback",
+		"## Task 2\n\nConfigure webhooks",
+		"### gpt-5.1 Feedback\n\nwebhook feedback",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("aggregate feedback missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestAuthTokenListSerializesEmptyTokensAsArray(t *testing.T) {
 	body, err := json.Marshal(authTokenListResponse{Tokens: []authTokenResponse{}})
 	if err != nil {

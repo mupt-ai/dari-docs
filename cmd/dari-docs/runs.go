@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -230,101 +229,13 @@ func runRunsApply(ctx context.Context, runID string, repo string, outDir string)
 }
 
 func managedRunFeedbackMarkdown(status managed.RunStatus) (string, error) {
-	if len(status.FeedbackReports) == 0 {
-		if strings.TrimSpace(status.AggregateFeedback) != "" {
-			return ensureTrailingNewline(status.AggregateFeedback), nil
-		}
-		if !isTerminalManagedRunStatus(status.Status) {
-			return "", fmt.Errorf("managed run %s is %s; feedback is available after the run finishes", status.ID, status.Status)
-		}
-		return "", fmt.Errorf("no feedback available for managed run %s", status.ID)
+	if strings.TrimSpace(status.AggregateFeedback) != "" {
+		return ensureTrailingNewline(status.AggregateFeedback), nil
 	}
-
-	// FeedbackReports is positional with completed tester sessions in API order.
-	// Pair first, then group for rendering; do not sort sessions before matching.
-	completedSessions := completedTesterSessions(status)
-	var sb strings.Builder
-	sb.WriteString("# Dari Docs Feedback\n\n")
-	sb.WriteString("Run: " + status.ID + "\n")
-	if status.Status != "" {
-		sb.WriteString("Status: " + status.Status + "\n")
+	if !isTerminalManagedRunStatus(status.Status) {
+		return "", fmt.Errorf("managed run %s is %s; feedback is available after the run finishes", status.ID, status.Status)
 	}
-	if status.Mode != "" {
-		sb.WriteString("Type: " + status.Mode + "\n")
-	}
-	if status.CompletedAt != nil {
-		sb.WriteString("Completed: " + formatCLITime(*status.CompletedAt) + "\n")
-	}
-	sb.WriteString("\n")
-
-	entriesByTask := map[int][]managedFeedbackEntry{}
-	var taskIndices []int
-	var unlabelledEntries []managedFeedbackEntry
-	for i, report := range status.FeedbackReports {
-		report = strings.TrimSpace(report)
-		if report == "" {
-			continue
-		}
-		if i >= len(completedSessions) {
-			unlabelledEntries = append(unlabelledEntries, managedFeedbackEntry{report: report, feedbackIndex: i + 1})
-			continue
-		}
-
-		session := completedSessions[i]
-		taskIndex := session.TaskIndex
-		if taskIndex <= 0 {
-			taskIndex = 1
-		}
-		if _, ok := entriesByTask[taskIndex]; !ok {
-			taskIndices = append(taskIndices, taskIndex)
-		}
-		label := strings.TrimSpace(session.LLMID)
-		if label == "" {
-			label = "default"
-		}
-		entriesByTask[taskIndex] = append(entriesByTask[taskIndex], managedFeedbackEntry{
-			llmID:         label,
-			report:        report,
-			feedbackIndex: i + 1,
-		})
-	}
-
-	sort.Ints(taskIndices)
-	var sections []string
-	for _, taskIndex := range taskIndices {
-		var section strings.Builder
-		section.WriteString(fmt.Sprintf("## Task %d\n\n", taskIndex))
-		if taskIndex <= len(status.Tasks) && strings.TrimSpace(status.Tasks[taskIndex-1]) != "" {
-			section.WriteString(strings.TrimSpace(status.Tasks[taskIndex-1]) + "\n\n")
-		}
-		for _, entry := range entriesByTask[taskIndex] {
-			section.WriteString(fmt.Sprintf("### %s Feedback\n\n", entry.llmID))
-			section.WriteString(entry.report + "\n\n")
-		}
-		sections = append(sections, strings.TrimRight(section.String(), "\n"))
-	}
-	for _, entry := range unlabelledEntries {
-		sections = append(sections, fmt.Sprintf("## Feedback %03d\n\n%s", entry.feedbackIndex, entry.report))
-	}
-	sb.WriteString(strings.Join(sections, "\n\n"))
-	sb.WriteString("\n")
-	return ensureTrailingNewline(sb.String()), nil
-}
-
-type managedFeedbackEntry struct {
-	llmID         string
-	report        string
-	feedbackIndex int
-}
-
-func completedTesterSessions(status managed.RunStatus) []managed.RunSessionSummary {
-	out := make([]managed.RunSessionSummary, 0, len(status.Sessions))
-	for _, session := range status.Sessions {
-		if session.Kind == "tester" && session.Status == "completed" {
-			out = append(out, session)
-		}
-	}
-	return out
+	return "", fmt.Errorf("no feedback available for managed run %s", status.ID)
 }
 
 func ensureTrailingNewline(s string) string {
@@ -391,7 +302,7 @@ func printManagedRunStatus(status managed.RunStatus) {
 		fmt.Printf("Error: %s\n", status.Error)
 	}
 	if isTerminalManagedRunStatus(status.Status) {
-		if len(status.FeedbackReports) > 0 || status.AggregateFeedback != "" {
+		if len(status.FeedbackResults) > 0 || len(status.FeedbackReports) > 0 || status.AggregateFeedback != "" {
 			fmt.Println("Feedback: available")
 		}
 		if status.UpdatedDocsAvailable {
