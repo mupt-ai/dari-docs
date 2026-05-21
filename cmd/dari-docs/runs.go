@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -239,6 +240,8 @@ func managedRunFeedbackMarkdown(status managed.RunStatus) (string, error) {
 		return "", fmt.Errorf("no feedback available for managed run %s", status.ID)
 	}
 
+	// FeedbackReports is positional with completed tester sessions in API order.
+	// Pair first, then group for rendering; do not sort sessions before matching.
 	completedSessions := completedTesterSessions(status)
 	var sb strings.Builder
 	sb.WriteString("# Dari Docs Feedback\n\n")
@@ -254,43 +257,64 @@ func managedRunFeedbackMarkdown(status managed.RunStatus) (string, error) {
 	}
 	sb.WriteString("\n")
 
-	lastTaskIndex := 0
+	entriesByTask := map[int][]managedFeedbackEntry{}
+	var taskIndices []int
+	var unlabelledEntries []managedFeedbackEntry
 	for i, report := range status.FeedbackReports {
 		report = strings.TrimSpace(report)
 		if report == "" {
 			continue
 		}
-		if i < len(completedSessions) {
-			session := completedSessions[i]
-			taskIndex := session.TaskIndex
-			if taskIndex <= 0 {
-				taskIndex = 1
-			}
-			if taskIndex != lastTaskIndex {
-				if lastTaskIndex != 0 {
-					sb.WriteString("\n")
-				}
-				sb.WriteString(fmt.Sprintf("## Task %d\n\n", taskIndex))
-				if taskIndex <= len(status.Tasks) && strings.TrimSpace(status.Tasks[taskIndex-1]) != "" {
-					sb.WriteString(strings.TrimSpace(status.Tasks[taskIndex-1]) + "\n\n")
-				}
-				lastTaskIndex = taskIndex
-			}
-			label := strings.TrimSpace(session.LLMID)
-			if label == "" {
-				label = "default"
-			}
-			sb.WriteString(fmt.Sprintf("### %s Feedback\n\n", label))
-			sb.WriteString(report + "\n\n")
+		if i >= len(completedSessions) {
+			unlabelledEntries = append(unlabelledEntries, managedFeedbackEntry{report: report, feedbackIndex: i + 1})
 			continue
 		}
-		if lastTaskIndex != 0 {
-			sb.WriteString("\n")
+
+		session := completedSessions[i]
+		taskIndex := session.TaskIndex
+		if taskIndex <= 0 {
+			taskIndex = 1
 		}
-		sb.WriteString(fmt.Sprintf("## Feedback %03d\n\n%s\n", i+1, report))
-		lastTaskIndex = 0
+		if _, ok := entriesByTask[taskIndex]; !ok {
+			taskIndices = append(taskIndices, taskIndex)
+		}
+		label := strings.TrimSpace(session.LLMID)
+		if label == "" {
+			label = "default"
+		}
+		entriesByTask[taskIndex] = append(entriesByTask[taskIndex], managedFeedbackEntry{
+			llmID:         label,
+			report:        report,
+			feedbackIndex: i + 1,
+		})
 	}
+
+	sort.Ints(taskIndices)
+	var sections []string
+	for _, taskIndex := range taskIndices {
+		var section strings.Builder
+		section.WriteString(fmt.Sprintf("## Task %d\n\n", taskIndex))
+		if taskIndex <= len(status.Tasks) && strings.TrimSpace(status.Tasks[taskIndex-1]) != "" {
+			section.WriteString(strings.TrimSpace(status.Tasks[taskIndex-1]) + "\n\n")
+		}
+		for _, entry := range entriesByTask[taskIndex] {
+			section.WriteString(fmt.Sprintf("### %s Feedback\n\n", entry.llmID))
+			section.WriteString(entry.report + "\n\n")
+		}
+		sections = append(sections, strings.TrimRight(section.String(), "\n"))
+	}
+	for _, entry := range unlabelledEntries {
+		sections = append(sections, fmt.Sprintf("## Feedback %03d\n\n%s", entry.feedbackIndex, entry.report))
+	}
+	sb.WriteString(strings.Join(sections, "\n\n"))
+	sb.WriteString("\n")
 	return ensureTrailingNewline(sb.String()), nil
+}
+
+type managedFeedbackEntry struct {
+	llmID         string
+	report        string
+	feedbackIndex int
 }
 
 func completedTesterSessions(status managed.RunStatus) []managed.RunSessionSummary {

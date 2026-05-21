@@ -180,6 +180,40 @@ func TestManagedRunFeedbackMarkdownLabelsTasksAndLLMs(t *testing.T) {
 	}
 }
 
+func TestManagedRunFeedbackMarkdownGroupsInterleavedTaskSessions(t *testing.T) {
+	status := managed.RunStatus{
+		ID:              "run_interleaved",
+		Mode:            "check",
+		Status:          "completed",
+		Tasks:           []string{"Task one", "Task two"},
+		FeedbackReports: []string{"task one a", "task two", "task one c"},
+		Sessions: []managed.RunSessionSummary{
+			{Kind: "tester", TaskIndex: 1, Status: "completed", LLMID: "llm-a"},
+			{Kind: "tester", TaskIndex: 2, Status: "completed", LLMID: "llm-b"},
+			{Kind: "tester", TaskIndex: 1, Status: "completed", LLMID: "llm-c"},
+		},
+	}
+	got, err := managedRunFeedbackMarkdown(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(got, "## Task 1"); count != 1 {
+		t.Fatalf("Task 1 heading count = %d, want 1:\n%s", count, got)
+	}
+	if count := strings.Count(got, "## Task 2"); count != 1 {
+		t.Fatalf("Task 2 heading count = %d, want 1:\n%s", count, got)
+	}
+	for _, want := range []string{
+		"### llm-a Feedback\n\ntask one a",
+		"### llm-c Feedback\n\ntask one c",
+		"### llm-b Feedback\n\ntask two",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("feedback markdown missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestDownloadManagedRunArtifactsForCheckWritesFeedback(t *testing.T) {
 	outDir := t.TempDir()
 	client := managed.New("http://127.0.0.1:1", "token")
