@@ -175,7 +175,7 @@ func runRunsFeedback(ctx context.Context, out io.Writer, runID string) error {
 	if err != nil {
 		return err
 	}
-	feedback, err := managedRunFeedbackMarkdown(status)
+	feedback, err := managedRunFeedbackOutput(status)
 	if err != nil {
 		return err
 	}
@@ -228,21 +228,18 @@ func runRunsApply(ctx context.Context, runID string, repo string, outDir string)
 	return nil
 }
 
-func managedRunFeedbackMarkdown(status managed.RunStatus) (string, error) {
-	if strings.TrimSpace(status.AggregateFeedback) != "" {
-		return ensureTrailingNewline(status.AggregateFeedback), nil
-	}
+func managedRunFeedbackOutput(status managed.RunStatus) (string, error) {
 	if !isTerminalManagedRunStatus(status.Status) {
 		return "", fmt.Errorf("managed run %s is %s; feedback is available after the run finishes", status.ID, status.Status)
 	}
-	return "", fmt.Errorf("no feedback available for managed run %s", status.ID)
-}
-
-func ensureTrailingNewline(s string) string {
-	if strings.HasSuffix(s, "\n") {
-		return s
+	if len(status.FeedbackResults) == 0 && len(status.FeedbackReports) == 0 && strings.TrimSpace(status.AggregateFeedback) == "" {
+		return "", fmt.Errorf("no feedback available for managed run %s", status.ID)
 	}
-	return s + "\n"
+	feedback := managedRunFeedbackMarkdown(status)
+	if strings.HasSuffix(feedback, "\n") {
+		return feedback, nil
+	}
+	return feedback + "\n", nil
 }
 
 func resolveRunArtifactPaths(repo string, outDir string) (string, string, error) {

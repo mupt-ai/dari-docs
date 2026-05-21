@@ -147,14 +147,14 @@ func TestExpandFeedbackLLMListSupportsGroups(t *testing.T) {
 	}
 }
 
-func TestManagedRunFeedbackMarkdownPrintsCanonicalAggregate(t *testing.T) {
+func TestManagedRunFeedbackOutputPrintsCanonicalAggregate(t *testing.T) {
 	status := managed.RunStatus{
 		ID:                "run_123",
 		Mode:              "check",
 		Status:            "completed",
 		AggregateFeedback: "# Dari Docs Feedback\n\n## Task 1\n\nfeedback",
 	}
-	got, err := managedRunFeedbackMarkdown(status)
+	got, err := managedRunFeedbackOutput(status)
 	if err != nil {
 		t.Fatal(err)
 	}
