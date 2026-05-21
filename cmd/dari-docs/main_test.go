@@ -156,7 +156,7 @@ func TestManagedRunFeedbackMarkdownLabelsTasksAndLLMs(t *testing.T) {
 		Status:          "completed",
 		Tasks:           []string{"Install the SDK", "Configure webhooks"},
 		CompletedAt:     &completedAt,
-		FeedbackReports: []string{"sdk feedback", "webhook feedback"},
+		FeedbackReports: []string{"webhook feedback", "sdk feedback"},
 		Sessions: []managed.RunSessionSummary{
 			{Kind: "tester", TaskIndex: 2, Status: "completed", LLMID: "gpt-5.1", CreatedAt: createdAt.Add(time.Minute)},
 			{Kind: "tester", TaskIndex: 1, Status: "completed", LLMID: "claude-sonnet-4-6", CreatedAt: createdAt},
@@ -169,10 +169,10 @@ func TestManagedRunFeedbackMarkdownLabelsTasksAndLLMs(t *testing.T) {
 	for _, want := range []string{
 		"# Dari Docs Feedback",
 		"Run: run_123",
-		"## Task 1\n\nInstall the SDK",
-		"### claude-sonnet-4-6 Feedback\n\nsdk feedback",
 		"## Task 2\n\nConfigure webhooks",
 		"### gpt-5.1 Feedback\n\nwebhook feedback",
+		"## Task 1\n\nInstall the SDK",
+		"### claude-sonnet-4-6 Feedback\n\nsdk feedback",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("feedback markdown missing %q:\n%s", want, got)

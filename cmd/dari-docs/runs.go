@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -301,15 +300,6 @@ func completedTesterSessions(status managed.RunStatus) []managed.RunSessionSumma
 			out = append(out, session)
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].TaskIndex != out[j].TaskIndex {
-			return out[i].TaskIndex < out[j].TaskIndex
-		}
-		if out[i].LLMID != out[j].LLMID {
-			return out[i].LLMID < out[j].LLMID
-		}
-		return out[i].CreatedAt.Before(out[j].CreatedAt)
-	})
 	return out
 }
 
