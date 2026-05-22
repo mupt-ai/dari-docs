@@ -25,6 +25,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mupt-ai/dari-docs/internal/bundle"
+	"github.com/mupt-ai/dari-docs/internal/runner"
 	stripe "github.com/stripe/stripe-go/v82"
 )
 
@@ -393,23 +394,6 @@ func TestStripeCheckoutIntentMigrationAddsDurableLookupColumns(t *testing.T) {
 	}
 }
 
-func TestRuntimeSecretNamesFromJSON(t *testing.T) {
-	names, err := runtimeSecretNamesFromJSON(`{"STRIPE_TEST_KEY":"sk_test","GITHUB_TOKEN":"ghp_test"}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := strings.Join(names, ",")
-	if got != "GITHUB_TOKEN,STRIPE_TEST_KEY" {
-		t.Fatalf("names = %s", got)
-	}
-	if _, err := runtimeSecretNamesFromJSON(`[]`); err == nil {
-		t.Fatal("expected non-object JSON to fail")
-	}
-	if _, err := runtimeSecretNamesFromJSON(`{"EMPTY":""}`); err == nil {
-		t.Fatal("expected empty secret value to fail")
-	}
-}
-
 func TestIsFinalSecretBearingSession(t *testing.T) {
 	tests := []struct {
 		name string
@@ -448,6 +432,37 @@ func TestIsFinalSecretBearingSession(t *testing.T) {
 				t.Fatalf("isFinalSecretBearingSession() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestTesterBatchRequestAttachesRuntimeSecretsDirectly(t *testing.T) {
+	secrets := map[string]string{"STRIPE_TEST_SECRET_KEY": "sk_test_123"}
+	req := testerBatchRequest(
+		queuedRun{
+			ID:            "run_test",
+			TesterAgentID: "agt_tester",
+			BundleSHA256:  "sha",
+			BundleFileID:  "file_123",
+			BundleFiles:   1,
+			LiveVerify:    true,
+			SecretNames:   []string{"STRIPE_TEST_SECRET_KEY"},
+		},
+		[]testerBatchItem{{taskIndex: 0, task: "do task", llmID: "llm-a"}},
+		bundle.Result{SHA256: "sha", Manifest: bundle.Manifest{Files: []bundle.FileRecord{{Path: "README.md"}}}},
+		secrets,
+	)
+	if len(req.Items) != 1 {
+		t.Fatalf("items = %d, want 1", len(req.Items))
+	}
+	if got := req.Items[0].Secrets["STRIPE_TEST_SECRET_KEY"]; got != "sk_test_123" {
+		t.Fatalf("secret = %q, want direct value", got)
+	}
+	if _, ok := req.Items[0].Secrets["DARI_DOCS_RUNTIME_SECRETS_JSON"]; ok {
+		t.Fatalf("legacy JSON secret was attached: %#v", req.Items[0].Secrets)
+	}
+	prompt := req.Items[0].Message.Content[0]["text"].(string)
+	if !strings.Contains(prompt, "Available secret names: STRIPE_TEST_SECRET_KEY.") {
+		t.Fatalf("prompt does not list direct secret name:\n%s", prompt)
 	}
 }
 
@@ -1589,27 +1604,17 @@ func TestRunStatusResponseSerializesEmptyLLMsAndSessionsAsArrays(t *testing.T) {
 	}
 }
 
-func TestManagedRunAggregateFeedbackMarkdownUsesTypedResults(t *testing.T) {
-	completedAt := time.Date(2026, 5, 21, 10, 30, 0, 0, time.UTC)
-	status := runStatusResponse{
-		ID:          "run_123",
-		Mode:        "check",
-		Status:      statusCompleted,
-		Tasks:       []string{"Install the SDK", "Configure webhooks"},
-		CompletedAt: &completedAt,
-	}
-	got := managedRunAggregateFeedbackMarkdown(status, []runFeedbackResult{
+func TestRunnerFeedbackResultsPreserveTypedMetadata(t *testing.T) {
+	got := runner.AggregateFeedbackByTask(runnerFeedbackResults([]runFeedbackResult{
 		{SessionID: "sess_1", TaskIndex: 1, LLMID: "claude-sonnet-4-6", Report: "sdk feedback"},
 		{SessionID: "sess_2", TaskIndex: 2, LLMID: "gpt-5.1", Report: "webhook feedback"},
-	})
+	}, []string{"Install the SDK", "Configure webhooks"}))
 	for _, want := range []string{
-		"# Dari Docs Feedback",
-		"Run: run_123",
-		"Completed: 2026-05-21T10:30:00Z",
+		"# Dari docs aggregate feedback",
 		"## Task 1\n\nInstall the SDK",
-		"### claude-sonnet-4-6 Feedback\n\nsdk feedback",
+		"### Tester LLM: claude-sonnet-4-6\n\nsdk feedback",
 		"## Task 2\n\nConfigure webhooks",
-		"### gpt-5.1 Feedback\n\nwebhook feedback",
+		"### Tester LLM: gpt-5.1\n\nwebhook feedback",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("aggregate feedback missing %q:\n%s", want, got)

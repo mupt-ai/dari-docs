@@ -228,26 +228,7 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun, items []te
 			return s.failStartedRun(ctx, run, persistedErrRuntimeSecretsLoadFailed, fmt.Errorf("load runtime secrets: %w", err))
 		}
 	}
-	batchReq := dari.CreateSessionBatchRequest{
-		IdempotencyKey: testerBatchIdempotencyKey(run, items),
-		Items:          make([]dari.CreateSessionBatchItem, 0, len(items)),
-	}
-	for _, item := range items {
-		metadata := map[string]string{
-			"managed_run_id": run.ID,
-			"kind":           "tester",
-			"task_index":     fmt.Sprintf("%d", item.taskIndex+1),
-			"llm_id":         item.llmID,
-		}
-		prompt := runner.FeedbackPromptForSource(item.task, b, run.PublicDocURLs, run.LiveVerify, secretNameMap(run.SecretNames))
-		batchReq.Items = append(batchReq.Items, dari.CreateSessionBatchItem{
-			AgentID:  run.TesterAgentID,
-			LLMID:    item.llmID,
-			Metadata: metadata,
-			Secrets:  secrets,
-			Message:  dari.CreateSessionBatchMessage{Content: managedSessionContent(prompt, run.BundleFileID)},
-		})
-	}
+	batchReq := testerBatchRequest(run, items, b, secrets)
 	batch, err := s.dari.CreateSessionBatch(ctx, batchReq)
 	if err != nil {
 		return s.failStartedRun(ctx, run, persistedErrSessionCreateFailed, fmt.Errorf("create tester session batch: %w", err))
@@ -282,6 +263,35 @@ func (s *Server) startTesterBatch(ctx context.Context, run queuedRun, items []te
 		s.clearRuntimeSecrets(ctx, run.ID)
 	}
 	return store.MarkRunRunningFromStarting(ctx, run.ID)
+}
+
+func testerBatchRequest(
+	run queuedRun,
+	items []testerBatchItem,
+	b bundle.Result,
+	secrets map[string]string,
+) dari.CreateSessionBatchRequest {
+	batchReq := dari.CreateSessionBatchRequest{
+		IdempotencyKey: testerBatchIdempotencyKey(run, items),
+		Items:          make([]dari.CreateSessionBatchItem, 0, len(items)),
+	}
+	for _, item := range items {
+		metadata := map[string]string{
+			"managed_run_id": run.ID,
+			"kind":           "tester",
+			"task_index":     fmt.Sprintf("%d", item.taskIndex+1),
+			"llm_id":         item.llmID,
+		}
+		prompt := runner.FeedbackPromptForSource(item.task, b, run.PublicDocURLs, run.LiveVerify, secretNameMap(run.SecretNames))
+		batchReq.Items = append(batchReq.Items, dari.CreateSessionBatchItem{
+			AgentID:  run.TesterAgentID,
+			LLMID:    item.llmID,
+			Metadata: metadata,
+			Secrets:  secrets,
+			Message:  dari.CreateSessionBatchMessage{Content: managedSessionContent(prompt, run.BundleFileID)},
+		})
+	}
+	return batchReq
 }
 
 func testerBatchIdempotencyKey(run queuedRun, items []testerBatchItem) string {

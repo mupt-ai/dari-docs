@@ -23,6 +23,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/mupt-ai/dari-docs/internal/bundle"
 	"github.com/mupt-ai/dari-docs/internal/publicdocs"
+	"github.com/mupt-ai/dari-docs/internal/runner"
+	"github.com/mupt-ai/dari-docs/internal/runtimeenv"
 )
 
 var (
@@ -176,12 +178,13 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, u user) {
 				writeError(w, http.StatusBadRequest, "runtime_secrets_json field is too large")
 				return
 			}
-			runtimeSecretJSON = v
-			runtimeSecretNames, err = runtimeSecretNamesFromJSON(v)
+			secrets, names, err := runtimeenv.ParseJSON(v)
 			if err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
+			runtimeSecretNames = names
+			runtimeSecretJSON = string(mustJSON(secrets))
 		case "feedback_llm_ids_json":
 			v, err := readTextPart(part, 1024)
 			if err != nil {
@@ -1386,7 +1389,7 @@ FROM runs WHERE id=$1 AND user_id=$2
 		for _, result := range feedbackResults {
 			rs.FeedbackReports = append(rs.FeedbackReports, result.Report)
 		}
-		rs.AggregateFeedback = managedRunAggregateFeedbackMarkdown(rs, feedbackResults)
+		rs.AggregateFeedback = runner.AggregateFeedbackByTask(runnerFeedbackResults(feedbackResults, rs.Tasks))
 	}
 	return rs, nil
 }

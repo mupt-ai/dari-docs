@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/mupt-ai/dari-docs/internal/runtimeenv"
 )
 
 const (
@@ -292,7 +294,11 @@ func (c *Client) CreateRun(ctx context.Context, mode string, tasks []string, bun
 		}
 	}
 	if len(opts.RuntimeSecrets) > 0 {
-		secretJSON, err := json.Marshal(opts.RuntimeSecrets)
+		secrets, _, err := runtimeenv.NormalizeMap(opts.RuntimeSecrets)
+		if err != nil {
+			return CreateRunResponse{}, err
+		}
+		secretJSON, err := json.Marshal(secrets)
 		if err != nil {
 			return CreateRunResponse{}, err
 		}

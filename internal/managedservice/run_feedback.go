@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/mupt-ai/dari-docs/internal/dari"
+	"github.com/mupt-ai/dari-docs/internal/runner"
 )
 
 type runFeedbackResult struct {
@@ -51,48 +51,22 @@ ORDER BY task_index, llm_id, created_at
 	return results, nil
 }
 
-func managedRunAggregateFeedbackMarkdown(status runStatusResponse, results []runFeedbackResult) string {
-	var body strings.Builder
-	currentTaskIndex := 0
+func runnerFeedbackResults(results []runFeedbackResult, tasks []string) []runner.FeedbackResult {
+	out := make([]runner.FeedbackResult, 0, len(results))
 	for _, result := range results {
-		report := strings.TrimSpace(result.Report)
-		if report == "" {
-			continue
-		}
-		taskIndex := result.TaskIndex
-		if taskIndex <= 0 {
-			taskIndex = 1
-		}
-		if taskIndex != currentTaskIndex {
-			if body.Len() > 0 {
-				body.WriteString("\n")
-			}
-			body.WriteString(fmt.Sprintf("## Task %d\n\n", taskIndex))
-			if taskIndex <= len(status.Tasks) && strings.TrimSpace(status.Tasks[taskIndex-1]) != "" {
-				body.WriteString(strings.TrimSpace(status.Tasks[taskIndex-1]) + "\n\n")
-			}
-			currentTaskIndex = taskIndex
-		}
-		llmID := strings.TrimSpace(result.LLMID)
-		if llmID == "" {
-			llmID = "default"
-		}
-		body.WriteString(fmt.Sprintf("### %s Feedback\n\n%s\n\n", llmID, report))
+		out = append(out, runner.FeedbackResult{
+			TaskIndex: result.TaskIndex,
+			Task:      taskLabel(tasks, result.TaskIndex),
+			LLMID:     result.LLMID,
+			Report:    result.Report,
+		})
 	}
-	if body.Len() == 0 {
-		return ""
-	}
+	return out
+}
 
-	var out strings.Builder
-	out.WriteString("# Dari Docs Feedback\n\n")
-	out.WriteString("Run: " + status.ID + "\n")
-	out.WriteString("Status: " + status.Status + "\n")
-	out.WriteString("Type: " + status.Mode + "\n")
-	if status.CompletedAt != nil {
-		out.WriteString("Completed: " + status.CompletedAt.UTC().Format(time.RFC3339) + "\n")
+func taskLabel(tasks []string, taskIndex int) string {
+	if taskIndex > 0 && taskIndex <= len(tasks) {
+		return strings.TrimSpace(tasks[taskIndex-1])
 	}
-	out.WriteString("\n")
-	out.WriteString(strings.TrimRight(body.String(), "\n"))
-	out.WriteString("\n")
-	return out.String()
+	return ""
 }

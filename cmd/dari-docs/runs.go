@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mupt-ai/dari-docs/internal/managed"
+	"github.com/mupt-ai/dari-docs/internal/runner"
 	"github.com/spf13/cobra"
 )
 
@@ -235,7 +236,10 @@ func managedRunFeedbackOutput(status managed.RunStatus) (string, error) {
 	if len(status.FeedbackResults) == 0 && len(status.FeedbackReports) == 0 && strings.TrimSpace(status.AggregateFeedback) == "" {
 		return "", fmt.Errorf("no feedback available for managed run %s", status.ID)
 	}
-	feedback := managedRunFeedbackMarkdown(status)
+	feedback := status.AggregateFeedback
+	if feedback == "" {
+		feedback = runner.AggregateFeedback(status.FeedbackReports)
+	}
 	if strings.HasSuffix(feedback, "\n") {
 		return feedback, nil
 	}
