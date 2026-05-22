@@ -51,6 +51,13 @@ ORDER BY task_index, llm_id, created_at
 	return results, nil
 }
 
+func managedAggregateFeedback(results []runFeedbackResult, tasks []string) string {
+	if len(results) == 0 {
+		return ""
+	}
+	return runner.AggregateFeedbackByTask(runnerFeedbackResults(results, tasks))
+}
+
 func runnerFeedbackResults(results []runFeedbackResult, tasks []string) []runner.FeedbackResult {
 	out := make([]runner.FeedbackResult, 0, len(results))
 	for _, result := range results {

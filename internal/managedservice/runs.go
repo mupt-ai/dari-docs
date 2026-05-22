@@ -23,7 +23,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/mupt-ai/dari-docs/internal/bundle"
 	"github.com/mupt-ai/dari-docs/internal/publicdocs"
-	"github.com/mupt-ai/dari-docs/internal/runner"
 	"github.com/mupt-ai/dari-docs/internal/runtimeenv"
 )
 
@@ -1389,7 +1388,7 @@ FROM runs WHERE id=$1 AND user_id=$2
 		for _, result := range feedbackResults {
 			rs.FeedbackReports = append(rs.FeedbackReports, result.Report)
 		}
-		rs.AggregateFeedback = runner.AggregateFeedbackByTask(runnerFeedbackResults(feedbackResults, rs.Tasks))
+		rs.AggregateFeedback = managedAggregateFeedback(feedbackResults, rs.Tasks)
 	}
 	return rs, nil
 }

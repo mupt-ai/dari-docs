@@ -1604,6 +1604,12 @@ func TestRunStatusResponseSerializesEmptyLLMsAndSessionsAsArrays(t *testing.T) {
 	}
 }
 
+func TestManagedAggregateFeedbackReturnsEmptyWithoutResults(t *testing.T) {
+	if got := managedAggregateFeedback(nil, []string{"Install the SDK"}); got != "" {
+		t.Fatalf("aggregate feedback = %q, want empty", got)
+	}
+}
+
 func TestRunnerFeedbackResultsPreserveTypedMetadata(t *testing.T) {
 	got := runner.AggregateFeedbackByTask(runnerFeedbackResults([]runFeedbackResult{
 		{SessionID: "sess_1", TaskIndex: 1, LLMID: "claude-sonnet-4-6", Report: "sdk feedback"},
