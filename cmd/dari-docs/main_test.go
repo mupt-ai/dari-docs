@@ -147,6 +147,23 @@ func TestExpandFeedbackLLMListSupportsGroups(t *testing.T) {
 	}
 }
 
+func TestManagedRunFeedbackOutputPrintsCanonicalAggregate(t *testing.T) {
+	status := managed.RunStatus{
+		ID:                "run_123",
+		Mode:              "check",
+		Status:            "completed",
+		AggregateFeedback: "# Dari Docs Feedback\n\n## Task 1\n\nfeedback",
+	}
+	got, err := managedRunFeedbackOutput(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# Dari Docs Feedback\n\n## Task 1\n\nfeedback\n"
+	if got != want {
+		t.Fatalf("feedback markdown = %q, want %q", got, want)
+	}
+}
+
 func TestDownloadManagedRunArtifactsForCheckWritesFeedback(t *testing.T) {
 	outDir := t.TempDir()
 	client := managed.New("http://127.0.0.1:1", "token")

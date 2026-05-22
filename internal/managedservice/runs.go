@@ -22,9 +22,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/mupt-ai/dari-docs/internal/bundle"
-	"github.com/mupt-ai/dari-docs/internal/dari"
 	"github.com/mupt-ai/dari-docs/internal/publicdocs"
-	"github.com/mupt-ai/dari-docs/internal/runner"
 	"github.com/mupt-ai/dari-docs/internal/runtimeenv"
 )
 
@@ -1338,6 +1336,7 @@ type runStatusResponse struct {
 	CompletedAt          *time.Time          `json:"completed_at,omitempty"`
 	LLMs                 []runLLMSummary     `json:"llms"`
 	Sessions             []runSessionSummary `json:"sessions"`
+	FeedbackResults      []runFeedbackResult `json:"feedback_results,omitempty"`
 	FeedbackReports      []string            `json:"feedback_reports,omitempty"`
 	AggregateFeedback    string              `json:"aggregate_feedback,omitempty"`
 	UpdatedDocsAvailable bool                `json:"updated_docs_available"`
@@ -1380,17 +1379,16 @@ FROM runs WHERE id=$1 AND user_id=$2
 		rs.Sessions = []runSessionSummary{}
 	}
 	if rs.Status == statusCompleted || rs.Status == statusFailed {
-		results, err := s.completedTesterResults(ctx, runID, rs.Tasks)
+		feedbackResults, err := s.completedTesterFeedbackResults(ctx, runID)
 		if err != nil {
 			return rs, err
 		}
-		rs.FeedbackReports = make([]string, 0, len(results))
-		for _, result := range results {
+		rs.FeedbackResults = feedbackResults
+		rs.FeedbackReports = make([]string, 0, len(feedbackResults))
+		for _, result := range feedbackResults {
 			rs.FeedbackReports = append(rs.FeedbackReports, result.Report)
 		}
-		if len(results) > 0 {
-			rs.AggregateFeedback = runner.AggregateFeedbackByTask(results)
-		}
+		rs.AggregateFeedback = managedAggregateFeedback(feedbackResults, rs.Tasks)
 	}
 	return rs, nil
 }
@@ -1431,58 +1429,6 @@ ORDER BY CASE rs.kind WHEN 'tester' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END, rs.t
 		sessions = append(sessions, session)
 	}
 	return sessions, rows.Err()
-}
-
-func (s *Server) completedTesterResults(ctx context.Context, runID string, tasks []string) ([]runner.FeedbackResult, error) {
-	rows, err := s.db.Query(ctx, `
-SELECT session_id,
-       task_index,
-       coalesce(nullif(llm_id,''), $3)
-FROM run_sessions
-WHERE run_id=$1 AND kind='tester' AND status=$2
-ORDER BY task_index, llm_id, created_at
-`, runID, statusCompleted, defaultManagedEditorLLMID())
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	type testerSession struct {
-		id        string
-		taskIndex int
-		llmID     string
-	}
-	sessions := []testerSession{}
-	for rows.Next() {
-		var session testerSession
-		if err := rows.Scan(&session.id, &session.taskIndex, &session.llmID); err != nil {
-			return nil, err
-		}
-		sessions = append(sessions, session)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	results := make([]runner.FeedbackResult, 0, len(sessions))
-	for _, session := range sessions {
-		tr, err := s.dari.GetTranscript(ctx, session.id)
-		if err != nil {
-			return nil, fmt.Errorf("%w: get transcript %s: %v", errRunFeedbackLoad, session.id, err)
-		}
-		results = append(results, runner.FeedbackResult{
-			TaskIndex: session.taskIndex,
-			Task:      taskLabel(tasks, session.taskIndex),
-			LLMID:     session.llmID,
-			Report:    dari.FinalAssistantText(tr),
-		})
-	}
-	return results, nil
-}
-
-func taskLabel(tasks []string, taskIndex int) string {
-	if taskIndex > 0 && taskIndex <= len(tasks) {
-		return strings.TrimSpace(tasks[taskIndex-1])
-	}
-	return ""
 }
 
 func readUploadedFormFile(r *http.Request, name string, maxBytes int64) ([]byte, error) {

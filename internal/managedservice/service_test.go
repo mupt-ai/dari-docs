@@ -25,6 +25,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mupt-ai/dari-docs/internal/bundle"
+	"github.com/mupt-ai/dari-docs/internal/runner"
 	stripe "github.com/stripe/stripe-go/v82"
 )
 
@@ -1600,6 +1601,30 @@ func TestRunStatusResponseSerializesEmptyLLMsAndSessionsAsArrays(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `"sessions":[]`) {
 		t.Fatalf("body = %s, want empty sessions array", body)
+	}
+}
+
+func TestManagedAggregateFeedbackReturnsEmptyWithoutResults(t *testing.T) {
+	if got := managedAggregateFeedback(nil, []string{"Install the SDK"}); got != "" {
+		t.Fatalf("aggregate feedback = %q, want empty", got)
+	}
+}
+
+func TestRunnerFeedbackResultsPreserveTypedMetadata(t *testing.T) {
+	got := runner.AggregateFeedbackByTask(runnerFeedbackResults([]runFeedbackResult{
+		{SessionID: "sess_1", TaskIndex: 1, LLMID: "claude-sonnet-4-6", Report: "sdk feedback"},
+		{SessionID: "sess_2", TaskIndex: 2, LLMID: "gpt-5.1", Report: "webhook feedback"},
+	}, []string{"Install the SDK", "Configure webhooks"}))
+	for _, want := range []string{
+		"# Dari docs aggregate feedback",
+		"## Task 1\n\nInstall the SDK",
+		"### Tester LLM: claude-sonnet-4-6\n\nsdk feedback",
+		"## Task 2\n\nConfigure webhooks",
+		"### Tester LLM: gpt-5.1\n\nwebhook feedback",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("aggregate feedback missing %q:\n%s", want, got)
+		}
 	}
 }
 

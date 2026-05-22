@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ChevronDown, ChevronRight, Download, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, Download, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -13,6 +13,7 @@ import {
   type RunSessionTranscript,
   type RunStatus,
 } from "@/lib/runs";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { formatCents, formatDate, formatDuration, toTitleCase } from "@/lib/utils";
 import { StatusBadge } from "@/routes/Runs";
 
@@ -23,9 +24,13 @@ export default function RunDetail() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [copyFeedbackError, setCopyFeedbackError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const [copiedFeedback, setCopiedFeedback] = useState(false);
+  const copiedFeedbackTimerRef = useRef<number | null>(null);
   const [selectedTaskIndex, setSelectedTaskIndex] = useState(1);
   const [selectedResultKey, setSelectedResultKey] = useState("");
+  const feedbackMarkdown = run?.aggregate_feedback?.trim() ? run.aggregate_feedback : "";
 
   const refresh = useCallback(async (quiet = false) => {
     if (!runId) return;
@@ -53,6 +58,35 @@ export default function RunDetail() {
     }, 7000);
     return () => window.clearInterval(id);
   }, [refresh, run]);
+
+  const handleCopyAllFeedback = async () => {
+    if (!feedbackMarkdown) {
+      setCopyFeedbackError("No Feedback Available To Copy.");
+      return;
+    }
+    setCopyFeedbackError(null);
+    const didCopy = await copyTextToClipboard(feedbackMarkdown);
+    if (!didCopy) {
+      setCopyFeedbackError("Could Not Copy Feedback To Clipboard.");
+      return;
+    }
+    setCopiedFeedback(true);
+    if (copiedFeedbackTimerRef.current !== null) {
+      window.clearTimeout(copiedFeedbackTimerRef.current);
+    }
+    copiedFeedbackTimerRef.current = window.setTimeout(() => {
+      setCopiedFeedback(false);
+      copiedFeedbackTimerRef.current = null;
+    }, 1800);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (copiedFeedbackTimerRef.current !== null) {
+        window.clearTimeout(copiedFeedbackTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleDownload = async () => {
     if (!run) return;
@@ -98,6 +132,12 @@ export default function RunDetail() {
           <h1 className="mt-2 break-all text-xl font-medium">{runId}</h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {feedbackMarkdown && (
+            <Button type="button" variant="outline" size="sm" onClick={handleCopyAllFeedback}>
+              <Copy className="mr-1.5 h-3.5 w-3.5" />
+              {copiedFeedback ? "Copied" : "Copy All Feedback"}
+            </Button>
+          )}
           {run?.updated_docs_available && (
             <Button type="button" variant="outline" size="sm" onClick={handleDownload} disabled={downloading}>
               <Download className="mr-1.5 h-3.5 w-3.5" />
@@ -125,6 +165,11 @@ export default function RunDetail() {
       {downloadError && (
         <div className="mb-6 border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive-foreground">
           {downloadError}
+        </div>
+      )}
+      {copyFeedbackError && (
+        <div className="mb-6 border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive-foreground">
+          {copyFeedbackError}
         </div>
       )}
 
@@ -259,14 +304,11 @@ function plannedTesterLLMIDs(run: RunStatus): string[] {
 
 function completedFeedbackByKey(run: RunStatus): Map<string, string> {
   const out = new Map<string, string>();
-  const completedSessions = (run.sessions ?? [])
-    .filter((session) => session.kind === "tester" && session.status === "completed");
-  completedSessions.forEach((session, index) => {
-    const feedback = run.feedback_reports?.[index];
-    if (feedback) {
-      out.set(taskResultKey(session.task_index || 1, session.llm_id), feedback);
+  for (const feedback of run.feedback_results ?? []) {
+    if (feedback.report) {
+      out.set(taskResultKey(feedback.task_index || 1, feedback.llm_id), feedback.report);
     }
-  });
+  }
   return out;
 }
 

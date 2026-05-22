@@ -162,6 +162,7 @@ type RunStatus struct {
 	CompletedAt          *time.Time          `json:"completed_at,omitempty"`
 	LLMs                 []RunLLMSummary     `json:"llms"`
 	Sessions             []RunSessionSummary `json:"sessions"`
+	FeedbackResults      []RunFeedbackResult `json:"feedback_results,omitempty"`
 	FeedbackReports      []string            `json:"feedback_reports,omitempty"`
 	AggregateFeedback    string              `json:"aggregate_feedback,omitempty"`
 	UpdatedDocsAvailable bool                `json:"updated_docs_available"`
@@ -177,12 +178,20 @@ type RunLLMSummary struct {
 }
 
 type RunSessionSummary struct {
+	ID          string     `json:"id"`
 	Kind        string     `json:"kind"`
 	TaskIndex   int        `json:"task_index"`
 	Status      string     `json:"status"`
 	LLMID       string     `json:"llm_id"`
 	CreatedAt   time.Time  `json:"created_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
+}
+
+type RunFeedbackResult struct {
+	SessionID string `json:"session_id"`
+	TaskIndex int    `json:"task_index"`
+	LLMID     string `json:"llm_id"`
+	Report    string `json:"report"`
 }
 
 type RunConfig struct {

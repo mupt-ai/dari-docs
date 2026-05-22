@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/mupt-ai/dari-docs/internal/managed"
+	"github.com/mupt-ai/dari-docs/internal/runner"
 	"github.com/spf13/cobra"
 )
 
@@ -24,6 +26,7 @@ func newRunsCommand() *cobra.Command {
 	cmd.AddCommand(
 		newRunsStatusCommand(),
 		newRunsWaitCommand(),
+		newRunsFeedbackCommand(),
 		newRunsDownloadCommand(),
 		newRunsApplyCommand(),
 	)
@@ -63,6 +66,19 @@ func newRunsWaitCommand() *cobra.Command {
 	}
 	cmd.Flags().IntVar(&timeoutMinutes, "timeout-minutes", 30, "managed CLI wait timeout in minutes")
 	return cmd
+}
+
+func newRunsFeedbackCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:           "feedback <run-id>",
+		Short:         "Print run feedback",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runRunsFeedback(cmd.Context(), cmd.OutOrStdout(), args[0])
+		},
+	}
 }
 
 func newRunsDownloadCommand() *cobra.Command {
@@ -151,6 +167,23 @@ func runRunsWait(ctx context.Context, runID string, timeoutMinutes int) error {
 	return nil
 }
 
+func runRunsFeedback(ctx context.Context, out io.Writer, runID string) error {
+	client, err := managedClientWithToken()
+	if err != nil {
+		return err
+	}
+	status, err := client.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	feedback, err := managedRunFeedbackOutput(status)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprint(out, feedback)
+	return err
+}
+
 func runRunsDownload(ctx context.Context, runID string, repo string, outDir string) error {
 	repoRoot, outDir, err := resolveRunArtifactPaths(repo, outDir)
 	if err != nil {
@@ -194,6 +227,23 @@ func runRunsApply(ctx context.Context, runID string, repo string, outDir string)
 	}
 	fmt.Printf("Feedback: %s\n", filepath.Join(outDir, "aggregate-feedback.md"))
 	return nil
+}
+
+func managedRunFeedbackOutput(status managed.RunStatus) (string, error) {
+	if !isTerminalManagedRunStatus(status.Status) {
+		return "", fmt.Errorf("managed run %s is %s; feedback is available after the run finishes", status.ID, status.Status)
+	}
+	if len(status.FeedbackResults) == 0 && len(status.FeedbackReports) == 0 && strings.TrimSpace(status.AggregateFeedback) == "" {
+		return "", fmt.Errorf("no feedback available for managed run %s", status.ID)
+	}
+	feedback := status.AggregateFeedback
+	if feedback == "" {
+		feedback = runner.AggregateFeedback(status.FeedbackReports)
+	}
+	if strings.HasSuffix(feedback, "\n") {
+		return feedback, nil
+	}
+	return feedback + "\n", nil
 }
 
 func resolveRunArtifactPaths(repo string, outDir string) (string, string, error) {
@@ -253,7 +303,7 @@ func printManagedRunStatus(status managed.RunStatus) {
 		fmt.Printf("Error: %s\n", status.Error)
 	}
 	if isTerminalManagedRunStatus(status.Status) {
-		if len(status.FeedbackReports) > 0 || status.AggregateFeedback != "" {
+		if len(status.FeedbackResults) > 0 || len(status.FeedbackReports) > 0 || status.AggregateFeedback != "" {
 			fmt.Println("Feedback: available")
 		}
 		if status.UpdatedDocsAvailable {
