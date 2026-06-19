@@ -6,16 +6,9 @@
 .dari-docs/agents/
 ```
 
-These are regular dari.dev agent projects. A dari.dev agent is just a folder with prompts, skills, optional setup scripts, and a `dari.yml` manifest. The same agent folder can be inspected, edited, versioned, and reused outside `dari-docs`; deploying it to your dari.dev org gives it a hosted endpoint that can run many isolated sessions without you managing the runtime infrastructure.
+These are regular Flue-backed dari.dev agent projects. Each folder contains a small `dari.yml`, a `package.json`, a Flue agent entrypoint under `agents/`, prompts, and skills. The same agent folder can be inspected, edited, versioned, and reused outside `dari-docs`; deploying it to your dari.dev org gives it a hosted endpoint that can run many isolated sessions without you managing the runtime infrastructure.
 
-The bundled tester agent enables sandbox internet access by default so it can install packages, inspect public docs URLs, and try docs that call external services. You can turn this off in `.dari-docs/agents/docs-user-tester-agent/dari.yml` before deploying if you want tests to run without network access.
-
-For customized agents, network access is controlled in each agent's `dari.yml`:
-
-```yaml
-sandbox:
-  internet_access: true
-```
+The bundled agents use Flue's Node runtime and configure their model in `agents/<name>.ts`. The deploy manifest declares provider credentials under `sandbox.secrets`; by default that is `ANTHROPIC_API_KEY`. Store that credential in your Dari org before deploying, or pass `--anthropic-api-key-secret NAME` to use a different stored credential name.
 
 Managed mode uses the hosted Dari Docs tester and editor agents automatically and does not deploy customized agents into the managed service account.
 

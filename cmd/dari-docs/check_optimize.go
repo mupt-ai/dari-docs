@@ -98,9 +98,9 @@ func bindCheckOptimizeFlags(cmd *cobra.Command, opts *checkOptimizeOptions) {
 	flags.StringVar(&opts.APIBaseURL, "api-base-url", opts.APIBaseURL, "Dari API base URL (defaults to production)")
 	flags.StringVar(&opts.FeedbackAgent, "feedback-agent", "", "Dari docs user-test agent ID (defaults to .dari-docs/config.json)")
 	flags.StringVar(&opts.EditorAgent, "editor-agent", "", "Dari docs editor agent ID (defaults to .dari-docs/config.json)")
-	flags.StringVar(&opts.LLMID, "llm", "", "manifest LLM option ID to use for all sessions")
-	flags.StringSliceVar(&opts.FeedbackLLMRaw, "feedback-llm", nil, "manifest LLM option ID or group for feedback/tester sessions; repeat or comma-separate (groups: all, claude, gpt; overrides --llm)")
-	flags.StringVar(&opts.EditorLLMIDFlag, "editor-llm", "", "manifest LLM option ID for the editor session (overrides --llm)")
+	flags.StringVar(&opts.LLMID, "llm", "", "LLM option ID to use for all sessions where supported")
+	flags.StringSliceVar(&opts.FeedbackLLMRaw, "feedback-llm", nil, "LLM option ID or group for feedback/tester sessions where supported; repeat or comma-separate (groups: all, claude, gpt; overrides --llm)")
+	flags.StringVar(&opts.EditorLLMIDFlag, "editor-llm", "", "LLM option ID for the editor session where supported (overrides --llm)")
 	flags.StringVar(&opts.OutDir, "out", "", "output directory (default: <repo>/.dari-docs)")
 	flags.IntVar(&opts.Parallel, "parallel", opts.Parallel, "number of feedback sessions per self-managed batch")
 	flags.BoolVar(&opts.Apply, "apply", false, "copy updated docs back into the repo after downloading")
@@ -311,21 +311,29 @@ func runSelfManagedCheckOrOptimize(ctx context.Context, opts checkOptimizeOption
 }
 
 func resolveSelfManagedCheckOptimizeConfig(opts *checkOptimizeOptions) error {
-	if len(opts.FeedbackLLMIDs) == 0 {
-		if opts.LLMID != "" {
-			opts.FeedbackLLMIDs = []string{opts.LLMID}
-		} else {
-			opts.FeedbackLLMIDs = runner.DefaultFeedbackLLMIDs()
-		}
-	}
+	agentRuntime := ""
 	if c, ok, err := projectconfig.Load(opts.RepoRoot); err != nil {
 		return err
 	} else if ok {
+		agentRuntime = c.AgentRuntime
 		if opts.FeedbackAgent == "" {
 			opts.FeedbackAgent = c.TesterAgentID
 		}
 		if opts.EditorAgent == "" {
 			opts.EditorAgent = c.EditorAgentID
+		}
+	}
+	if agentRuntime == "flue" {
+		if opts.LLMID != "" || len(opts.FeedbackLLMRaw) > 0 || opts.EditorLLMIDFlag != "" {
+			return fmt.Errorf("self-managed Flue agents do not support --llm, --feedback-llm, or --editor-llm yet; configure the model in the Flue agent project")
+		}
+		opts.FeedbackLLMIDs = []string{""}
+		opts.EditorLLMID = ""
+	} else if len(opts.FeedbackLLMIDs) == 0 {
+		if opts.LLMID != "" {
+			opts.FeedbackLLMIDs = []string{opts.LLMID}
+		} else {
+			opts.FeedbackLLMIDs = runner.DefaultFeedbackLLMIDs()
 		}
 	}
 	if opts.FeedbackAgent == "" {

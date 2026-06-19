@@ -24,7 +24,7 @@ agents/docs-user-tester-agent/dari.yml
 agents/docs-editor-agent/dari.yml
 ```
 
-They are normal dari.dev agent projects: folders with `dari.yml`, prompts, skills, and setup scripts. There is no special `dari-docs` runtime hidden inside them; they are generic agents that can be inspected, edited, versioned, and reused in other contexts. The CLI embeds these folders into the Go binary.
+They are normal Flue-backed dari.dev agent projects: folders with `dari.yml`, `package.json`, `agents/<name>.ts`, prompts, and skills. There is no special `dari-docs` runtime hidden inside them; they are generic Flue projects that can be inspected, edited, versioned, and reused in other contexts. The CLI embeds these folders into the Go binary.
 
 - `docs-user-tester-agent` — lightweight simulated-user testing agent
 - `docs-editor-agent` — remote editor agent
@@ -40,20 +40,11 @@ They are normal dari.dev agent projects: folders with `dari.yml`, prompts, skill
 
 ## LLM configuration
 
-By default the templates omit `llm.api_key_secret`, so dari.dev uses the platform-managed OpenAI or Anthropic credential for each option. Claude options use `provider: anthropic`, and GPT options use `provider: openai`.
+The Flue templates put model choice in `agents/<name>.ts` and default to `anthropic/claude-sonnet-4-6`. They declare the Dari credential name `ANTHROPIC_API_KEY` under `sandbox.secrets`, so self-managed deploys require that credential to exist in the target org before `dari-docs init --deploy`.
 
-For BYOK at publish time, create provider-specific dari.dev credentials and pass `--anthropic-api-key-secret` and/or `--openai-api-key-secret` to `dari-docs init --deploy`. The CLI sets `api_key_secret` only on matching `llm.options` entries. No per-session LLM key is required by `dari-docs`.
+For a different stored credential name, pass `--anthropic-api-key-secret NAME` to `dari-docs init --deploy`. The CLI updates the Flue deploy manifest so Dari exposes that stored credential to the Flue process. `--openai-api-key-secret` is available if you edit the Flue agent model to use OpenAI.
 
-The bundled agents define these LLM option IDs for runtime selection:
-
-- `claude-haiku-4-5`
-- `claude-sonnet-4-6`
-- `claude-opus-4-7`
-- `gpt-5-mini`
-- `gpt-5.1`
-- `gpt-5.5`
-
-Self-managed runs use all of these tester LLM options per task by default. Pass one option to all sessions with `--llm`, or override the tester matrix with repeated/comma-separated `--feedback-llm`.
+Self-managed Flue agents do not currently support per-session `--llm`, `--feedback-llm`, or `--editor-llm` selection. Configure the model in the Flue agent project before deploy. Managed mode still exposes the hosted service's model-selection flags.
 
 ## Runtime product/API secrets
 

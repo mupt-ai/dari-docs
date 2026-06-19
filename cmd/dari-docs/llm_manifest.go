@@ -66,6 +66,121 @@ func setLLMAPIKeySecretsByProvider(path string, providerSecrets map[string]strin
 	return manifest.write()
 }
 
+func setAgentDefaultProviderSecret(path, secret string) error {
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return nil
+	}
+	if manifestHasLLMBlock(path) {
+		return setLLMAPIKeySecret(path, secret)
+	}
+	return setFlueProviderSecrets(path, map[string]string{"anthropic": secret})
+}
+
+func setAgentProviderSecrets(path string, providerSecrets map[string]string) error {
+	providerSecrets = normalizeProviderSecrets(providerSecrets)
+	if len(providerSecrets) == 0 {
+		return nil
+	}
+	if manifestHasLLMBlock(path) {
+		return setLLMAPIKeySecretsByProvider(path, providerSecrets)
+	}
+	return setFlueProviderSecrets(path, providerSecrets)
+}
+
+func manifestHasLLMBlock(path string) bool {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return false
+	}
+	return yamlMappingValue(yamlDocumentRoot(&doc), "llm") != nil
+}
+
+func setFlueProviderSecrets(path string, providerSecrets map[string]string) error {
+	providerSecrets = normalizeProviderSecrets(providerSecrets)
+	if len(providerSecrets) == 0 {
+		return nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return fmt.Errorf("parse %s: %w", path, err)
+	}
+	root := yamlDocumentRoot(&doc)
+	if root == nil || root.Kind != yaml.MappingNode {
+		return fmt.Errorf("manifest %s must be a mapping", path)
+	}
+	sandbox := yamlEnsureMapping(root, "sandbox")
+	env := yamlEnsureMapping(sandbox, "env")
+	secrets := yamlEnsureSequence(sandbox, "secrets")
+
+	removeSecrets := map[string]bool{}
+	for provider := range providerSecrets {
+		envName := flueProviderSecretEnvName(provider)
+		if envName == "" {
+			return fmt.Errorf("unsupported Flue LLM provider %q", provider)
+		}
+		if old := yamlMappingValue(env, envName); old != nil {
+			removeSecrets[strings.TrimSpace(old.Value)] = true
+		}
+		if defaultName := flueProviderDefaultSecretName(provider); defaultName != "" {
+			removeSecrets[defaultName] = true
+		}
+	}
+	for provider, secret := range providerSecrets {
+		yamlSetMappingScalar(env, flueProviderSecretEnvName(provider), secret)
+	}
+	yamlPruneSequenceScalars(secrets, removeSecrets)
+	for _, secret := range providerSecrets {
+		yamlAppendUniqueSequenceScalar(secrets, secret)
+	}
+
+	var out bytes.Buffer
+	enc := yaml.NewEncoder(&out)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		_ = enc.Close()
+		return fmt.Errorf("encode %s: %w", path, err)
+	}
+	if err := enc.Close(); err != nil {
+		return fmt.Errorf("encode %s: %w", path, err)
+	}
+	return os.WriteFile(path, out.Bytes(), 0o644)
+}
+
+func flueProviderSecretEnvName(provider string) string {
+	switch normalizeProvider(provider) {
+	case "anthropic":
+		return "DARI_DOCS_ANTHROPIC_API_KEY_SECRET_NAME"
+	case "openai":
+		return "DARI_DOCS_OPENAI_API_KEY_SECRET_NAME"
+	case "openrouter":
+		return "DARI_DOCS_OPENROUTER_API_KEY_SECRET_NAME"
+	default:
+		return ""
+	}
+}
+
+func flueProviderDefaultSecretName(provider string) string {
+	switch normalizeProvider(provider) {
+	case "anthropic":
+		return "ANTHROPIC_API_KEY"
+	case "openai":
+		return "OPENAI_API_KEY"
+	case "openrouter":
+		return "OPENROUTER_API_KEY"
+	default:
+		return ""
+	}
+}
+
 func normalizeProviderSecrets(in map[string]string) map[string]string {
 	out := map[string]string{}
 	for provider, secret := range in {
@@ -192,6 +307,67 @@ func yamlSetMappingScalar(node *yaml.Node, key, value string) {
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value},
 	)
+}
+
+func yamlEnsureMapping(node *yaml.Node, key string) *yaml.Node {
+	if existing := yamlMappingValue(node, key); existing != nil {
+		if existing.Kind != yaml.MappingNode {
+			existing.Kind = yaml.MappingNode
+			existing.Tag = "!!map"
+			existing.Content = nil
+		}
+		return existing
+	}
+	child := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	node.Content = append(node.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		child,
+	)
+	return child
+}
+
+func yamlEnsureSequence(node *yaml.Node, key string) *yaml.Node {
+	if existing := yamlMappingValue(node, key); existing != nil {
+		if existing.Kind != yaml.SequenceNode {
+			existing.Kind = yaml.SequenceNode
+			existing.Tag = "!!seq"
+			existing.Content = nil
+		}
+		return existing
+	}
+	child := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+	node.Content = append(node.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		child,
+	)
+	return child
+}
+
+func yamlPruneSequenceScalars(node *yaml.Node, remove map[string]bool) {
+	if node == nil || node.Kind != yaml.SequenceNode || len(remove) == 0 {
+		return
+	}
+	out := node.Content[:0]
+	for _, item := range node.Content {
+		if item.Kind == yaml.ScalarNode && remove[strings.TrimSpace(item.Value)] {
+			continue
+		}
+		out = append(out, item)
+	}
+	node.Content = out
+}
+
+func yamlAppendUniqueSequenceScalar(node *yaml.Node, value string) {
+	value = strings.TrimSpace(value)
+	if node == nil || node.Kind != yaml.SequenceNode || value == "" {
+		return
+	}
+	for _, item := range node.Content {
+		if item.Kind == yaml.ScalarNode && strings.TrimSpace(item.Value) == value {
+			return
+		}
+	}
+	node.Content = append(node.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value})
 }
 
 func normalizeProvider(provider string) string {

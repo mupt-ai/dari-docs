@@ -27,6 +27,7 @@ Managed setup:
   dari-docs auth login
 
 Self-managed setup:
+  dari credentials add ANTHROPIC_API_KEY
   export DARI_API_KEY=...
   dari-docs init --deploy
 
@@ -43,9 +44,9 @@ Important flags:
   --apply                     copy downloaded updated docs back into repo
   --api-base-url URL          Dari API base URL; self-managed only
   --parallel N                tester sessions per batch; self-managed only
-  --llm ID                    select an LLM option for all sessions
+  --llm ID                    select an LLM option for managed or legacy self-managed agents
   --feedback-llm ID           select tester LLM option(s); repeat or comma-separate; supports all, claude, gpt
-  --editor-llm ID             select a manifest LLM option for the editor session
+  --editor-llm ID             select an LLM option for the editor session
   --anthropic-api-key-secret  stored Dari credential name for Anthropic BYOK deploys
   --openai-api-key-secret     stored Dari credential name for OpenAI BYOK deploys
 

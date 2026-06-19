@@ -20,7 +20,7 @@ When the reader is an agent, ambiguity becomes measurable. Inconsistent terminol
 - **Finds task-blocking ambiguity** — reports missing context, unclear setup, inconsistent terms, and places where the agent had to guess.
 - **Generates proposed fixes** — `optimize` turns tester feedback into edited documentation you can review locally.
 - **Runs managed or self-managed** — use the hosted dari.dev Docs service, or run against agents in your own dari.dev org.
-- **Uses normal agent projects** — the tester and editor are just folders of prompts, skills, setup scripts, and a `dari.yml` manifest.
+- **Uses normal Flue agent projects** — the tester and editor are just folders with a `dari.yml`, `package.json`, Flue agent entrypoint, prompts, and skills.
 
 ## Install
 
@@ -71,14 +71,14 @@ With `--wait`, edited files are downloaded into `.dari-docs/updated/` without ch
 5. If you run `optimize`, an editor agent proposes documentation changes.
 6. Proposed edits can be downloaded to `.dari-docs/updated/` for review.
 
-The simulated users are plain dari.dev agents. Managed mode uses the hosted Dari Docs tester and editor agents automatically. If you want to customize the agent prompts, skills, setup scripts, or `dari.yml`, use self-managed mode.
+The simulated users are plain Flue-backed dari.dev agents. Managed mode uses the hosted Dari Docs tester and editor agents automatically. If you want to customize the agent prompts, skills, model, or `dari.yml`, use self-managed mode.
 
 ## Managed vs self-managed
 
 | Mode | Use when | Requires |
 | --- | --- | --- |
 | Managed | You want the fastest setup and hosted execution. | `dari-docs auth login` |
-| Self-managed | You want runs in your own dari.dev org. | A dari.dev API key and deployed agents |
+| Self-managed | You want runs in your own dari.dev org. | A dari.dev API key, an `ANTHROPIC_API_KEY` Dari credential, and deployed agents |
 
 Most users should start with managed mode.
 

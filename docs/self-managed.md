@@ -2,17 +2,20 @@
 
 Use self-managed mode when you want runs to execute in your own dari.dev org.
 
-The bundled tester and editor are ordinary dari.dev agents: folders of prompts, skills, setup scripts, and a `dari.yml` manifest. Deploying them to your org gives each agent a hosted endpoint that `dari-docs` can call for tester and editor sessions.
+The bundled tester and editor are ordinary Flue-backed dari.dev agents: folders with a `dari.yml`, `package.json`, `agents/<name>.ts`, prompts, and skills. Deploying them to your org gives each agent a hosted endpoint that `dari-docs` can call for tester and editor sessions.
 
 ## Set up self-managed mode
 
-Log in with the dari.dev CLI, export your API key, and deploy the bundled agents:
+Log in with the dari.dev CLI, store the model provider credential the Flue agents use, export your API key, and deploy the bundled agents:
 
 ```bash
 dari auth login
+dari credentials add ANTHROPIC_API_KEY
 export DARI_API_KEY=...
 dari-docs init --deploy
 ```
+
+If your org stores the Anthropic key under a different Dari credential name, pass `--anthropic-api-key-secret NAME` to `dari-docs init --deploy`.
 
 Then run the same commands without `--managed`:
 
@@ -26,22 +29,8 @@ dari-docs optimize . \
 
 ## Choose model tiers
 
-By default, the bundled agents expose named LLM options such as `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-7`, `gpt-5-mini`, `gpt-5.1`, and `gpt-5.5`. The Claude options use the `anthropic` provider and the GPT options use the `openai` provider.
+By default, the bundled Flue agents use `anthropic/claude-sonnet-4-6`. In self-managed Flue mode, model choice lives in the Flue project code and deploy manifest rather than in Dari session `llm_id` options, so `--llm`, `--feedback-llm`, and `--editor-llm` are not supported for self-managed runs yet.
 
-In self-managed mode, tester sessions run every task across all six options by default. The CLI creates tester sessions through the Dari session-batch API, in chunks controlled by `--parallel`, and attaches metadata such as `kind`, `task_index`, and `llm_id` so agent webhooks can correlate lifecycle events. The editor uses the manifest default, `claude-sonnet-4-6`.
+To use a different model, edit `.dari-docs/agents/docs-user-tester-agent/agents/docs-user-tester-agent.ts` and `.dari-docs/agents/docs-editor-agent/agents/docs-editor-agent.ts`, update `sandbox.secrets` if the provider needs a different credential, then redeploy with `dari-docs init --deploy` or `dari deploy` from each agent folder.
 
-To explicitly choose tester model tiers:
-
-```bash
-dari-docs check . \
-  --task "Install the SDK and make a first API call" \
-  --feedback-llm claude-haiku-4-5,claude-sonnet-4-6,claude-opus-4-7
-```
-
-`--feedback-llm` also accepts `claude`, `gpt`, and `all` groups, and groups can be mixed with explicit IDs.
-
-Use `--llm ID` to collapse the run to one option for all sessions, or `--editor-llm ID` to select the editor model independently.
-
-Managed mode uses the same model-selection flags with the hosted Claude and GPT options. See [Managed mode and billing](managed.md#model-selection).
-
-If you need BYOK at agent deploy time, add provider-specific dari.dev credentials and pass `--anthropic-api-key-secret` and/or `--openai-api-key-secret` to `dari-docs init --deploy`.
+Managed mode still uses hosted model-selection flags with the service's configured Claude and GPT options. See [Managed mode and billing](managed.md#model-selection).

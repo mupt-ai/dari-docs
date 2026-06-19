@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/mupt-ai/dari-docs/internal/agenttemplates"
 	"github.com/mupt-ai/dari-docs/internal/projectconfig"
@@ -19,6 +20,7 @@ type initOptions struct {
 	Deploy                bool
 	APIKeyEnv             string
 	APIKey                string
+	APIBaseURL            string
 	LLMAPIKeySecret       string
 	AnthropicAPIKeySecret string
 	OpenAIAPIKeySecret    string
@@ -26,7 +28,7 @@ type initOptions struct {
 }
 
 func newInitCommand() *cobra.Command {
-	opts := initOptions{APIKeyEnv: "DARI_API_KEY"}
+	opts := initOptions{APIKeyEnv: "DARI_API_KEY", APIBaseURL: os.Getenv("DARI_API_URL")}
 	cmd := &cobra.Command{
 		Use:           "init [repo]",
 		Short:         "Extract or deploy bundled agents",
@@ -43,7 +45,8 @@ func newInitCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.Deploy, "deploy", false, "deploy bundled agents into the current Dari org")
 	cmd.Flags().StringVar(&opts.APIKeyEnv, "api-key-env", opts.APIKeyEnv, "env var containing Dari API key for deploy")
 	cmd.Flags().StringVar(&opts.APIKey, "api-key", "", "Dari API key for deploy (prefer --api-key-env)")
-	cmd.Flags().StringVar(&opts.LLMAPIKeySecret, "llm-api-key-secret", "", "optional stored Dari credential name for BYOK LLM at agent publish time; only valid when all LLM options use one provider")
+	cmd.Flags().StringVar(&opts.APIBaseURL, "api-base-url", opts.APIBaseURL, "Dari API base URL for deploy (defaults to production or $DARI_API_URL)")
+	cmd.Flags().StringVar(&opts.LLMAPIKeySecret, "llm-api-key-secret", "", "optional stored Dari credential name for the default Anthropic provider at agent publish time")
 	cmd.Flags().StringVar(&opts.AnthropicAPIKeySecret, "anthropic-api-key-secret", "", "optional stored Dari credential name for Anthropic BYOK LLM at agent publish time")
 	cmd.Flags().StringVar(&opts.OpenAIAPIKeySecret, "openai-api-key-secret", "", "optional stored Dari credential name for OpenAI BYOK LLM at agent publish time")
 	cmd.Flags().StringVar(&opts.AgentsDir, "agents-dir", "", "where to extract agent templates (default: <repo>/.dari-docs/agents)")
@@ -80,23 +83,23 @@ func runInitWithOptions(ctx context.Context, opts initOptions) error {
 		return fmt.Errorf("--llm-api-key-secret cannot be combined with provider-specific LLM key secret flags")
 	}
 
-	cfg := projectconfig.Config{AgentsDir: agentsDir, LLMMode: "platform-managed", LLMAPIKeySecret: opts.LLMAPIKeySecret}
+	cfg := projectconfig.Config{AgentsDir: agentsDir, AgentRuntime: "flue", LLMMode: "flue-provider-secrets", LLMAPIKeySecret: opts.LLMAPIKeySecret}
 	if opts.LLMAPIKeySecret != "" {
 		cfg.LLMMode = "byok-publish-time"
-		if err := setLLMAPIKeySecret(filepath.Join(agentsDir, "docs-user-tester-agent", "dari.yml"), opts.LLMAPIKeySecret); err != nil {
+		if err := setAgentDefaultProviderSecret(filepath.Join(agentsDir, "docs-user-tester-agent", "dari.yml"), opts.LLMAPIKeySecret); err != nil {
 			return err
 		}
-		if err := setLLMAPIKeySecret(filepath.Join(agentsDir, "docs-editor-agent", "dari.yml"), opts.LLMAPIKeySecret); err != nil {
+		if err := setAgentDefaultProviderSecret(filepath.Join(agentsDir, "docs-editor-agent", "dari.yml"), opts.LLMAPIKeySecret); err != nil {
 			return err
 		}
 	}
 	if len(providerSecrets) > 0 {
 		cfg.LLMMode = "byok-publish-time"
 		cfg.LLMAPIKeySecrets = providerSecrets
-		if err := setLLMAPIKeySecretsByProvider(filepath.Join(agentsDir, "docs-user-tester-agent", "dari.yml"), providerSecrets); err != nil {
+		if err := setAgentProviderSecrets(filepath.Join(agentsDir, "docs-user-tester-agent", "dari.yml"), providerSecrets); err != nil {
 			return err
 		}
-		if err := setLLMAPIKeySecretsByProvider(filepath.Join(agentsDir, "docs-editor-agent", "dari.yml"), providerSecrets); err != nil {
+		if err := setAgentProviderSecrets(filepath.Join(agentsDir, "docs-editor-agent", "dari.yml"), providerSecrets); err != nil {
 			return err
 		}
 	}
@@ -108,7 +111,11 @@ func runInitWithOptions(ctx context.Context, opts initOptions) error {
 		if apiKey == "" {
 			return fmt.Errorf("missing Dari API key for deploy; set %s or pass --api-key", opts.APIKeyEnv)
 		}
-		env := append(os.Environ(), "DARI_API_URL=https://api.dari.dev", "DARI_API_KEY="+apiKey)
+		apiBaseURL := strings.TrimSpace(opts.APIBaseURL)
+		if apiBaseURL == "" {
+			apiBaseURL = "https://api.dari.dev"
+		}
+		env := append(os.Environ(), "DARI_API_URL="+apiBaseURL, "DARI_API_KEY="+apiKey)
 		testerID, err := deployAgent(env, filepath.Join(agentsDir, "docs-user-tester-agent"))
 		if err != nil {
 			return err

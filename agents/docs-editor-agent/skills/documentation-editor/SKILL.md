@@ -22,7 +22,7 @@ Use this skill whenever the user supplies docs plus feedback, gap reports, revie
    - heading hierarchy,
    - link and code sample style,
    - product terminology.
-5. Make minimal, targeted edits using exact replacements where possible. For remote-editor bundle workflows, copy the extracted input files to `/workspace/updated-docs/files` and edit that output tree only.
+5. Make minimal, targeted edits using exact replacements where possible. For remote-editor bundle workflows, copy the extracted input files to `updated-docs/files` in the session workspace and edit that output tree only.
 6. For implementation docs, ensure edits cover:
    - prerequisites and install,
    - auth and env vars,

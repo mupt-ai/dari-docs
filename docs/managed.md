@@ -2,7 +2,7 @@
 
 Managed mode runs `dari-docs` through the hosted dari.dev Docs service. Use it when you want to test and optimize docs without managing your own dari.dev org or API key.
 
-Under the hood, the tester and editor are ordinary dari.dev agents: folders of prompts, skills, setup scripts, and a `dari.yml` manifest. Managed mode runs sessions through hosted agents so you can test docs without deploying or operating agent infrastructure.
+Under the hood, the tester and editor are ordinary Flue-backed dari.dev agents with prompts, skills, a Flue entrypoint, and a `dari.yml` deploy manifest. Managed mode runs sessions through hosted agents so you can test docs without deploying or operating agent infrastructure.
 
 ## Set up managed mode
 

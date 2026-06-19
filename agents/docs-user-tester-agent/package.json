@@ -1,0 +1,10 @@
+{
+  "name": "docs-user-tester-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@flue/cli": "0.10.1",
+    "@flue/runtime": "0.10.1"
+  }
+}

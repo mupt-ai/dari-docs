@@ -1,50 +1,7 @@
 name: docs-editor-agent
-harness: pi
-
-instructions:
-  system: prompts/system.md
-
 sandbox:
-  provider: e2b
-  runtimes:
-    python: "3.13"
-  packages:
-    apt:
-      - ca-certificates
-      - curl
-      - git
-      - jq
-      - ripgrep
-      - diffutils
-
-llm:
-  default: claude-sonnet-4-6
-  options:
-    claude-haiku-4-5:
-      provider: anthropic
-      model: claude-haiku-4-5
-    claude-sonnet-4-6:
-      provider: anthropic
-      model: claude-sonnet-4-6
-    claude-opus-4-7:
-      provider: anthropic
-      model: claude-opus-4-7
-    gpt-5-mini:
-      provider: openai
-      model: gpt-5-mini
-    gpt-5.1:
-      provider: openai
-      model: gpt-5.1
-    gpt-5.5:
-      provider: openai
-      model: gpt-5.5
-
-built_in_tools:
-  - read
-  - bash
-  - edit
-  - write
-
-skills:
-  - name: documentation-editor
-    path: skills/documentation-editor
+  env:
+    DARI_DOCS_DEFAULT_MODEL: anthropic/claude-sonnet-4-6
+    DARI_DOCS_ANTHROPIC_API_KEY_SECRET_NAME: ANTHROPIC_API_KEY
+  secrets:
+    - ANTHROPIC_API_KEY
