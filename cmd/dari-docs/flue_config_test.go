@@ -24,16 +24,25 @@ func TestResolveFlueConfigUsesDeploymentURLs(t *testing.T) {
 	}
 }
 
-func TestResolveFlueConfigRejectsLLMFlag(t *testing.T) {
-	repo := t.TempDir()
-	if err := projectconfig.Save(repo, projectconfig.Config{TesterURL: "https://tester.example", AgentRuntime: "flue"}); err != nil {
-		t.Fatal(err)
+func TestResolveLLMFlagsUsesGlobalModelForFeedback(t *testing.T) {
+	opts := checkOptimizeOptions{LLMID: "claude-sonnet-4-6"}
+	opts.resolveLLMFlags()
+	if strings.Join(opts.FeedbackLLMIDs, ",") != "claude-sonnet-4-6" {
+		t.Fatalf("feedback models = %#v", opts.FeedbackLLMIDs)
 	}
-	opts := checkOptimizeOptions{Command: "check", RepoRoot: repo, Parallel: 1, LLMID: "claude-sonnet-4-6"}
+	if opts.EditorLLMID != "claude-sonnet-4-6" {
+		t.Fatalf("editor model = %q", opts.EditorLLMID)
+	}
+}
 
-	err := resolveFlueCheckOptimizeConfig(&opts)
-	if err == nil || !strings.Contains(err.Error(), "Flue agents do not support") {
-		t.Fatalf("err = %v, want Flue LLM rejection", err)
+func TestResolveLLMFlagsFeedbackOverridesGlobalModel(t *testing.T) {
+	opts := checkOptimizeOptions{LLMID: "claude-sonnet-4-6", FeedbackLLMRaw: []string{"gpt-5.5,claude-opus-4-8"}, EditorLLMIDFlag: "claude-haiku-4-5"}
+	opts.resolveLLMFlags()
+	if strings.Join(opts.FeedbackLLMIDs, ",") != "gpt-5.5,claude-opus-4-8" {
+		t.Fatalf("feedback models = %#v", opts.FeedbackLLMIDs)
+	}
+	if opts.EditorLLMID != "claude-haiku-4-5" {
+		t.Fatalf("editor model = %q", opts.EditorLLMID)
 	}
 }
 

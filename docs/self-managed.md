@@ -90,7 +90,18 @@ You can edit `.dari-docs/config.json` later or override the saved values with co
 
 ## Model Configuration
 
-Model choice belongs to the Flue app, not to `dari-docs check` flags. Edit the agent TypeScript files to change model or provider, then rebuild and redeploy the app.
+The Flue app has a default model, and each `dari-docs` run can request a model override in the workflow payload. Use `--llm` for one model across tester and editor workflows, `--feedback-llm` for tester model matrices, and `--editor-llm` for the editor workflow.
+
+```bash
+dari-docs check . \
+  --tester-url https://docs-tester.example.com \
+  --feedback-llm gpt-5.5 \
+  --feedback-llm claude-opus-4-8 \
+  --feedback-llm claude-sonnet-4-6 \
+  --task "Install the SDK"
+```
+
+Model strings without a provider prefix are normalized for common providers: `claude-*` becomes `anthropic/claude-*`, and `gpt-*` becomes `openai/gpt-*`. To change the app default, edit the agent TypeScript files, then rebuild and redeploy the app.
 
 The default provider key names are:
 

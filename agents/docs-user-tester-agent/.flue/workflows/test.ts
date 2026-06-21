@@ -7,6 +7,7 @@ export const route: WorkflowRouteHandler = async (_c, next) => next();
 type DocFile = { path: string; content: string };
 type TestPayload = {
   task?: string;
+  model?: string;
   files?: DocFile[];
   publicDocUrls?: string[];
   liveVerify?: boolean;

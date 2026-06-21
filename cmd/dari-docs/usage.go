@@ -21,6 +21,9 @@ Important flags:
   --editor-url URL            base URL of the deployed editor Flue app
   --task TEXT                 task/prompt to test; repeatable
   --tasks-file PATH           tasks file; repeatable
+  --llm MODEL                 request a model for tester/editor workflows
+  --feedback-llm MODEL        request tester model(s); repeatable or comma-separated
+  --editor-llm MODEL          request editor model for optimize
   --live-verify               permit safe credential-dependent checks
   --secret-env NAME           pass runtime product/API key to Flue workflow payload; repeatable
   --bundle-include GLOB       include extra repo-relative docs bundle paths; repeatable

@@ -105,7 +105,7 @@ Environment variables are not included unless you explicitly pass them with `--l
 
 ## Useful Options
 
-Each `check` task runs one tester workflow. `optimize` runs the tester workflow for each task, then one editor workflow. The CLI runs workflows sequentially right now and defaults to a 30 minute HTTP wait timeout; change that with `--timeout-minutes`.
+Each `check` task runs one tester workflow for each requested tester model. `optimize` runs the tester workflow for each task/model pair, then one editor workflow. The CLI runs workflows sequentially right now and defaults to a 30 minute HTTP wait timeout; change that with `--timeout-minutes`.
 
 Use more than one task by repeating `--task`:
 
@@ -117,6 +117,19 @@ dari-docs check . \
 ```
 
 For repeated checks, keep tasks in a file and pass `--tasks-file`.
+
+Ask one tester app to try the same task with multiple models by repeating `--feedback-llm`:
+
+```bash
+dari-docs check . \
+  --tester-url https://your-tester.example \
+  --feedback-llm gpt-5.5 \
+  --feedback-llm claude-opus-4-8 \
+  --feedback-llm claude-sonnet-4-6 \
+  --task "Install the SDK"
+```
+
+Model strings without a provider prefix are normalized for common providers: `claude-*` becomes `anthropic/claude-*`, and `gpt-*` becomes `openai/gpt-*`. Use `--llm` to request one model for both tester and editor workflows, or `--editor-llm` to set the editor model for `optimize`.
 
 Use `--bundle-include` and `--bundle-exclude` when your docs need extra files or when generated docs should be skipped.
 

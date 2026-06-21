@@ -27,6 +27,8 @@ type Config struct {
 	TesterURL      string
 	EditorURL      string
 	Tasks          []string
+	FeedbackModels []string
+	EditorModel    string
 	LiveVerify     bool
 	RuntimeSecrets map[string]string
 	PublicDocURLs  []string
@@ -49,6 +51,7 @@ type docFile struct {
 
 type testerPayload struct {
 	Task           string            `json:"task"`
+	Model          string            `json:"model,omitempty"`
 	Files          []docFile         `json:"files,omitempty"`
 	PublicDocURLs  []string          `json:"publicDocUrls,omitempty"`
 	LiveVerify     bool              `json:"liveVerify,omitempty"`
@@ -62,6 +65,7 @@ type testerResult struct {
 type editorPayload struct {
 	Files          []docFile         `json:"files"`
 	Feedback       string            `json:"feedback"`
+	Model          string            `json:"model,omitempty"`
 	LiveVerify     bool              `json:"liveVerify,omitempty"`
 	RuntimeSecrets map[string]string `json:"runtimeSecrets,omitempty"`
 }
@@ -127,24 +131,30 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	reports := make([]string, 0, len(cfg.Tasks))
+	feedbackModels := feedbackModelsOrDefault(cfg.FeedbackModels)
+	reports := make([]string, 0, len(cfg.Tasks)*len(feedbackModels))
 	client := &http.Client{Timeout: cfg.Timeout}
+	reportIndex := 0
 	for i, task := range cfg.Tasks {
-		result, err := callWorkflow[testerResult](ctx, client, cfg.TesterURL, "test", testerPayload{
-			Task:           task,
-			Files:          files,
-			PublicDocURLs:  cfg.PublicDocURLs,
-			LiveVerify:     cfg.LiveVerify,
-			RuntimeSecrets: secrets,
-		})
-		if err != nil {
-			return Result{}, fmt.Errorf("feedback task %d: %w", i+1, err)
+		for _, model := range feedbackModels {
+			result, err := callWorkflow[testerResult](ctx, client, cfg.TesterURL, "test", testerPayload{
+				Task:           task,
+				Model:          model,
+				Files:          files,
+				PublicDocURLs:  cfg.PublicDocURLs,
+				LiveVerify:     cfg.LiveVerify,
+				RuntimeSecrets: secrets,
+			})
+			if err != nil {
+				return Result{}, fmt.Errorf("feedback task %d model %q: %w", i+1, displayModel(model), err)
+			}
+			report := formatFeedbackReport(i, len(cfg.Tasks), model, result.Feedback)
+			if err := writeFeedbackReport(cfg.OutDir, reportIndex, model, report); err != nil {
+				return Result{}, err
+			}
+			reports = append(reports, report)
+			reportIndex++
 		}
-		report := formatFeedbackReport(i, len(cfg.Tasks), result.Feedback)
-		if err := writeFeedbackReport(cfg.OutDir, i, report); err != nil {
-			return Result{}, err
-		}
-		reports = append(reports, report)
 	}
 	if err := writeAggregate(cfg.OutDir, reports); err != nil {
 		return Result{}, err
@@ -157,6 +167,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	edited, err := callWorkflow[editorResult](ctx, client, cfg.EditorURL, "edit", editorPayload{
 		Files:          files,
 		Feedback:       aggregate,
+		Model:          cfg.EditorModel,
 		LiveVerify:     cfg.LiveVerify,
 		RuntimeSecrets: secrets,
 	})
@@ -258,16 +269,49 @@ func publicDocsBundleResult(urls []string) bundle.Result {
 	}
 }
 
-func formatFeedbackReport(taskIndex int, taskCount int, report string) string {
-	report = strings.TrimSpace(report)
-	if taskCount <= 1 {
-		return report
+func feedbackModelsOrDefault(models []string) []string {
+	out := make([]string, 0, len(models))
+	seen := map[string]bool{}
+	for _, raw := range models {
+		model := strings.TrimSpace(raw)
+		if model == "" || seen[model] {
+			continue
+		}
+		seen[model] = true
+		out = append(out, model)
 	}
-	return fmt.Sprintf("Task index: %d\n\n%s", taskIndex+1, report)
+	if len(out) == 0 {
+		return []string{""}
+	}
+	return out
 }
 
-func writeFeedbackReport(outDir string, idx int, report string) error {
-	path := filepath.Join(outDir, "runs", fmt.Sprintf("feedback-%03d.md", idx+1))
+func displayModel(model string) string {
+	if strings.TrimSpace(model) == "" {
+		return "default"
+	}
+	return model
+}
+
+func formatFeedbackReport(taskIndex int, taskCount int, model string, report string) string {
+	report = strings.TrimSpace(report)
+	if taskCount <= 1 && strings.TrimSpace(model) == "" {
+		return report
+	}
+	var header []string
+	header = append(header, fmt.Sprintf("Task index: %d", taskIndex+1))
+	if strings.TrimSpace(model) != "" {
+		header = append(header, "Tester model: "+model)
+	}
+	return strings.Join(header, "\n") + "\n\n" + report
+}
+
+func writeFeedbackReport(outDir string, idx int, model string, report string) error {
+	filename := fmt.Sprintf("feedback-%03d.md", idx+1)
+	if strings.TrimSpace(model) != "" {
+		filename = fmt.Sprintf("feedback-%03d-%s.md", idx+1, safeFilenamePart(model))
+	}
+	path := filepath.Join(outDir, "runs", filename)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -301,6 +345,22 @@ func writeUpdatedFiles(updatedDir string, edited editorResult) error {
 		}
 	}
 	return nil
+}
+
+func safeFilenamePart(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "default"
+	}
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
 }
 
 func normalizeEditedPath(path string) string {

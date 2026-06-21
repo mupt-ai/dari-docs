@@ -90,7 +90,7 @@ func TestAgentsCommandIsUnsupported(t *testing.T) {
 	}
 }
 
-func TestCheckHelpHidesManagedAndLLMFlags(t *testing.T) {
+func TestCheckHelpShowsModelFlagsAndHidesManagedFlags(t *testing.T) {
 	cmd := newCheckOptimizeCommand("check")
 	var out bytes.Buffer
 	cmd.SetOut(&out)
@@ -99,12 +99,12 @@ func TestCheckHelpHidesManagedAndLLMFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	help := out.String()
-	for _, hidden := range []string{"--managed", "--wait", "--llm", "--feedback-llm", "--editor-llm", "--apply", "--editor-url", "--feedback-agent", "--editor-agent", "--api-key", "remote-editor"} {
+	for _, hidden := range []string{"--managed", "--wait", "--editor-llm", "--apply", "--editor-url", "--feedback-agent", "--editor-agent", "--api-key", "remote-editor"} {
 		if strings.Contains(help, hidden) {
 			t.Fatalf("check help should not contain %q:\n%s", hidden, help)
 		}
 	}
-	for _, shown := range []string{"--tester-url", "--task", "--docs-url"} {
+	for _, shown := range []string{"--tester-url", "--task", "--docs-url", "--llm", "--feedback-llm"} {
 		if !strings.Contains(help, shown) {
 			t.Fatalf("check help missing %q:\n%s", shown, help)
 		}

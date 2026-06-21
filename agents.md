@@ -23,9 +23,9 @@ Users deploy these apps with Flue and their own Node host, then pass the base UR
 
 ## Model Configuration
 
-The templates put model choice in `agents/<name>.ts` and default to `anthropic/claude-sonnet-4-6`. Set `ANTHROPIC_API_KEY` in the app deployment environment, or edit the model/provider code and set the provider key required by that provider.
+The templates put the default model in `agents/<name>.ts` and default to `anthropic/claude-sonnet-4-6`. Set `ANTHROPIC_API_KEY` in the app deployment environment, or edit the model/provider code and set the provider key required by that provider.
 
-Configure the model in the Flue app before deployment. A model string uses the provider/model format expected by Flue and the underlying provider packages, such as `anthropic/claude-sonnet-4-6`.
+`dari-docs` can request a per-run model in the workflow payload with `--llm`, `--feedback-llm`, and `--editor-llm`. A model string can use the provider/model format expected by Flue, such as `anthropic/claude-sonnet-4-6`; the bundled agents also normalize common short IDs such as `claude-sonnet-4-6` and `gpt-5.5`.
 
 ## Runtime Product/API Secrets
 

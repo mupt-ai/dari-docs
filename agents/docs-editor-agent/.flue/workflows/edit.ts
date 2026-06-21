@@ -8,6 +8,7 @@ type DocFile = { path: string; content: string };
 type EditPayload = {
   files?: DocFile[];
   feedback?: string;
+  model?: string;
   liveVerify?: boolean;
   runtimeSecrets?: Record<string, string>;
 };

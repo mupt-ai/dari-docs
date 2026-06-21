@@ -29,6 +29,7 @@ The CLI calls the workflows with `POST /workflows/<name>?wait=result`. The teste
 ```json
 {
   "task": "Install the SDK",
+  "model": "gpt-5.5",
   "files": [{ "path": "README.md", "content": "# Docs\n" }],
   "publicDocUrls": ["https://docs.example.com/llms.txt"],
   "liveVerify": false,
@@ -36,7 +37,7 @@ The CLI calls the workflows with `POST /workflows/<name>?wait=result`. The teste
 }
 ```
 
-The tester returns `{ "feedback": "...markdown..." }`. The editor payload is `{ "files": [...], "feedback": "...markdown...", "liveVerify": false, "runtimeSecrets": {} }`, and the editor returns `{ "changelog": "...markdown...", "files": [{ "path": "README.md", "content": "...complete file..." }] }`. Paths in editor results should be repo-relative, not workspace paths.
+The tester returns `{ "feedback": "...markdown..." }`. The editor payload is `{ "files": [...], "feedback": "...markdown...", "model": "claude-sonnet-4-6", "liveVerify": false, "runtimeSecrets": {} }`, and the editor returns `{ "changelog": "...markdown...", "files": [{ "path": "README.md", "content": "...complete file..." }] }`. Paths in editor results should be repo-relative, not workspace paths.
 
 ## Change The Model
 
@@ -54,7 +55,7 @@ npx flue build --target node
 PORT=8787 ANTHROPIC_API_KEY=... node dist/server.mjs
 ```
 
-Set the provider key in the deployment environment. The bundled code recognizes the usual provider env vars: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `OPENROUTER_API_KEY`.
+Set the provider key in the deployment environment. The bundled code recognizes the usual provider env vars: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `OPENROUTER_API_KEY`. It also accepts per-run model overrides from the workflow payload; short common model IDs are normalized (`claude-*` to `anthropic/claude-*`, `gpt-*` to `openai/gpt-*`).
 
 ## Change Prompts Or Skills
 

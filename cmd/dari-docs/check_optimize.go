@@ -110,17 +110,16 @@ func bindCheckOptimizeFlags(cmd *cobra.Command, opts *checkOptimizeOptions) {
 	if opts.Command != "check" {
 		flags.StringVar(&opts.EditorAgent, "editor-agent", "", "unsupported; use --editor-url for Flue deployments")
 	}
-	flags.StringVar(&opts.LLMID, "llm", "", "unsupported; configure the model in the Flue agent project")
-	flags.StringSliceVar(&opts.FeedbackLLMRaw, "feedback-llm", nil, "unsupported; configure the tester model in the Flue agent project")
-	flags.StringVar(&opts.EditorLLMIDFlag, "editor-llm", "", "unsupported; configure the editor model in the Flue agent project")
+	flags.StringVar(&opts.LLMID, "llm", "", "model to request for tester and editor workflows unless overridden")
+	flags.StringSliceVar(&opts.FeedbackLLMRaw, "feedback-llm", nil, "tester model or group; repeat or comma-separate (groups: all, claude, gpt); overrides --llm")
+	if opts.Command != "check" {
+		flags.StringVar(&opts.EditorLLMIDFlag, "editor-llm", "", "editor model to request for optimize; overrides --llm")
+	}
 	_ = flags.MarkHidden("api-key-env")
 	_ = flags.MarkHidden("api-key")
 	_ = flags.MarkHidden("api-base-url")
 	_ = flags.MarkHidden("feedback-agent")
 	_ = flags.MarkHidden("editor-agent")
-	_ = flags.MarkHidden("llm")
-	_ = flags.MarkHidden("feedback-llm")
-	_ = flags.MarkHidden("editor-llm")
 	flags.StringVar(&opts.OutDir, "out", "", "output directory (default: <repo>/.dari-docs)")
 	flags.IntVar(&opts.Parallel, "parallel", opts.Parallel, "unsupported; Flue workflow runs are sequential for now")
 	_ = flags.MarkHidden("parallel")
@@ -261,6 +260,9 @@ func (opts *checkOptimizeOptions) loadRuntimeSecrets() error {
 
 func (opts *checkOptimizeOptions) resolveLLMFlags() {
 	opts.FeedbackLLMIDs = expandFeedbackLLMList(opts.FeedbackLLMRaw)
+	if len(opts.FeedbackLLMIDs) == 0 && opts.LLMID != "" {
+		opts.FeedbackLLMIDs = []string{opts.LLMID}
+	}
 	opts.EditorLLMID = opts.EditorLLMIDFlag
 	if opts.EditorLLMID == "" {
 		opts.EditorLLMID = opts.LLMID
@@ -277,6 +279,8 @@ func runFlueCheckOrOptimize(ctx context.Context, opts checkOptimizeOptions) erro
 		TesterURL:      opts.TesterURL,
 		EditorURL:      opts.EditorURL,
 		Tasks:          opts.Tasks,
+		FeedbackModels: opts.FeedbackLLMIDs,
+		EditorModel:    opts.EditorLLMID,
 		LiveVerify:     opts.LiveVerify,
 		RuntimeSecrets: opts.RuntimeSecrets,
 		PublicDocURLs:  opts.PublicDocURLs,
@@ -299,9 +303,6 @@ func runFlueCheckOrOptimize(ctx context.Context, opts checkOptimizeOptions) erro
 }
 
 func resolveFlueCheckOptimizeConfig(opts *checkOptimizeOptions) error {
-	if opts.LLMID != "" || len(opts.FeedbackLLMRaw) > 0 || opts.EditorLLMIDFlag != "" {
-		return fmt.Errorf("Flue agents do not support --llm, --feedback-llm, or --editor-llm; configure the model in the Flue agent project, then redeploy it")
-	}
 	if opts.APIKey != "" || opts.APIKeyEnv != "" || opts.APIBaseURL != "" || opts.FeedbackAgent != "" || opts.EditorAgent != "" {
 		return fmt.Errorf("Dari API and agent ID flags are not supported; deploy the Flue apps and pass --tester-url/--editor-url")
 	}

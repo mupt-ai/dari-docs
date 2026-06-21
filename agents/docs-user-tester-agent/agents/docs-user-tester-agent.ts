@@ -14,14 +14,15 @@ const PROVIDER_DEFAULT_SECRET_NAMES: Record<string, string> = {
 };
 
 type RuntimeEnv = Record<string, string | undefined>;
+type AgentPayload = { model?: string };
 
-export default createAgent<unknown, RuntimeEnv>(async ({ id, env }) => {
+export default createAgent<AgentPayload, RuntimeEnv>(async ({ id, env, payload }) => {
   configureProviderSecrets(env);
   const workspace = path.join(WORKSPACE_ROOT, safePathPart(id));
   await mkdir(workspace, { recursive: true });
 
   return {
-    model: configuredModel(env),
+    model: configuredModel(env, payload),
     instructions: systemPrompt,
     skills: [docsUserTest],
     cwd: workspace,
@@ -29,9 +30,11 @@ export default createAgent<unknown, RuntimeEnv>(async ({ id, env }) => {
   };
 });
 
-function configuredModel(env: RuntimeEnv | undefined): string {
-  const model = envValue(env, 'DARI_DOCS_DEFAULT_MODEL').trim();
-  return model || DEFAULT_MODEL;
+function configuredModel(env: RuntimeEnv | undefined, payload: AgentPayload | undefined): string {
+  const requestedModel = normalizeModel(payload?.model);
+  if (requestedModel) return requestedModel;
+  const envModel = normalizeModel(envValue(env, 'DARI_DOCS_DEFAULT_MODEL'));
+  return envModel || DEFAULT_MODEL;
 }
 
 function configureProviderSecrets(env: RuntimeEnv | undefined) {
@@ -41,6 +44,15 @@ function configureProviderSecrets(env: RuntimeEnv | undefined) {
     if (!apiKey) continue;
     configureProvider(provider, { apiKey });
   }
+}
+
+function normalizeModel(value: string | undefined): string {
+  const model = value?.trim() ?? '';
+  if (!model) return '';
+  if (model.includes('/')) return model;
+  if (model.startsWith('claude-')) return `anthropic/${model}`;
+  if (model.startsWith('gpt-') || /^o\d/.test(model)) return `openai/${model}`;
+  return model;
 }
 
 function runtimeSecretEnv(env: RuntimeEnv | undefined): Record<string, string> {
