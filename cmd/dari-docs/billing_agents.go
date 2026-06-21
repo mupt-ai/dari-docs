@@ -10,17 +10,7 @@ import (
 )
 
 func newBillingCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:           "billing",
-		Short:         "Manage managed-service billing",
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmd.Help()
-		},
-	}
-	cmd.AddCommand(newBillingBalanceCommand(), newBillingCheckoutCommand())
-	return cmd
+	return newUnsupportedManagedCommand("billing [command]")
 }
 
 func newBillingBalanceCommand() *cobra.Command {
@@ -87,39 +77,5 @@ func runBillingCheckout(ctx context.Context, amount string) error {
 }
 
 func newAgentsCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:           "agents",
-		Short:         "Agent helper commands",
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmd.Help()
-		},
-	}
-	cmd.AddCommand(newAgentsDeployCommand())
-	return cmd
-}
-
-func newAgentsDeployCommand() *cobra.Command {
-	var managedMode bool
-	cmd := &cobra.Command{
-		Use:           "deploy [repo]",
-		Short:         "Deploy or select docs agents",
-		Args:          cobra.ArbitraryArgs,
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAgentsDeploy(managedMode)
-		},
-	}
-	cmd.Flags().BoolVar(&managedMode, "managed", false, "use hosted Dari Docs managed agents")
-	return cmd
-}
-
-func runAgentsDeploy(managedMode bool) error {
-	if !managedMode {
-		return fmt.Errorf("for self-managed agents, run `dari-docs init --deploy`")
-	}
-	fmt.Println("Managed mode uses hosted Dari Docs agents automatically.")
-	return nil
+	return newUnsupportedManagedCommand("agents [command]")
 }

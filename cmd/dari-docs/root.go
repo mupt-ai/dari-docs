@@ -1,6 +1,10 @@
 package main
 
-import "github.com/spf13/cobra"
+import (
+	"fmt"
+
+	"github.com/spf13/cobra"
+)
 
 func execute(args []string) error {
 	cmd := newRootCommand()
@@ -11,7 +15,7 @@ func execute(args []string) error {
 func newRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "dari-docs",
-		Short:         "Run hosted docs user tests and propose docs improvements",
+		Short:         "Run Flue agents to test and improve docs",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       version,
@@ -41,6 +45,23 @@ func newVersionCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.Println(versionLine())
 			return nil
+		},
+	}
+}
+
+func unsupportedManagedModeError() error {
+	return fmt.Errorf("the hosted/managed Dari Docs path is not supported in this CLI; use Flue agents in your Dari org instead:\n  dari auth login\n  dari credentials add ANTHROPIC_API_KEY\n  export DARI_API_KEY=...\n  dari-docs init --deploy\n  dari-docs check . --task \"Install the SDK\"")
+}
+
+func newUnsupportedManagedCommand(use string) *cobra.Command {
+	return &cobra.Command{
+		Use:                use,
+		Hidden:             true,
+		DisableFlagParsing: true,
+		SilenceUsage:       true,
+		SilenceErrors:      true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return unsupportedManagedModeError()
 		},
 	}
 }

@@ -14,23 +14,7 @@ import (
 )
 
 func newRunsCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:           "runs",
-		Short:         "Inspect managed runs",
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmd.Help()
-		},
-	}
-	cmd.AddCommand(
-		newRunsStatusCommand(),
-		newRunsWaitCommand(),
-		newRunsFeedbackCommand(),
-		newRunsDownloadCommand(),
-		newRunsApplyCommand(),
-	)
-	return cmd
+	return newUnsupportedManagedCommand("runs [command]")
 }
 
 func newRunsStatusCommand() *cobra.Command {

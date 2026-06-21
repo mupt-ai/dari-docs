@@ -36,15 +36,15 @@ They are normal Flue-backed dari.dev agent projects: folders with `dari.yml`, `p
 .dari-docs/agents/docs-editor-agent/
 ```
 
-`dari-docs init --deploy` deploys those agents into the user's current dari.dev org and writes their agent IDs to `.dari-docs/config.json`. Once deployed, dari.dev gives each agent a hosted endpoint, which lets `dari-docs` fan out isolated tester and editor sessions without running local agent workers.
+`dari-docs init --deploy` deploys those agents into the user's current dari.dev org and writes their agent IDs to `.dari-docs/config.json`. Once deployed, dari.dev gives each agent an endpoint, which lets `dari-docs` fan out isolated tester and editor sessions without running local agent workers.
 
 ## LLM configuration
 
-The Flue templates put model choice in `agents/<name>.ts` and default to `anthropic/claude-sonnet-4-6`. They declare the Dari credential name `ANTHROPIC_API_KEY` under `sandbox.secrets`, so self-managed deploys require that credential to exist in the target org before `dari-docs init --deploy`.
+The Flue templates put model choice in `agents/<name>.ts` and default to `anthropic/claude-sonnet-4-6`. They declare the Dari credential name `ANTHROPIC_API_KEY` under `sandbox.secrets`, so deploys require that credential to exist in the target org before `dari-docs init --deploy`.
 
 For a different stored credential name, pass `--anthropic-api-key-secret NAME` to `dari-docs init --deploy`. The CLI updates the Flue deploy manifest so Dari exposes that stored credential to the Flue process. `--openai-api-key-secret` is available if you edit the Flue agent model to use OpenAI.
 
-Self-managed Flue agents do not currently support per-session `--llm`, `--feedback-llm`, or `--editor-llm` selection. Configure the model in the Flue agent project before deploy. Managed mode still exposes the hosted service's model-selection flags.
+Flue agents do not use per-session `--llm`, `--feedback-llm`, or `--editor-llm` selection. Configure the model in the Flue agent project before deploy.
 
 ## Runtime product/API secrets
 

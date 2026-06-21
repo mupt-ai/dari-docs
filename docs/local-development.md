@@ -1,25 +1,25 @@
 # Local Development
 
-Run Postgres, the managed-service backend, and the Vite frontend together with Docker Compose:
+For CLI development, run the Go tests from the repository root:
 
 ```bash
-cp .env.example .env
-# Fill in SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY.
-docker compose up
+go test ./...
 ```
 
-Docker chooses open localhost ports by default. Find them with:
+Run the CLI from source while editing:
 
 ```bash
-docker compose port frontend 5173
-docker compose port backend 8080
-docker compose port postgres 5432
+go run ./cmd/dari-docs --help
+go run ./cmd/dari-docs init --help
+go run ./cmd/dari-docs check --help
 ```
 
-The compose file supplies local placeholder service secrets so the backend can boot and run migrations. To exercise real Dari-managed runs, add real values to `.env` before starting compose:
+The bundled agents live under `agents/` and are embedded into the CLI binary. After editing an agent template, validate the Flue project from that agent folder. `npm install` installs the local Flue dependency, and `npx flue` runs that installed CLI:
 
 ```bash
-DARI_API_KEY=...
-MANAGED_TESTER_AGENT_ID=...
-MANAGED_EDITOR_AGENT_ID=...
+cd agents/docs-user-tester-agent
+npm install
+npx flue build --target node
 ```
+
+Repeat the same check for `agents/docs-editor-agent` when you change the editor template.

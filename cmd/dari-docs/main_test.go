@@ -325,47 +325,85 @@ func TestPrepareRejectsOptimizeWithPublicDocsURL(t *testing.T) {
 	}
 }
 
-func TestManagedCheckRequiresLoginBeforeRunConfig(t *testing.T) {
+func TestManagedCheckFlagIsUnsupported(t *testing.T) {
 	repo := t.TempDir()
-	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
 
 	cmd := newCheckOptimizeCommand("check")
 	cmd.SetArgs([]string{repo, "--managed", "--task", "Run echo ok"})
 	err := cmd.Execute()
 	if err == nil {
-		t.Fatal("expected missing login error")
+		t.Fatal("expected unsupported managed mode error")
 	}
-	if !strings.Contains(err.Error(), "not logged in to managed service") {
-		t.Fatalf("error = %q, want login error", err.Error())
-	}
-	if strings.Contains(err.Error(), "missing managed agent set") {
-		t.Fatalf("error = %q, should not mention missing agent set before login", err.Error())
+	if !strings.Contains(err.Error(), "hosted/managed Dari Docs path is not supported") {
+		t.Fatalf("error = %q, want unsupported managed mode error", err.Error())
 	}
 }
 
-func TestManagedApplyRequiresWait(t *testing.T) {
-	err := runManagedCheckOrOptimizeFromOptions(context.Background(), checkOptimizeOptions{
-		Command: "optimize",
-		Managed: true,
-		Apply:   true,
-	})
-	if err == nil {
-		t.Fatal("expected --apply without --wait error")
-	}
-	if !strings.Contains(err.Error(), "--apply requires --wait") {
-		t.Fatalf("error = %q, want --apply requires --wait", err.Error())
-	}
-}
-
-func TestManagedAgentDeployManagedNoops(t *testing.T) {
+func TestWaitFlagIsUnsupported(t *testing.T) {
 	repo := t.TempDir()
-	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
 
-	cmd := newAgentsCommand()
-	cmd.SetArgs([]string{"deploy", "--managed", repo})
+	cmd := newCheckOptimizeCommand("check")
+	cmd.SetArgs([]string{repo, "--wait", "--task", "Run echo ok"})
 	err := cmd.Execute()
-	if err != nil {
-		t.Fatalf("managed agent deploy should be a no-op: %v", err)
+	if err == nil {
+		t.Fatal("expected unsupported --wait error")
+	}
+	if !strings.Contains(err.Error(), "--wait is not supported for Flue runs") {
+		t.Fatalf("error = %q, want --wait unsupported", err.Error())
+	}
+}
+
+func TestAgentsCommandIsUnsupported(t *testing.T) {
+	cmd := newAgentsCommand()
+	cmd.SetArgs([]string{"deploy", "--managed", "repo"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected unsupported agents command error")
+	}
+	if !strings.Contains(err.Error(), "hosted/managed Dari Docs path is not supported") {
+		t.Fatalf("error = %q, want unsupported managed mode error", err.Error())
+	}
+}
+
+func TestCheckHelpHidesManagedAndLLMFlags(t *testing.T) {
+	cmd := newCheckOptimizeCommand("check")
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	help := out.String()
+	for _, hidden := range []string{"--managed", "--wait", "--llm", "--feedback-llm", "--editor-llm", "--apply", "--editor-agent", "remote-editor"} {
+		if strings.Contains(help, hidden) {
+			t.Fatalf("check help should not contain %q:\n%s", hidden, help)
+		}
+	}
+	for _, shown := range []string{"--feedback-agent", "--task", "--docs-url"} {
+		if !strings.Contains(help, shown) {
+			t.Fatalf("check help missing %q:\n%s", shown, help)
+		}
+	}
+}
+
+func TestRootHelpShowsOnlyFlueCommands(t *testing.T) {
+	cmd := newRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	help := out.String()
+	for _, hidden := range []string{"auth", "billing", "runs", "--managed", "--wait", "--llm", "--feedback-llm", "--editor-llm"} {
+		if strings.Contains(help, hidden) {
+			t.Fatalf("root help should not contain %q:\n%s", hidden, help)
+		}
+	}
+	for _, shown := range []string{"check", "init", "optimize"} {
+		if !strings.Contains(help, shown) {
+			t.Fatalf("root help missing %q:\n%s", shown, help)
+		}
 	}
 }
 

@@ -1,36 +1,75 @@
-# Self-Managed Usage
+# Flue Agent Usage
 
-Use self-managed mode when you want runs to execute in your own dari.dev org.
+Dari Docs runs Flue agents in your dari.dev org. Flue is the agent runtime used by dari.dev, and a Flue agent is a deployed program that can read inputs, call tools, and work in a remote session workspace. A dari.dev org is your team workspace/account. The bundled tester and editor agents are regular Flue projects: each folder has a `dari.yml`, `package.json`, TypeScript agent entrypoint, prompts, and skills.
 
-The bundled tester and editor are ordinary Flue-backed dari.dev agents: folders with a `dari.yml`, `package.json`, `agents/<name>.ts`, prompts, and skills. Deploying them to your org gives each agent a hosted endpoint that `dari-docs` can call for tester and editor sessions.
+## Set up the agents
 
-## Set up self-managed mode
-
-Log in with the dari.dev CLI, store the model provider credential the Flue agents use, export your API key, and deploy the bundled agents:
+From the repo that contains your docs, store the model provider key in your Dari org, export a Dari API key, and deploy the bundled agents. Create or copy the Dari API key from your dari.dev dashboard. If your org uses scoped keys, grant permissions to deploy agents, upload files, create sessions, read session transcripts, and download session workspaces. This setup also requires the `dari` CLI because `dari-docs init --deploy` runs `dari deploy` for the agent projects.
 
 ```bash
 dari auth login
-dari credentials add ANTHROPIC_API_KEY
-export DARI_API_KEY=...
+dari credentials add ANTHROPIC_API_KEY # paste your Anthropic key when prompted
+export DARI_API_KEY=... # create or copy a dari.dev API key for this org
 dari-docs init --deploy
 ```
 
-If your org stores the Anthropic key under a different Dari credential name, pass `--anthropic-api-key-secret NAME` to `dari-docs init --deploy`.
+`dari-docs init --deploy` extracts the agent projects into `.dari-docs/agents/`, deploys them with `dari deploy`, and writes their agent IDs to `.dari-docs/config.json`.
 
-Then run the same commands without `--managed`:
+If your org stores the Anthropic key under a different Dari credential name, pass it during init:
+
+```bash
+dari-docs init --deploy --anthropic-api-key-secret TEAM_ANTHROPIC_KEY
+```
+
+## Run checks
+
+Run `check` to have tester agents try one or more tasks from your docs:
 
 ```bash
 dari-docs check . \
   --task "Install the SDK and make a first API call"
+```
 
+Feedback is written to `.dari-docs/aggregate-feedback.md`, with individual reports under `.dari-docs/runs/`. Completed feedback is not a pass/fail score; read it to decide what to fix.
+
+## Generate proposed edits
+
+Run `optimize` to collect tester feedback and ask the editor agent to produce documentation changes:
+
+```bash
 dari-docs optimize . \
   --task "Install the SDK and make a first API call"
 ```
 
-## Choose model tiers
+Proposed changes are downloaded into `.dari-docs/updated/`. Review that directory and copy changes into your repo when ready, or let the CLI apply them after download. With `--apply`, regular files from `.dari-docs/updated/` are copied into your repo and existing files at the same paths are overwritten. It does not apply a patch or delete files that are absent from the update.
 
-By default, the bundled Flue agents use `anthropic/claude-sonnet-4-6`. In self-managed Flue mode, model choice lives in the Flue project code and deploy manifest rather than in Dari session `llm_id` options, so `--llm`, `--feedback-llm`, and `--editor-llm` are not supported for self-managed runs yet.
+```bash
+dari-docs optimize . \
+  --apply \
+  --task "Install the SDK and make a first API call"
+```
 
-To use a different model, edit `.dari-docs/agents/docs-user-tester-agent/agents/docs-user-tester-agent.ts` and `.dari-docs/agents/docs-editor-agent/agents/docs-editor-agent.ts`, update `sandbox.secrets` if the provider needs a different credential, then redeploy with `dari-docs init --deploy` or `dari deploy` from each agent folder.
+## Use existing Flue agents
 
-Managed mode still uses hosted model-selection flags with the service's configured Claude and GPT options. See [Managed mode and billing](managed.md#model-selection).
+If you have already deployed compatible Flue agents, pass their IDs directly:
+
+```bash
+dari-docs check . \
+  --feedback-agent agt_... \
+  --task "Install the SDK"
+
+dari-docs optimize . \
+  --feedback-agent agt_... \
+  --editor-agent agt_... \
+  --task "Install the SDK"
+```
+
+Compatible agents should follow the same contract as the bundled templates: the tester receives a docs bundle or public docs URL plus one task and returns task-focused feedback; the editor receives source docs plus tester feedback and writes proposed files for download.
+
+## Choose models and credentials
+
+Model choice lives in the Flue agent project. The bundled agents default to `anthropic/claude-sonnet-4-6` in `agents/<name>.ts` and declare the Dari credential name `ANTHROPIC_API_KEY` in `dari.yml`.
+
+To change models, edit the agent TypeScript entrypoints and update `dari.yml` if the provider needs a different stored credential. Then redeploy with `dari-docs init --deploy` or run `dari deploy` from each agent folder.
+
+`dari-docs check` and `dari-docs optimize` do not choose per-session LLMs for Flue agents. Keep model configuration with the agent code so deployed runs are predictable.

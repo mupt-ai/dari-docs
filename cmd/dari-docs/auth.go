@@ -15,22 +15,7 @@ import (
 )
 
 func newAuthCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:           "auth",
-		Short:         "Authenticate to the managed service",
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmd.Help()
-		},
-	}
-	cmd.AddCommand(
-		newAuthLoginCommand(),
-		newAuthLogoutCommand(),
-		newAuthStatusCommand(),
-		newAuthAPIKeyCommand(),
-	)
-	return cmd
+	return newUnsupportedManagedCommand("auth [command]")
 }
 
 func newAuthLoginCommand() *cobra.Command {
