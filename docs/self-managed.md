@@ -43,7 +43,7 @@ PORT=8788 ANTHROPIC_API_KEY=... node dist/server.mjs
 
 For production, deploy `dist/`, `package.json`, and `package-lock.json` using your normal Node hosting platform. Install dependencies on the host with `npm ci --omit=dev` and start the server with `PORT=$PORT node dist/server.mjs`. Use a host that supports a persistent Node HTTP server, such as Render, Fly.io, Railway, a VM with systemd, ECS, or Kubernetes. Set the same provider environment variables there. The important output is the base URL of each app, for example `https://docs-tester.example.com`.
 
-The workflow URLs must be reachable by the `dari-docs` CLI. The bundled CLI does not add an authorization header, so if the apps are exposed outside a private network, protect them with network controls that still allow your CLI environment to reach them, such as a VPN, private ingress, or firewall rules.
+The workflow URLs must be reachable by the `dari-docs` CLI. The bundled CLI does not add an authorization header. Do not expose these apps publicly without network-level protection that still allows your CLI environment to reach them, such as a VPN, private ingress, or firewall rules.
 
 ## Run Checks
 

@@ -22,7 +22,7 @@ dari-docs check . \
 
 ## Public Docs URLs
 
-Use `--docs-url` with `check` to test public docs without checking out a repo. The URL is passed to the tester workflow as a public docs source, and internet access is required. For a normal page, the tester uses that page as the starting point and may follow relevant same-site links as needed for the task. For `llms.txt` or `llms-full.txt`, the tester treats the file as an LLM docs manifest: a plain-text or Markdown index that lists documentation pages intended for agents to read, usually as headings plus links.
+Use `--docs-url` with `check` to test public docs without checking out a repo. The URL is passed to the tester workflow as a public docs source, and internet access is required. If you pass both a local repo and `--docs-url`, both are sent: local files are written under `input-docs/files/`, and the URL is included in the task prompt. For a normal page, the tester uses that page as the starting point and may follow relevant same-site links as needed for the task. For `llms.txt` or `llms-full.txt`, the tester treats the file as an LLM docs manifest: a plain-text or Markdown index that lists documentation pages intended for agents to read, usually as headings plus links.
 
 ```bash
 dari-docs check \

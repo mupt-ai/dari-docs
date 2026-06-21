@@ -4,7 +4,7 @@
 
 `dari-docs` tests whether your documentation is clear enough to use. It gives a deployed Flue tester app a real task, collects what happened, and can ask a deployed Flue editor app to turn that feedback into proposed docs changes.
 
-The only supported runtime path is Flue app deployment. Flue is the JavaScript agent runtime that packages an agent plus workflows into a Node server. A workflow is an HTTP entrypoint in that server. `dari-docs init` extracts two ordinary Flue projects into your repo. You install, build, and run those projects with Flue on a local or hosted Node server. The `dari-docs` CLI then calls their workflow URLs.
+The only supported runtime path is Flue app deployment. Flue is the JavaScript agent runtime that packages an agent plus workflows into a Node server. A workflow is an HTTP entrypoint in that server. `dari-docs init` extracts two ordinary Flue projects into your repo. You install, build, and run those projects with Flue on a local or hosted Node server. The `dari-docs` CLI is the orchestrator: it bundles docs, calls those Node apps, and writes reports locally.
 
 ## Quickstart
 
@@ -56,7 +56,7 @@ dari-docs check . \
   --task "Install the SDK and make a first API call"
 ```
 
-The check writes individual tester reports under `.dari-docs/runs/` and an aggregate report to `.dari-docs/aggregate-feedback.md`. Feedback is not a pass/fail score; read it to decide what to fix.
+The check writes individual tester reports under `.dari-docs/runs/` and an aggregate report to `.dari-docs/aggregate-feedback.md`. Feedback is not a pass/fail score; read it to decide what to fix. `check` exits nonzero for setup, bundling, workflow, timeout, or download errors. It exits zero when the workflow completed, even if the feedback says the tester got stuck.
 
 Ask the editor app for proposed docs changes:
 
@@ -95,7 +95,7 @@ The tester app exposes a `test` workflow at `/workflows/test`. `dari-docs check`
 
 The editor app exposes an `edit` workflow at `/workflows/edit`. `dari-docs optimize` first runs the tester workflow, then posts the aggregate feedback and source docs to the editor workflow. The editor returns proposed files, which the CLI writes to `.dari-docs/updated/`.
 
-The apps are normal Flue projects. Their entrypoints live under `agents/`, prompts under `prompts/`, skills under `skills/`, and workflows under `.flue/workflows/`. Keep the workflow base URLs reachable by the CLI. If you expose them beyond a private network, protect them with network controls such as a VPN, private ingress, or firewall rules. The CLI does not add an authorization header. There is no hosted service or custom deployment step in the supported flow.
+The apps are normal Flue projects. Their entrypoints live under `agents/`, prompts under `prompts/`, skills under `skills/`, and workflows under `.flue/workflows/`. Keep the workflow base URLs reachable by the CLI. The CLI does not add an authorization header; do not expose these apps publicly without network-level protection such as a VPN, private ingress, or firewall rules. There is no hosted service or custom deployment step in the supported flow.
 
 ## Bundling And Secrets
 
@@ -104,6 +104,8 @@ Before you run against a local checkout, make sure the repo does not contain sec
 Environment variables are not included unless you explicitly pass them with `--live-verify --secret-env NAME`. Use that only for safe test-mode product credentials. Model provider keys such as `ANTHROPIC_API_KEY` belong in the Flue app deployment environment, not in the docs bundle.
 
 ## Useful Options
+
+Each `check` task runs one tester workflow. `optimize` runs the tester workflow for each task, then one editor workflow. The CLI runs workflows sequentially right now and defaults to a 30 minute HTTP wait timeout; change that with `--timeout-minutes`.
 
 Use more than one task by repeating `--task`:
 
