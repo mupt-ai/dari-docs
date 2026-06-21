@@ -1,7 +1,0 @@
-name: docs-editor-agent
-sandbox:
-  env:
-    DARI_DOCS_DEFAULT_MODEL: anthropic/claude-sonnet-4-6
-    DARI_DOCS_ANTHROPIC_API_KEY_SECRET_NAME: ANTHROPIC_API_KEY
-  secrets:
-    - ANTHROPIC_API_KEY

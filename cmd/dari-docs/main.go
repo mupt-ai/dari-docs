@@ -7,6 +7,10 @@ import (
 
 var version = "dev"
 
+func versionLine() string {
+	return "dari-docs " + version
+}
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "dari-docs: %v\n", err)

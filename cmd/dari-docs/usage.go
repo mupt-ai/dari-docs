@@ -3,33 +3,30 @@ package main
 import "fmt"
 
 func usage() {
-	fmt.Print(`dari-docs runs Flue tester and editor agents against your documentation.
+	fmt.Print(`dari-docs runs deployed Flue tester and editor apps against your documentation.
 
 Usage:
   dari-docs --version
-  dari-docs init [repo] [--deploy]
-  dari-docs check [repo|docs-url] --task "Implement auth" [flags]
-  dari-docs optimize [repo] --task "Implement auth" [flags]
+  dari-docs init [repo]
+  dari-docs check [repo|docs-url] --tester-url URL --task "Implement auth" [flags]
+  dari-docs optimize [repo] --tester-url URL --editor-url URL --task "Implement auth" [flags]
 
 Setup:
-  dari auth login
-  dari credentials add ANTHROPIC_API_KEY
-  export DARI_API_KEY=...
-  dari-docs init --deploy
+  dari-docs init
+  cd .dari-docs/agents/docs-user-tester-agent && npm install && npx flue build --target node
+  cd ../docs-editor-agent && npm install && npx flue build --target node
 
 Important flags:
+  --tester-url URL            base URL of the deployed tester Flue app
+  --editor-url URL            base URL of the deployed editor Flue app
   --task TEXT                 task/prompt to test; repeatable
   --tasks-file PATH           tasks file; repeatable
   --live-verify               permit safe credential-dependent checks
-  --secret-env NAME           pass runtime product/API key from env var; repeatable
+  --secret-env NAME           pass runtime product/API key to Flue workflow payload; repeatable
   --bundle-include GLOB       include extra repo-relative docs bundle paths; repeatable
   --bundle-exclude GLOB       exclude repo-relative docs bundle paths; repeatable
   --docs-url URL              give tester agents a public docs URL to use with internet access; repeatable
   --apply                     copy downloaded updated docs back into repo after optimize
-  --api-base-url URL          Dari API base URL
-  --parallel N                tester sessions per batch
-  --anthropic-api-key-secret  stored Dari credential name for Anthropic deploys
-  --openai-api-key-secret     stored Dari credential name for OpenAI deploys
 
 Init outputs:
   .dari-docs/config.json
@@ -39,7 +36,6 @@ Run outputs:
   .dari-docs/input-docs-bundle.tar.gz
   .dari-docs/runs/feedback-*.md
   .dari-docs/aggregate-feedback.md
-  .dari-docs/updated-docs-workspace.zip
   .dari-docs/updated/
 `)
 }

@@ -13,27 +13,35 @@ func TestExtractedAgentsAreFlueProjects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, name := range []string{"docs-user-tester-agent", "docs-editor-agent"} {
-		agentDir := filepath.Join(dir, name)
-		manifest := readText(t, filepath.Join(agentDir, "dari.yml"))
-		if !strings.Contains(manifest, "name: "+name) {
-			t.Fatalf("%s manifest missing name:\n%s", name, manifest)
+	for _, tt := range []struct {
+		name     string
+		workflow string
+	}{
+		{name: "docs-user-tester-agent", workflow: "test.ts"},
+		{name: "docs-editor-agent", workflow: "edit.ts"},
+	} {
+		agentDir := filepath.Join(dir, tt.name)
+		if _, err := os.Stat(filepath.Join(agentDir, "dari.yml")); !os.IsNotExist(err) {
+			t.Fatalf("%s should not include a Dari deploy manifest, stat err=%v", tt.name, err)
 		}
-		for _, legacy := range []string{"harness:", "llm:", "built_in_tools:", "internet_access:"} {
-			if strings.Contains(manifest, legacy) {
-				t.Fatalf("%s manifest still contains legacy field %q:\n%s", name, legacy, manifest)
-			}
+		config := readText(t, filepath.Join(agentDir, "flue.config.ts"))
+		if !strings.Contains(config, "defineConfig") || !strings.Contains(config, "target: 'node'") {
+			t.Fatalf("%s missing node Flue config:\n%s", tt.name, config)
 		}
-		if !strings.Contains(manifest, "sandbox:") || !strings.Contains(manifest, "secrets:") {
-			t.Fatalf("%s manifest missing Flue sandbox secret declaration:\n%s", name, manifest)
-		}
-		entry := filepath.Join(agentDir, "agents", name+".ts")
+		entry := filepath.Join(agentDir, "agents", tt.name+".ts")
 		if _, err := os.Stat(entry); err != nil {
-			t.Fatalf("%s missing Flue entrypoint: %v", name, err)
+			t.Fatalf("%s missing Flue entrypoint: %v", tt.name, err)
+		}
+		workflow := filepath.Join(agentDir, ".flue", "workflows", tt.workflow)
+		if _, err := os.Stat(workflow); err != nil {
+			t.Fatalf("%s missing Flue workflow %s: %v", tt.name, tt.workflow, err)
 		}
 		pkg := readText(t, filepath.Join(agentDir, "package.json"))
-		if !strings.Contains(pkg, "@flue/runtime") || !strings.Contains(pkg, "@flue/cli") {
-			t.Fatalf("%s package.json missing Flue dependencies:\n%s", name, pkg)
+		if !strings.Contains(pkg, "@flue/runtime") || !strings.Contains(pkg, "@flue/cli") || !strings.Contains(pkg, "valibot") {
+			t.Fatalf("%s package.json missing Flue dependencies:\n%s", tt.name, pkg)
+		}
+		if _, err := os.Stat(filepath.Join(agentDir, "node_modules")); !os.IsNotExist(err) {
+			t.Fatalf("%s should not embed node_modules, stat err=%v", tt.name, err)
 		}
 	}
 }

@@ -1,14 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/mupt-ai/dari-docs/internal/agenttemplates"
 	"github.com/mupt-ai/dari-docs/internal/projectconfig"
@@ -24,14 +19,16 @@ type initOptions struct {
 	LLMAPIKeySecret       string
 	AnthropicAPIKeySecret string
 	OpenAIAPIKeySecret    string
+	TesterURL             string
+	EditorURL             string
 	AgentsDir             string
 }
 
 func newInitCommand() *cobra.Command {
-	opts := initOptions{APIKeyEnv: "DARI_API_KEY", APIBaseURL: os.Getenv("DARI_API_URL")}
+	opts := initOptions{}
 	cmd := &cobra.Command{
 		Use:           "init [repo]",
-		Short:         "Extract or deploy bundled agents",
+		Short:         "Extract bundled Flue apps",
 		Args:          cobra.ArbitraryArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -42,14 +39,23 @@ func newInitCommand() *cobra.Command {
 			return runInitWithOptions(cmd.Context(), opts)
 		},
 	}
-	cmd.Flags().BoolVar(&opts.Deploy, "deploy", false, "deploy bundled agents into the current Dari org")
-	cmd.Flags().StringVar(&opts.APIKeyEnv, "api-key-env", opts.APIKeyEnv, "env var containing Dari API key for deploy")
-	cmd.Flags().StringVar(&opts.APIKey, "api-key", "", "Dari API key for deploy (prefer --api-key-env)")
-	cmd.Flags().StringVar(&opts.APIBaseURL, "api-base-url", opts.APIBaseURL, "Dari API base URL for deploy (defaults to production or $DARI_API_URL)")
-	cmd.Flags().StringVar(&opts.LLMAPIKeySecret, "llm-api-key-secret", "", "optional stored Dari credential name for the default Anthropic provider at agent publish time")
-	cmd.Flags().StringVar(&opts.AnthropicAPIKeySecret, "anthropic-api-key-secret", "", "optional stored Dari credential name for Anthropic BYOK LLM at agent publish time")
-	cmd.Flags().StringVar(&opts.OpenAIAPIKeySecret, "openai-api-key-secret", "", "optional stored Dari credential name for OpenAI BYOK LLM at agent publish time")
-	cmd.Flags().StringVar(&opts.AgentsDir, "agents-dir", "", "where to extract agent templates (default: <repo>/.dari-docs/agents)")
+	cmd.Flags().BoolVar(&opts.Deploy, "deploy", false, "unsupported; deploy the Flue apps with `flue build` and your host")
+	cmd.Flags().StringVar(&opts.APIKeyEnv, "api-key-env", opts.APIKeyEnv, "unsupported; Dari API keys are not used by Flue deployments")
+	cmd.Flags().StringVar(&opts.APIKey, "api-key", "", "unsupported; Dari API keys are not used by Flue deployments")
+	cmd.Flags().StringVar(&opts.APIBaseURL, "api-base-url", opts.APIBaseURL, "unsupported; Dari API URLs are not used by Flue deployments")
+	cmd.Flags().StringVar(&opts.LLMAPIKeySecret, "llm-api-key-secret", "", "unsupported; configure provider env vars on the Flue deployment")
+	cmd.Flags().StringVar(&opts.AnthropicAPIKeySecret, "anthropic-api-key-secret", "", "unsupported; configure ANTHROPIC_API_KEY on the Flue deployment")
+	cmd.Flags().StringVar(&opts.OpenAIAPIKeySecret, "openai-api-key-secret", "", "unsupported; configure OPENAI_API_KEY on the Flue deployment")
+	cmd.Flags().StringVar(&opts.TesterURL, "tester-url", "", "base URL of a deployed tester Flue app to save in config")
+	cmd.Flags().StringVar(&opts.EditorURL, "editor-url", "", "base URL of a deployed editor Flue app to save in config")
+	cmd.Flags().StringVar(&opts.AgentsDir, "agents-dir", "", "where to extract Flue apps (default: <repo>/.dari-docs/agents)")
+	_ = cmd.Flags().MarkHidden("deploy")
+	_ = cmd.Flags().MarkHidden("api-key-env")
+	_ = cmd.Flags().MarkHidden("api-key")
+	_ = cmd.Flags().MarkHidden("api-base-url")
+	_ = cmd.Flags().MarkHidden("llm-api-key-secret")
+	_ = cmd.Flags().MarkHidden("anthropic-api-key-secret")
+	_ = cmd.Flags().MarkHidden("openai-api-key-secret")
 	return cmd
 }
 
@@ -63,6 +69,10 @@ func runInitWithOptions(ctx context.Context, opts initOptions) error {
 	if err != nil {
 		return err
 	}
+	if opts.Deploy || opts.APIKeyEnv != "" || opts.APIKey != "" || opts.APIBaseURL != "" || opts.LLMAPIKeySecret != "" || opts.AnthropicAPIKeySecret != "" || opts.OpenAIAPIKeySecret != "" {
+		return fmt.Errorf("Dari deploy/credential flags are not supported; deploy the extracted Flue apps with `flue build` and configure provider env vars on that deployment")
+	}
+
 	agentsDir := opts.AgentsDir
 	if agentsDir == "" {
 		agentsDir = filepath.Join(absRepo, ".dari-docs", "agents")
@@ -70,90 +80,13 @@ func runInitWithOptions(ctx context.Context, opts initOptions) error {
 	if err := agenttemplates.Extract(agentsDir); err != nil {
 		return err
 	}
-	fmt.Printf("Extracted bundled agents to %s\n", agentsDir)
+	fmt.Printf("Extracted bundled Flue apps to %s\n", agentsDir)
 
-	providerSecrets := map[string]string{}
-	if opts.AnthropicAPIKeySecret != "" {
-		providerSecrets["anthropic"] = opts.AnthropicAPIKeySecret
-	}
-	if opts.OpenAIAPIKeySecret != "" {
-		providerSecrets["openai"] = opts.OpenAIAPIKeySecret
-	}
-	if opts.LLMAPIKeySecret != "" && len(providerSecrets) > 0 {
-		return fmt.Errorf("--llm-api-key-secret cannot be combined with provider-specific LLM key secret flags")
-	}
-
-	cfg := projectconfig.Config{AgentsDir: agentsDir, AgentRuntime: "flue", LLMMode: "flue-provider-secrets", LLMAPIKeySecret: opts.LLMAPIKeySecret}
-	if opts.LLMAPIKeySecret != "" {
-		cfg.LLMMode = "byok-publish-time"
-		if err := setAgentDefaultProviderSecret(filepath.Join(agentsDir, "docs-user-tester-agent", "dari.yml"), opts.LLMAPIKeySecret); err != nil {
-			return err
-		}
-		if err := setAgentDefaultProviderSecret(filepath.Join(agentsDir, "docs-editor-agent", "dari.yml"), opts.LLMAPIKeySecret); err != nil {
-			return err
-		}
-	}
-	if len(providerSecrets) > 0 {
-		cfg.LLMMode = "byok-publish-time"
-		cfg.LLMAPIKeySecrets = providerSecrets
-		if err := setAgentProviderSecrets(filepath.Join(agentsDir, "docs-user-tester-agent", "dari.yml"), providerSecrets); err != nil {
-			return err
-		}
-		if err := setAgentProviderSecrets(filepath.Join(agentsDir, "docs-editor-agent", "dari.yml"), providerSecrets); err != nil {
-			return err
-		}
-	}
-	if opts.Deploy {
-		apiKey := opts.APIKey
-		if apiKey == "" && opts.APIKeyEnv != "" {
-			apiKey = os.Getenv(opts.APIKeyEnv)
-		}
-		if apiKey == "" {
-			return fmt.Errorf("missing Dari API key for deploy; set %s or pass --api-key", opts.APIKeyEnv)
-		}
-		apiBaseURL := strings.TrimSpace(opts.APIBaseURL)
-		if apiBaseURL == "" {
-			apiBaseURL = "https://api.dari.dev"
-		}
-		env := append(os.Environ(), "DARI_API_URL="+apiBaseURL, "DARI_API_KEY="+apiKey)
-		testerID, err := deployAgent(env, filepath.Join(agentsDir, "docs-user-tester-agent"))
-		if err != nil {
-			return err
-		}
-		editorID, err := deployAgent(env, filepath.Join(agentsDir, "docs-editor-agent"))
-		if err != nil {
-			return err
-		}
-		cfg.TesterAgentID = testerID
-		cfg.EditorAgentID = editorID
-		fmt.Printf("Deployed tester agent: %s\n", testerID)
-		fmt.Printf("Deployed editor agent: %s\n", editorID)
-	}
+	cfg := projectconfig.Config{AgentsDir: agentsDir, AgentRuntime: "flue", LLMMode: "flue-env", TesterURL: opts.TesterURL, EditorURL: opts.EditorURL}
 	if err := projectconfig.Save(absRepo, cfg); err != nil {
 		return err
 	}
 	fmt.Printf("Wrote %s\n", projectconfig.Path(absRepo))
-	if !opts.Deploy {
-		fmt.Println("Run `dari-docs init --deploy` to deploy these agents into your Dari org.")
-	}
+	fmt.Println("Deploy the Flue apps with `flue build --target node` and your Node host, then run `dari-docs check --tester-url <url>`.")
 	return nil
-}
-
-func deployAgent(env []string, dir string) (string, error) {
-	cmd := exec.Command("dari", "deploy", "--quiet", ".")
-	cmd.Dir = dir
-	cmd.Env = env
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("deploy %s: %w\n%s", dir, err, stderr.String()+stdout.String())
-	}
-	var resp struct {
-		AgentID string `json:"agent_id"`
-	}
-	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil || resp.AgentID == "" {
-		return "", fmt.Errorf("deploy %s: could not parse agent_id from output: %s", dir, stdout.String())
-	}
-	return resp.AgentID, nil
 }

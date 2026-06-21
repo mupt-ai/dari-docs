@@ -8,11 +8,10 @@ import (
 	"time"
 
 	"github.com/mupt-ai/dari-docs/internal/bundle"
+	"github.com/mupt-ai/dari-docs/internal/flueclient"
 	"github.com/mupt-ai/dari-docs/internal/projectconfig"
 	"github.com/mupt-ai/dari-docs/internal/publicdocs"
-	"github.com/mupt-ai/dari-docs/internal/runner"
 	"github.com/mupt-ai/dari-docs/internal/runtimeenv"
-	"github.com/mupt-ai/dari-docs/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -35,6 +34,9 @@ type checkOptimizeOptions struct {
 	PublicDocURLs  []string
 	PublicDocsOnly bool
 	BundleOptions  bundle.CreateOptions
+
+	TesterURL string
+	EditorURL string
 
 	APIKeyEnv     string
 	APIKey        string
@@ -82,9 +84,7 @@ func newCheckOptimizeCommand(command string) *cobra.Command {
 func defaultCheckOptimizeOptions(command string) *checkOptimizeOptions {
 	return &checkOptimizeOptions{
 		Command:        command,
-		APIKeyEnv:      "DARI_API_KEY",
-		APIBaseURL:     os.Getenv("DARI_API_BASE_URL"),
-		Parallel:       4,
+		Parallel:       1,
 		TimeoutMinutes: 30,
 	}
 }
@@ -93,33 +93,43 @@ func bindCheckOptimizeFlags(cmd *cobra.Command, opts *checkOptimizeOptions) {
 	flags := cmd.Flags()
 	flags.StringArrayVar(&opts.TaskInputs, "task", nil, "implementation task/prompt to test; repeatable")
 	flags.StringArrayVar(&opts.TaskFiles, "tasks-file", nil, "file containing tasks, one per paragraph or bullet; repeatable")
-	flags.StringArrayVar(&opts.SecretEnvs, "secret-env", nil, "runtime product/API secret env var to pass to sessions; repeatable")
+	flags.StringArrayVar(&opts.SecretEnvs, "secret-env", nil, "runtime product/API secret env var to pass to workflow payloads; repeatable")
 	flags.StringArrayVar(&opts.BundleIncludes, "bundle-include", nil, "repo-relative glob to include in the docs bundle in addition to defaults; repeatable")
 	flags.StringArrayVar(&opts.BundleExcludes, "bundle-exclude", nil, "repo-relative glob to exclude from the docs bundle; repeatable")
 	if opts.Command == "check" {
-		flags.StringArrayVar(&opts.PublicDocURLs, "docs-url", nil, "public docs URL for agents to inspect with internet access; repeatable")
+		flags.StringArrayVar(&opts.PublicDocURLs, "docs-url", nil, "public docs URL for the tester workflow to inspect with internet access; repeatable")
 	}
-	flags.StringVar(&opts.APIKeyEnv, "api-key-env", opts.APIKeyEnv, "env var containing Dari API key")
-	flags.StringVar(&opts.APIKey, "api-key", "", "Dari API key (prefer --api-key-env)")
-	flags.StringVar(&opts.APIBaseURL, "api-base-url", opts.APIBaseURL, "Dari API base URL (defaults to production)")
-	flags.StringVar(&opts.FeedbackAgent, "feedback-agent", "", "tester Flue agent ID (defaults to .dari-docs/config.json)")
+	flags.StringVar(&opts.TesterURL, "tester-url", "", "base URL of the deployed tester Flue app (defaults to .dari-docs/config.json)")
 	if opts.Command != "check" {
-		flags.StringVar(&opts.EditorAgent, "editor-agent", "", "editor Flue agent ID (defaults to .dari-docs/config.json)")
+		flags.StringVar(&opts.EditorURL, "editor-url", "", "base URL of the deployed editor Flue app (defaults to .dari-docs/config.json)")
+	}
+	flags.StringVar(&opts.APIKeyEnv, "api-key-env", opts.APIKeyEnv, "unsupported; Dari API keys are not used by Flue deployments")
+	flags.StringVar(&opts.APIKey, "api-key", "", "unsupported; Dari API keys are not used by Flue deployments")
+	flags.StringVar(&opts.APIBaseURL, "api-base-url", opts.APIBaseURL, "unsupported; Dari API URLs are not used by Flue deployments")
+	flags.StringVar(&opts.FeedbackAgent, "feedback-agent", "", "unsupported; use --tester-url for Flue deployments")
+	if opts.Command != "check" {
+		flags.StringVar(&opts.EditorAgent, "editor-agent", "", "unsupported; use --editor-url for Flue deployments")
 	}
 	flags.StringVar(&opts.LLMID, "llm", "", "unsupported; configure the model in the Flue agent project")
 	flags.StringSliceVar(&opts.FeedbackLLMRaw, "feedback-llm", nil, "unsupported; configure the tester model in the Flue agent project")
 	flags.StringVar(&opts.EditorLLMIDFlag, "editor-llm", "", "unsupported; configure the editor model in the Flue agent project")
+	_ = flags.MarkHidden("api-key-env")
+	_ = flags.MarkHidden("api-key")
+	_ = flags.MarkHidden("api-base-url")
+	_ = flags.MarkHidden("feedback-agent")
+	_ = flags.MarkHidden("editor-agent")
 	_ = flags.MarkHidden("llm")
 	_ = flags.MarkHidden("feedback-llm")
 	_ = flags.MarkHidden("editor-llm")
 	flags.StringVar(&opts.OutDir, "out", "", "output directory (default: <repo>/.dari-docs)")
-	flags.IntVar(&opts.Parallel, "parallel", opts.Parallel, "tester sessions per batch")
+	flags.IntVar(&opts.Parallel, "parallel", opts.Parallel, "unsupported; Flue workflow runs are sequential for now")
+	_ = flags.MarkHidden("parallel")
 	if opts.Command != "check" {
 		flags.BoolVar(&opts.Apply, "apply", false, "copy updated docs back into the repo after downloading")
 	}
 	flags.BoolVar(&opts.LiveVerify, "live-verify", false, "allow agents to run safe live verification using provided runtime secrets")
-	flags.BoolVar(&opts.Managed, "managed", false, "unsupported; use deployed Flue agents in your Dari org")
-	flags.BoolVar(&opts.Wait, "wait", false, "unsupported; Flue runs wait for sessions by default")
+	flags.BoolVar(&opts.Managed, "managed", false, "unsupported; hosted managed mode has been removed")
+	flags.BoolVar(&opts.Wait, "wait", false, "unsupported; Flue workflow runs wait by default")
 	_ = flags.MarkHidden("managed")
 	_ = flags.MarkHidden("wait")
 	flags.IntVar(&opts.TimeoutMinutes, "timeout-minutes", opts.TimeoutMinutes, "CLI wait timeout in minutes")
@@ -128,9 +138,9 @@ func bindCheckOptimizeFlags(cmd *cobra.Command, opts *checkOptimizeOptions) {
 
 func checkOptimizeShort(command string) string {
 	if command == "check" {
-		return "Run Flue tester agents against your docs"
+		return "Run a Flue tester app against your docs"
 	}
-	return "Run Flue tester and editor agents against your docs"
+	return "Run Flue tester and editor apps against your docs"
 }
 
 func runCheckOrOptimizeOptions(ctx context.Context, opts *checkOptimizeOptions) error {
@@ -141,7 +151,7 @@ func runCheckOrOptimizeOptions(ctx context.Context, opts *checkOptimizeOptions) 
 		return unsupportedManagedModeError()
 	}
 	if opts.Wait {
-		return fmt.Errorf("--wait is not supported for Flue runs; check and optimize already wait for the Flue sessions to finish")
+		return fmt.Errorf("--wait is not supported for Flue runs; check and optimize already wait for the Flue workflow result")
 	}
 	return runFlueCheckOrOptimize(ctx, *opts)
 }
@@ -261,21 +271,16 @@ func runFlueCheckOrOptimize(ctx context.Context, opts checkOptimizeOptions) erro
 	if err := resolveFlueCheckOptimizeConfig(&opts); err != nil {
 		return err
 	}
-	res, err := runner.Run(ctx, runner.Config{
+	res, err := flueclient.Run(ctx, flueclient.Config{
 		RepoRoot:       opts.RepoRoot,
 		OutDir:         opts.OutDir,
-		APIKey:         opts.APIKey,
-		APIBaseURL:     opts.APIBaseURL,
-		FeedbackAgent:  opts.FeedbackAgent,
-		EditorAgent:    opts.EditorAgent,
-		FeedbackLLMIDs: opts.FeedbackLLMIDs,
-		EditorLLMID:    opts.EditorLLMID,
+		TesterURL:      opts.TesterURL,
+		EditorURL:      opts.EditorURL,
 		Tasks:          opts.Tasks,
 		LiveVerify:     opts.LiveVerify,
 		RuntimeSecrets: opts.RuntimeSecrets,
 		PublicDocURLs:  opts.PublicDocURLs,
 		PublicDocsOnly: opts.PublicDocsOnly,
-		Parallel:       opts.Parallel,
 		SkipEditor:     opts.Command == "check",
 		Timeout:        time.Duration(opts.TimeoutMinutes) * time.Minute,
 		BundleOptions:  opts.BundleOptions,
@@ -284,7 +289,7 @@ func runFlueCheckOrOptimize(ctx context.Context, opts checkOptimizeOptions) erro
 		return err
 	}
 	if opts.Command != "check" && opts.Apply {
-		if err := workspace.CopyTree(res.UpdatedDir, opts.RepoRoot); err != nil {
+		if err := flueclient.ApplyUpdatedDocs(res.UpdatedDir, opts.RepoRoot); err != nil {
 			return fmt.Errorf("apply updated docs: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Applied updated docs into %s\n", opts.RepoRoot)
@@ -295,46 +300,43 @@ func runFlueCheckOrOptimize(ctx context.Context, opts checkOptimizeOptions) erro
 
 func resolveFlueCheckOptimizeConfig(opts *checkOptimizeOptions) error {
 	if opts.LLMID != "" || len(opts.FeedbackLLMRaw) > 0 || opts.EditorLLMIDFlag != "" {
-		return fmt.Errorf("Flue agents do not support --llm, --feedback-llm, or --editor-llm; configure the model in the Flue agent project, then run `dari-docs init --deploy`")
+		return fmt.Errorf("Flue agents do not support --llm, --feedback-llm, or --editor-llm; configure the model in the Flue agent project, then redeploy it")
+	}
+	if opts.APIKey != "" || opts.APIKeyEnv != "" || opts.APIBaseURL != "" || opts.FeedbackAgent != "" || opts.EditorAgent != "" {
+		return fmt.Errorf("Dari API and agent ID flags are not supported; deploy the Flue apps and pass --tester-url/--editor-url")
+	}
+	if opts.Parallel != 1 {
+		return fmt.Errorf("--parallel is not supported for Flue workflow runs yet")
 	}
 	if c, ok, err := projectconfig.Load(opts.RepoRoot); err != nil {
 		return err
 	} else if ok {
 		if c.AgentRuntime != "flue" {
-			return fmt.Errorf("this repo's .dari-docs/config.json was not created for Flue agents; run `dari-docs init --deploy` to deploy the bundled Flue agents")
+			return fmt.Errorf("this repo's .dari-docs/config.json was not created for Flue deployments; run `dari-docs init`")
 		}
-		if opts.FeedbackAgent == "" {
-			opts.FeedbackAgent = c.TesterAgentID
+		if opts.TesterURL == "" {
+			opts.TesterURL = c.TesterURL
 		}
-		if opts.EditorAgent == "" {
-			opts.EditorAgent = c.EditorAgentID
+		if opts.EditorURL == "" {
+			opts.EditorURL = c.EditorURL
 		}
 	}
-	opts.FeedbackLLMIDs = []string{""}
-	opts.EditorLLMID = ""
-	if opts.FeedbackAgent == "" {
-		return fmt.Errorf("missing tester agent ID; run `dari-docs init --deploy` or pass --feedback-agent")
+	if opts.TesterURL == "" {
+		return fmt.Errorf("missing Flue tester URL; deploy .dari-docs/agents/docs-user-tester-agent with `flue build` and pass --tester-url")
 	}
-	if opts.Command != "check" && opts.EditorAgent == "" {
-		return fmt.Errorf("missing tester/editor agent IDs; run `dari-docs init --deploy` or pass --feedback-agent and --editor-agent")
-	}
-	if opts.APIKey == "" && opts.APIKeyEnv != "" {
-		opts.APIKey = os.Getenv(opts.APIKeyEnv)
-	}
-	if opts.APIKey == "" {
-		return fmt.Errorf("missing Dari API key; set %s or pass --api-key", opts.APIKeyEnv)
+	if opts.Command != "check" && opts.EditorURL == "" {
+		return fmt.Errorf("missing Flue editor URL; deploy .dari-docs/agents/docs-editor-agent with `flue build` and pass --editor-url")
 	}
 	return nil
 }
 
-func printCheckOptimizeResult(command, outDir string, apply bool, res runner.Result) {
+func printCheckOptimizeResult(command, outDir string, apply bool, res flueclient.Result) {
 	fmt.Println("\nDone.")
 	if res.BundlePath != "" {
 		fmt.Printf("Bundle: %s\n", res.BundlePath)
 	}
 	fmt.Printf("Feedback: %s\n", filepath.Join(outDir, "aggregate-feedback.md"))
 	if command != "check" {
-		fmt.Printf("Editor session: %s\n", res.EditorSessionID)
 		fmt.Printf("Updated docs: %s\n", res.UpdatedDir)
 		if !apply {
 			fmt.Printf("Review and apply manually, or rerun with --apply.\n")

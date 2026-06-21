@@ -7,10 +7,10 @@ import documentationEditor from '../skills/documentation-editor/SKILL.md' with {
 
 const DEFAULT_MODEL = 'anthropic/claude-sonnet-4-6';
 const WORKSPACE_ROOT = '/tmp/dari-docs-workspaces';
-const PROVIDER_SECRET_NAME_ENVS: Record<string, string> = {
-  anthropic: 'DARI_DOCS_ANTHROPIC_API_KEY_SECRET_NAME',
-  openai: 'DARI_DOCS_OPENAI_API_KEY_SECRET_NAME',
-  openrouter: 'DARI_DOCS_OPENROUTER_API_KEY_SECRET_NAME',
+const PROVIDER_DEFAULT_SECRET_NAMES: Record<string, string> = {
+  anthropic: 'ANTHROPIC_API_KEY',
+  openai: 'OPENAI_API_KEY',
+  openrouter: 'OPENROUTER_API_KEY',
 };
 
 type RuntimeEnv = Record<string, string | undefined>;
@@ -25,7 +25,7 @@ export default createAgent<unknown, RuntimeEnv>(async ({ id, env }) => {
     instructions: systemPrompt,
     skills: [documentationEditor],
     cwd: workspace,
-    sandbox: local({ cwd: workspace }),
+    sandbox: local({ cwd: workspace, env: runtimeSecretEnv(env) }),
   };
 });
 
@@ -35,13 +35,25 @@ function configuredModel(env: RuntimeEnv | undefined): string {
 }
 
 function configureProviderSecrets(env: RuntimeEnv | undefined) {
-  for (const [provider, envName] of Object.entries(PROVIDER_SECRET_NAME_ENVS)) {
-    const secretName = envValue(env, envName).trim();
+  for (const [provider, secretName] of Object.entries(PROVIDER_DEFAULT_SECRET_NAMES)) {
     if (!secretName) continue;
     const apiKey = envValue(env, secretName);
     if (!apiKey) continue;
     configureProvider(provider, { apiKey });
   }
+}
+
+function runtimeSecretEnv(env: RuntimeEnv | undefined): Record<string, string> {
+  const names = envValue(env, 'DARI_DOCS_RUNTIME_SECRET_NAMES')
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean);
+  const out: Record<string, string> = {};
+  for (const name of names) {
+    const value = envValue(env, name);
+    if (value) out[name] = value;
+  }
+  return out;
 }
 
 function envValue(env: RuntimeEnv | undefined, name: string): string {

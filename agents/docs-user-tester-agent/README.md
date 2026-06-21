@@ -1,14 +1,27 @@
 # docs-user-tester-agent
 
-A lightweight dari.dev/Flue agent that simulates a developer using supplied docs to complete one task.
+This is the bundled Flue tester app for `dari-docs`. The HTTP workflow is `.flue/workflows/test.ts`, exposed as:
 
-It is intentionally not a formal docs auditor. It reads the supplied docs context, tries the task in an `attempt/` workspace directory, runs the smallest safe verification it can, then returns brief user-style feedback.
+```text
+POST /workflows/test?wait=result
+```
 
-Used by the `dari-docs` CLI as the fanout testing agent. The Flue entrypoint is `agents/docs-user-tester-agent.ts`; it defaults to `anthropic/claude-sonnet-4-6` and expects a Dari credential exposed as `ANTHROPIC_API_KEY` unless you edit `dari.yml`/the agent code or run `dari-docs init --deploy --anthropic-api-key-secret NAME`.
+The workflow receives a task plus docs files, writes the docs under `input-docs/files/`, and asks the tester agent to try the task in an isolated workspace. It returns structured feedback as Markdown.
 
-## Deploy
+## Run Locally
 
 ```bash
-dari credentials add ANTHROPIC_API_KEY
-dari deploy .
+npm install
+npx flue build --target node
+PORT=8787 ANTHROPIC_API_KEY=... node dist/server.mjs
 ```
+
+Then run:
+
+```bash
+dari-docs check . \
+  --tester-url http://127.0.0.1:8787 \
+  --task "Install the SDK"
+```
+
+The default model is `anthropic/claude-sonnet-4-6`. Change it in `agents/docs-user-tester-agent.ts` before rebuilding if you want another provider or model.

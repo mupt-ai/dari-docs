@@ -8,36 +8,45 @@ import (
 	"github.com/mupt-ai/dari-docs/internal/projectconfig"
 )
 
-func TestResolveFlueConfigUsesRuntimeModel(t *testing.T) {
+func TestResolveFlueConfigUsesDeploymentURLs(t *testing.T) {
 	repo := t.TempDir()
-	cfg := projectconfig.Config{TesterAgentID: "agt_tester", EditorAgentID: "agt_editor", AgentRuntime: "flue"}
+	cfg := projectconfig.Config{TesterURL: "https://tester.example", EditorURL: "https://editor.example", AgentRuntime: "flue"}
 	if err := projectconfig.Save(repo, cfg); err != nil {
 		t.Fatal(err)
 	}
-	opts := checkOptimizeOptions{Command: "check", RepoRoot: repo, APIKey: "dari_test"}
+	opts := checkOptimizeOptions{Command: "optimize", RepoRoot: repo, Parallel: 1}
 
 	if err := resolveFlueCheckOptimizeConfig(&opts); err != nil {
 		t.Fatal(err)
 	}
-
-	if opts.FeedbackAgent != "agt_tester" {
-		t.Fatalf("FeedbackAgent = %q", opts.FeedbackAgent)
-	}
-	if len(opts.FeedbackLLMIDs) != 1 || opts.FeedbackLLMIDs[0] != "" {
-		t.Fatalf("FeedbackLLMIDs = %#v, want one empty Flue llm marker", opts.FeedbackLLMIDs)
+	if opts.TesterURL != cfg.TesterURL || opts.EditorURL != cfg.EditorURL {
+		t.Fatalf("urls = %q/%q, want %q/%q", opts.TesterURL, opts.EditorURL, cfg.TesterURL, cfg.EditorURL)
 	}
 }
 
 func TestResolveFlueConfigRejectsLLMFlag(t *testing.T) {
 	repo := t.TempDir()
-	if err := projectconfig.Save(repo, projectconfig.Config{TesterAgentID: "agt_tester", AgentRuntime: "flue"}); err != nil {
+	if err := projectconfig.Save(repo, projectconfig.Config{TesterURL: "https://tester.example", AgentRuntime: "flue"}); err != nil {
 		t.Fatal(err)
 	}
-	opts := checkOptimizeOptions{Command: "check", RepoRoot: repo, APIKey: "dari_test", LLMID: "claude-sonnet-4-6"}
+	opts := checkOptimizeOptions{Command: "check", RepoRoot: repo, Parallel: 1, LLMID: "claude-sonnet-4-6"}
 
 	err := resolveFlueCheckOptimizeConfig(&opts)
 	if err == nil || !strings.Contains(err.Error(), "Flue agents do not support") {
 		t.Fatalf("err = %v, want Flue LLM rejection", err)
+	}
+}
+
+func TestResolveFlueConfigRejectsDariFlags(t *testing.T) {
+	repo := t.TempDir()
+	if err := projectconfig.Save(repo, projectconfig.Config{TesterURL: "https://tester.example", AgentRuntime: "flue"}); err != nil {
+		t.Fatal(err)
+	}
+	opts := checkOptimizeOptions{Command: "check", RepoRoot: repo, Parallel: 1, APIKey: "dari_test"}
+
+	err := resolveFlueCheckOptimizeConfig(&opts)
+	if err == nil || !strings.Contains(err.Error(), "Dari API and agent ID flags are not supported") {
+		t.Fatalf("err = %v, want Dari flag rejection", err)
 	}
 }
 
@@ -46,23 +55,21 @@ func TestResolveFlueConfigRejectsLegacyConfig(t *testing.T) {
 	if err := projectconfig.Save(repo, projectconfig.Config{TesterAgentID: "agt_tester"}); err != nil {
 		t.Fatal(err)
 	}
-	opts := checkOptimizeOptions{Command: "check", RepoRoot: repo, APIKey: "dari_test"}
+	opts := checkOptimizeOptions{Command: "check", RepoRoot: repo, Parallel: 1}
 
 	err := resolveFlueCheckOptimizeConfig(&opts)
-	if err == nil || !strings.Contains(err.Error(), "was not created for Flue agents") {
+	if err == nil || !strings.Contains(err.Error(), "was not created for Flue deployments") {
 		t.Fatalf("err = %v, want legacy config rejection", err)
 	}
 }
 
-func TestResolveFlueConfigAllowsExplicitAgentsWithoutConfig(t *testing.T) {
+func TestResolveFlueConfigRequiresTesterURL(t *testing.T) {
 	repo := t.TempDir()
-	opts := checkOptimizeOptions{Command: "optimize", RepoRoot: repo, APIKey: "dari_test", FeedbackAgent: "agt_tester", EditorAgent: "agt_editor"}
+	opts := checkOptimizeOptions{Command: "check", RepoRoot: repo, Parallel: 1}
 
-	if err := resolveFlueCheckOptimizeConfig(&opts); err != nil {
-		t.Fatal(err)
-	}
-	if len(opts.FeedbackLLMIDs) != 1 || opts.FeedbackLLMIDs[0] != "" || opts.EditorLLMID != "" {
-		t.Fatalf("LLM settings = feedback %#v editor %q, want Flue runtime defaults", opts.FeedbackLLMIDs, opts.EditorLLMID)
+	err := resolveFlueCheckOptimizeConfig(&opts)
+	if err == nil || !strings.Contains(err.Error(), "missing Flue tester URL") {
+		t.Fatalf("err = %v, want tester URL error", err)
 	}
 }
 

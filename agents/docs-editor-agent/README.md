@@ -1,28 +1,28 @@
 # docs-editor-agent
 
-A dari.dev/Flue agent that applies documentation feedback to user-supplied docs.
+This is the bundled Flue editor app for `dari-docs`. The HTTP workflow is `.flue/workflows/edit.ts`, exposed as:
 
-The Flue entrypoint is `agents/docs-editor-agent.ts`; it defaults to `anthropic/claude-sonnet-4-6` and expects a Dari credential exposed as `ANTHROPIC_API_KEY` unless you edit `dari.yml`/the agent code or run `dari-docs init --deploy --anthropic-api-key-secret NAME`.
+```text
+POST /workflows/edit?wait=result
+```
 
-Pair it with the docs user tester:
+The workflow receives docs files plus aggregate tester feedback and returns proposed files for the CLI to write under `.dari-docs/updated/`.
 
-1. Run `docs-user-tester-agent` with an implementation task and supplied docs context.
-2. Pass the tester feedback plus the docs source files to `docs-editor-agent`.
-3. The editor updates markdown/MDX/README/API docs when source files are available, validates the changes when possible, and reports what was changed or left unresolved.
-
-## Safety
-
-- Does not invent product behavior.
-- Does not ask for raw secrets.
-- Uses environment variable names or platform secrets for credential-dependent verification.
-- Avoids production-mutating tests unless explicitly requested and documented as safe.
-
-## Validate/deploy
+## Run Locally
 
 ```bash
-cd docs-editor-agent
 npm install
 npx flue build --target node
-dari deploy --dry-run .
-dari deploy .
+PORT=8788 ANTHROPIC_API_KEY=... node dist/server.mjs
 ```
+
+Use it with a tester app:
+
+```bash
+dari-docs optimize . \
+  --tester-url http://127.0.0.1:8787 \
+  --editor-url http://127.0.0.1:8788 \
+  --task "Install the SDK"
+```
+
+The default model is `anthropic/claude-sonnet-4-6`. Change it in `agents/docs-editor-agent.ts` before rebuilding if you want another provider or model.

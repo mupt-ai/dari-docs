@@ -1,75 +1,103 @@
-# Flue Agent Usage
+# Flue App Setup
 
-Dari Docs runs Flue agents in your dari.dev org. Flue is the agent runtime used by dari.dev, and a Flue agent is a deployed program that can read inputs, call tools, and work in a remote session workspace. A dari.dev org is your team workspace/account. The bundled tester and editor agents are regular Flue projects: each folder has a `dari.yml`, `package.json`, TypeScript agent entrypoint, prompts, and skills.
+`dari-docs` runs against Flue apps that you deploy. Flue is the JavaScript agent runtime that builds a Node server from agent code and workflow files. The CLI does not deploy agents for you and does not require a separate service API key. It only needs the base URL of a deployed tester app, and for `optimize`, the base URL of a deployed editor app.
 
-## Set up the agents
+## Initialize
 
-From the repo that contains your docs, store the model provider key in your Dari org, export a Dari API key, and deploy the bundled agents. Create or copy the Dari API key from your dari.dev dashboard. If your org uses scoped keys, grant permissions to deploy agents, upload files, create sessions, read session transcripts, and download session workspaces. This setup also requires the `dari` CLI because `dari-docs init --deploy` runs `dari deploy` for the agent projects.
-
-```bash
-dari auth login
-dari credentials add ANTHROPIC_API_KEY # paste your Anthropic key when prompted
-export DARI_API_KEY=... # create or copy a dari.dev API key for this org
-dari-docs init --deploy
-```
-
-`dari-docs init --deploy` extracts the agent projects into `.dari-docs/agents/`, deploys them with `dari deploy`, and writes their agent IDs to `.dari-docs/config.json`.
-
-If your org stores the Anthropic key under a different Dari credential name, pass it during init:
+Run init in the repository that contains your docs:
 
 ```bash
-dari-docs init --deploy --anthropic-api-key-secret TEAM_ANTHROPIC_KEY
+dari-docs init
 ```
 
-## Run checks
+This extracts two normal Flue projects:
 
-Run `check` to have tester agents try one or more tasks from your docs:
+```text
+.dari-docs/agents/docs-user-tester-agent/
+.dari-docs/agents/docs-editor-agent/
+```
+
+Each project includes `package.json`, `flue.config.ts`, an agent entrypoint under `agents/`, prompts, skills, and one HTTP workflow under `.flue/workflows/`.
+
+## Build And Run
+
+The bundled apps target Node because the agents use a local sandbox for shell commands and file writes. The sandbox gives the agent a working directory and command runner; it is not a hardened jail. Run these apps on hosts and networks you are comfortable letting an agent use. Use Node 20 or newer. The default model is `anthropic/claude-sonnet-4-6`, so the examples set `ANTHROPIC_API_KEY`.
+
+Tester app:
+
+```bash
+cd .dari-docs/agents/docs-user-tester-agent
+npm install
+npx flue build --target node
+PORT=8787 ANTHROPIC_API_KEY=... node dist/server.mjs
+```
+
+Editor app:
+
+```bash
+cd .dari-docs/agents/docs-editor-agent
+npm install
+npx flue build --target node
+PORT=8788 ANTHROPIC_API_KEY=... node dist/server.mjs
+```
+
+For production, deploy `dist/`, `package.json`, and `package-lock.json` using your normal Node hosting platform. Install dependencies on the host with `npm ci --omit=dev` and start the server with `PORT=$PORT node dist/server.mjs`. Use a host that supports a persistent Node HTTP server, such as Render, Fly.io, Railway, a VM with systemd, ECS, or Kubernetes. Set the same provider environment variables there. The important output is the base URL of each app, for example `https://docs-tester.example.com`.
+
+The workflow URLs must be reachable by the `dari-docs` CLI. The bundled CLI does not add an authorization header, so if the apps are exposed outside a private network, protect them with network controls that still allow your CLI environment to reach them, such as a VPN, private ingress, or firewall rules.
+
+## Run Checks
 
 ```bash
 dari-docs check . \
+  --tester-url https://docs-tester.example.com \
   --task "Install the SDK and make a first API call"
 ```
 
-Feedback is written to `.dari-docs/aggregate-feedback.md`, with individual reports under `.dari-docs/runs/`. Completed feedback is not a pass/fail score; read it to decide what to fix.
+`check` sends the docs bundle and task to `POST /workflows/test?wait=result` on the tester app. It writes reports to `.dari-docs/runs/` and `.dari-docs/aggregate-feedback.md`.
 
-## Generate proposed edits
-
-Run `optimize` to collect tester feedback and ask the editor agent to produce documentation changes:
+## Run Optimize
 
 ```bash
 dari-docs optimize . \
+  --tester-url https://docs-tester.example.com \
+  --editor-url https://docs-editor.example.com \
   --task "Install the SDK and make a first API call"
 ```
 
-Proposed changes are downloaded into `.dari-docs/updated/`. Review that directory and copy changes into your repo when ready, or let the CLI apply them after download. With `--apply`, regular files from `.dari-docs/updated/` are copied into your repo and existing files at the same paths are overwritten. It does not apply a patch or delete files that are absent from the update.
+`optimize` runs the tester workflow first, then sends the aggregate feedback and source docs to `POST /workflows/edit?wait=result` on the editor app. Proposed files are written to `.dari-docs/updated/`.
+
+Use `--apply` only after you are comfortable overwriting matching files in your repo:
 
 ```bash
 dari-docs optimize . \
+  --tester-url https://docs-tester.example.com \
+  --editor-url https://docs-editor.example.com \
   --apply \
-  --task "Install the SDK and make a first API call"
+  --task "Install the SDK"
 ```
 
-## Use existing Flue agents
+## Save URLs
 
-If you have already deployed compatible Flue agents, pass their IDs directly:
+To avoid passing URLs every time, save them in `.dari-docs/config.json`:
 
 ```bash
-dari-docs check . \
-  --feedback-agent agt_... \
-  --task "Install the SDK"
-
-dari-docs optimize . \
-  --feedback-agent agt_... \
-  --editor-agent agt_... \
-  --task "Install the SDK"
+dari-docs init \
+  --tester-url https://docs-tester.example.com \
+  --editor-url https://docs-editor.example.com
 ```
 
-Compatible agents should follow the same contract as the bundled templates: the tester receives a docs bundle or public docs URL plus one task and returns task-focused feedback; the editor receives source docs plus tester feedback and writes proposed files for download.
+You can edit `.dari-docs/config.json` later or override the saved values with command flags.
 
-## Choose models and credentials
+## Model Configuration
 
-Model choice lives in the Flue agent project. The bundled agents default to `anthropic/claude-sonnet-4-6` in `agents/<name>.ts` and declare the Dari credential name `ANTHROPIC_API_KEY` in `dari.yml`.
+Model choice belongs to the Flue app, not to `dari-docs check` flags. Edit the agent TypeScript files to change model or provider, then rebuild and redeploy the app.
 
-To change models, edit the agent TypeScript entrypoints and update `dari.yml` if the provider needs a different stored credential. Then redeploy with `dari-docs init --deploy` or run `dari deploy` from each agent folder.
+The default provider key names are:
 
-`dari-docs check` and `dari-docs optimize` do not choose per-session LLMs for Flue agents. Keep model configuration with the agent code so deployed runs are predictable.
+```text
+ANTHROPIC_API_KEY
+OPENAI_API_KEY
+OPENROUTER_API_KEY
+```
+
+Set the key used by your chosen provider in the Flue app deployment environment. Do not put model provider keys in your docs repo or pass them as live verification secrets.

@@ -15,7 +15,7 @@ func execute(args []string) error {
 func newRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "dari-docs",
-		Short:         "Run Flue agents to test and improve docs",
+		Short:         "Run Flue apps to test and improve docs",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       version,
@@ -50,7 +50,7 @@ func newVersionCommand() *cobra.Command {
 }
 
 func unsupportedManagedModeError() error {
-	return fmt.Errorf("the hosted/managed Dari Docs path is not supported in this CLI; use Flue agents in your Dari org instead:\n  dari auth login\n  dari credentials add ANTHROPIC_API_KEY\n  export DARI_API_KEY=...\n  dari-docs init --deploy\n  dari-docs check . --task \"Install the SDK\"")
+	return fmt.Errorf("the hosted/managed Dari Docs path is not supported in this CLI; deploy the Flue apps yourself and run against their URLs instead:\n  dari-docs init\n  cd .dari-docs/agents/docs-user-tester-agent && npm install && npx flue build --target node\n  dari-docs check . --tester-url https://your-tester.example --task \"Install the SDK\"")
 }
 
 func newUnsupportedManagedCommand(use string) *cobra.Command {
