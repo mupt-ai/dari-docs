@@ -8,6 +8,7 @@
 .dari-docs/agents/docs-user-tester-agent/
   flue.config.ts
   package.json
+  bun.lock
   agents/docs-user-tester-agent.ts
   .flue/workflows/test.ts
   prompts/system.md
@@ -16,6 +17,7 @@
 .dari-docs/agents/docs-editor-agent/
   flue.config.ts
   package.json
+  bun.lock
   agents/docs-editor-agent.ts
   .flue/workflows/edit.ts
   prompts/system.md
@@ -50,9 +52,9 @@ const DEFAULT_MODEL = 'anthropic/claude-sonnet-4-6';
 Change that constant or add your own environment-based selection. Then rebuild and redeploy:
 
 ```bash
-npm install
-npx flue build --target node
-PORT=8787 ANTHROPIC_API_KEY=... node dist/server.mjs
+bun install --frozen-lockfile
+bun run build
+PORT=8787 ANTHROPIC_API_KEY=... bun run start
 ```
 
 Set the provider key in the deployment environment. The bundled code recognizes the usual provider env vars: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `OPENROUTER_API_KEY`. It also accepts per-run model overrides from the workflow payload; short common model IDs are normalized (`claude-*` to `anthropic/claude-*`, `gpt-*` to `openai/gpt-*`).
@@ -64,8 +66,8 @@ Edit `prompts/system.md` to change the persistent agent instructions. Edit the s
 After changes, run a local smoke test before deploying:
 
 ```bash
-npx flue build --target node
-PORT=8787 ANTHROPIC_API_KEY=... node dist/server.mjs
+bun run build
+PORT=8787 ANTHROPIC_API_KEY=... bun run start
 ```
 
 Then in another terminal:

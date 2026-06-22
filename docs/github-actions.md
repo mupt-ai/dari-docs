@@ -76,12 +76,14 @@ For quick experiments, you can build and start the tester app inside the job. Th
 - name: Extract Flue apps
   run: dari-docs init
 
+- uses: oven-sh/setup-bun@v2
+
 - name: Start tester app
   working-directory: .dari-docs/agents/docs-user-tester-agent
   run: |
-    npm install
-    npx flue build --target node
-    PORT=8787 ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" node dist/server.mjs > /tmp/dari-docs-tester.log 2>&1 &
+    bun install --frozen-lockfile
+    bun run build
+    PORT=8787 ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" bun run start > /tmp/dari-docs-tester.log 2>&1 &
     echo $! > /tmp/dari-docs-tester.pid
   env:
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

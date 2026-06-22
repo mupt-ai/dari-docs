@@ -37,8 +37,14 @@ func TestExtractedAgentsAreFlueProjects(t *testing.T) {
 			t.Fatalf("%s missing Flue workflow %s: %v", tt.name, tt.workflow, err)
 		}
 		pkg := readText(t, filepath.Join(agentDir, "package.json"))
-		if !strings.Contains(pkg, "@flue/runtime") || !strings.Contains(pkg, "@flue/cli") || !strings.Contains(pkg, "valibot") {
-			t.Fatalf("%s package.json missing Flue dependencies:\n%s", tt.name, pkg)
+		if !strings.Contains(pkg, "@flue/runtime") || !strings.Contains(pkg, "@flue/cli") || !strings.Contains(pkg, "valibot") || !strings.Contains(pkg, "bun@") {
+			t.Fatalf("%s package.json missing Flue/Bun dependencies:\n%s", tt.name, pkg)
+		}
+		if _, err := os.Stat(filepath.Join(agentDir, "bun.lock")); err != nil {
+			t.Fatalf("%s missing Bun lockfile: %v", tt.name, err)
+		}
+		if _, err := os.Stat(filepath.Join(agentDir, "package-lock.json")); !os.IsNotExist(err) {
+			t.Fatalf("%s should not embed npm package-lock.json, stat err=%v", tt.name, err)
 		}
 		if _, err := os.Stat(filepath.Join(agentDir, "node_modules")); !os.IsNotExist(err) {
 			t.Fatalf("%s should not embed node_modules, stat err=%v", tt.name, err)

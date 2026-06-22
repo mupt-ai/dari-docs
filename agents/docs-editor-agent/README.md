@@ -11,9 +11,9 @@ The workflow receives docs files plus aggregate tester feedback and returns prop
 ## Run Locally
 
 ```bash
-npm install
-npx flue build --target node
-PORT=8788 ANTHROPIC_API_KEY=... node dist/server.mjs
+bun install --frozen-lockfile
+bun run build
+PORT=8788 ANTHROPIC_API_KEY=... bun run start
 ```
 
 Use it with a tester app:

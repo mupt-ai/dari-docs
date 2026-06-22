@@ -11,9 +11,9 @@ The workflow receives a task plus docs files, writes the docs under `input-docs/
 ## Run Locally
 
 ```bash
-npm install
-npx flue build --target node
-PORT=8787 ANTHROPIC_API_KEY=... node dist/server.mjs
+bun install --frozen-lockfile
+bun run build
+PORT=8787 ANTHROPIC_API_KEY=... bun run start
 ```
 
 Then run:

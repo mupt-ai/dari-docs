@@ -13,8 +13,8 @@ Usage:
 
 Setup:
   dari-docs init
-  cd .dari-docs/agents/docs-user-tester-agent && npm install && npx flue build --target node
-  cd ../docs-editor-agent && npm install && npx flue build --target node
+  cd .dari-docs/agents/docs-user-tester-agent && bun install --frozen-lockfile && bun run build && bun run start
+  cd ../docs-editor-agent && bun install --frozen-lockfile && bun run build && bun run start
 
 Important flags:
   --tester-url URL            base URL of the deployed tester Flue app

@@ -20,9 +20,9 @@ After editing an app template, validate it from that app folder:
 
 ```bash
 cd agents/docs-user-tester-agent
-npm install
-npx flue build --target node
-PORT=8787 ANTHROPIC_API_KEY=... node dist/server.mjs
+bun install --frozen-lockfile
+bun run build
+PORT=8787 ANTHROPIC_API_KEY=... bun run start
 ```
 
 In another terminal, run a local check against that app:
@@ -37,8 +37,8 @@ Repeat the same build check for `agents/docs-editor-agent` when you change the e
 
 ```bash
 cd agents/docs-editor-agent
-npm install
-npx flue build --target node
+bun install --frozen-lockfile
+bun run build
 ```
 
 A full local optimize smoke test needs both apps running on different ports and both URLs passed to `dari-docs optimize`.

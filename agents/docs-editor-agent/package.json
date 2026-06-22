@@ -3,6 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "packageManager": "bun@1.3.13",
+  "scripts": {
+    "build": "flue build --target node",
+    "start": "node dist/server.mjs",
+    "dev": "flue dev --target node"
+  },
   "dependencies": {
     "@flue/cli": "0.10.1",
     "@flue/runtime": "0.10.1",

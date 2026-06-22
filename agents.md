@@ -19,7 +19,7 @@ They are ordinary Flue projects. Each app has `package.json`, `flue.config.ts`, 
 - `docs-user-tester-agent` exposes `POST /workflows/test?wait=result`.
 - `docs-editor-agent` exposes `POST /workflows/edit?wait=result`.
 
-Users deploy these apps with Flue and their own Node host, then pass the base URLs to `dari-docs check` and `dari-docs optimize` with `--tester-url` and `--editor-url`.
+Users run or deploy these apps with Bun, then pass the base URLs to `dari-docs check` and `dari-docs optimize` with `--tester-url` and `--editor-url`.
 
 ## Model Configuration
 

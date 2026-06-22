@@ -323,10 +323,10 @@ func resolveFlueCheckOptimizeConfig(opts *checkOptimizeOptions) error {
 		}
 	}
 	if opts.TesterURL == "" {
-		return fmt.Errorf("missing Flue tester URL; deploy .dari-docs/agents/docs-user-tester-agent with `flue build` and pass --tester-url")
+		return fmt.Errorf("missing Flue tester URL; run .dari-docs/agents/docs-user-tester-agent with `bun run build && bun run start` and pass --tester-url")
 	}
 	if opts.Command != "check" && opts.EditorURL == "" {
-		return fmt.Errorf("missing Flue editor URL; deploy .dari-docs/agents/docs-editor-agent with `flue build` and pass --editor-url")
+		return fmt.Errorf("missing Flue editor URL; run .dari-docs/agents/docs-editor-agent with `bun run build && bun run start` and pass --editor-url")
 	}
 	return nil
 }
