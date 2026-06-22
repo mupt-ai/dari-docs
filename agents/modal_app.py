@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import asyncio
 import os
 import time
@@ -20,7 +18,7 @@ def ignore_template_artifacts(path: Path) -> bool:
     return any(part in {".dari", "node_modules", "dist"} for part in path.parts)
 
 
-base_agent_image = (
+runtime_image = (
     modal.Image.debian_slim(python_version="3.13")
     .apt_install("ca-certificates", "curl", "gnupg")
     .run_commands(
@@ -28,34 +26,28 @@ base_agent_image = (
         "apt-get install -y nodejs",
         f"npm install -g bun@{BUN_VERSION}",
     )
-)
-
-gateway_image = modal.Image.debian_slim(python_version="3.13").pip_install(
-    "fastapi==0.125.0",
-    "httpx==0.28.1",
-)
-
-
-def agent_image(name: str, remote_path: str) -> modal.Image:
-    return (
-        base_agent_image.add_local_dir(
-            APP_ROOT / name,
-            remote_path=remote_path,
-            copy=True,
-            ignore=ignore_template_artifacts,
-        )
-        .workdir(remote_path)
-        .run_commands("bun install --frozen-lockfile", "bun run build")
+    .pip_install("fastapi==0.125.0", "httpx==0.28.1")
+    .add_local_dir(
+        APP_ROOT / "docs-user-tester-agent",
+        remote_path="/app/tester",
+        copy=True,
+        ignore=ignore_template_artifacts,
     )
-
-
-tester_image = agent_image("docs-user-tester-agent", "/app/tester")
-editor_image = agent_image("docs-editor-agent", "/app/editor")
+    .add_local_dir(
+        APP_ROOT / "docs-editor-agent",
+        remote_path="/app/editor",
+        copy=True,
+        ignore=ignore_template_artifacts,
+    )
+    .run_commands(
+        "cd /app/tester && bun install --frozen-lockfile && bun run build",
+        "cd /app/editor && bun install --frozen-lockfile && bun run build",
+    )
+)
 
 
 def invoke_workflow_in_sandbox(
     *,
-    image: modal.Image,
     workdir: str,
     workflow: str,
     body: bytes,
@@ -68,7 +60,7 @@ def invoke_workflow_in_sandbox(
         "run",
         "start",
         app=app,
-        image=image,
+        image=runtime_image,
         workdir=workdir,
         env={"PORT": str(PORT)},
         secrets=[model_secret],
@@ -108,7 +100,7 @@ def wait_for_health(client, base_url: str) -> None:
     raise RuntimeError(f"Flue sandbox did not become healthy: {last_error}")
 
 
-def gateway_app(*, workflow: str, image: modal.Image, workdir: str, service: str):
+def gateway_app(*, workflow: str, workdir: str, service: str):
     from fastapi import FastAPI, Request, Response
 
     web = FastAPI()
@@ -122,7 +114,6 @@ def gateway_app(*, workflow: str, image: modal.Image, workdir: str, service: str
         body = await request.body()
         status, media_type, content = await asyncio.to_thread(
             invoke_workflow_in_sandbox,
-            image=image,
             workdir=workdir,
             workflow=workflow,
             body=body,
@@ -134,7 +125,7 @@ def gateway_app(*, workflow: str, image: modal.Image, workdir: str, service: str
 
 
 @app.function(
-    image=gateway_image,
+    image=runtime_image,
     timeout=3700,
     max_containers=50,
     scaledown_window=300,
@@ -144,14 +135,13 @@ def gateway_app(*, workflow: str, image: modal.Image, workdir: str, service: str
 def tester():
     return gateway_app(
         workflow="test",
-        image=tester_image,
         workdir="/app/tester",
         service="docs-user-tester-agent",
     )
 
 
 @app.function(
-    image=gateway_image,
+    image=runtime_image,
     timeout=3700,
     max_containers=20,
     scaledown_window=300,
@@ -161,7 +151,6 @@ def tester():
 def editor():
     return gateway_app(
         workflow="edit",
-        image=editor_image,
         workdir="/app/editor",
         service="docs-editor-agent",
     )
