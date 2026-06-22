@@ -1,60 +1,40 @@
-# Bundled dari.dev agents
+# Bundled Flue Agents
 
-## Code style
-
-Do not add trivial wrapper functions that only forward to another function without adding behavior or clarity. Inline direct calls instead (for example, use `runner.DefaultFeedbackLLMIDs()` directly rather than defining a local `defaultFeedbackLLMIDs()` wrapper).
-
-## UI copy casing
-
-In the web app, user-facing labels, headings, navigation items, button text, empty-state titles, table headings, badges, and short UI actions should start with uppercase letters for each important word (for example, `New Agent`, `Buy Credits`, `API Keys`). Longer explanatory sentences may use normal sentence casing, but must still start with an uppercase letter.
-
-## Local Compose
-
-`compose.yaml` defaults to Docker-assigned localhost ports so multiple worktrees can run in parallel. Discover them with:
-
-```bash
-docker compose port backend 8080
-docker compose port frontend 5173
-```
-
-The agent template folders live at the repo root:
+`dari-docs` ships two Flue agent templates plus a Modal deploy file under `agents/`:
 
 ```text
-agents/docs-user-tester-agent/dari.yml
-agents/docs-editor-agent/dari.yml
+agents/modal_app.py
+agents/docs-user-tester-agent/
+agents/docs-editor-agent/
 ```
 
-They are normal dari.dev agent projects: folders with `dari.yml`, prompts, skills, and setup scripts. There is no special `dari-docs` runtime hidden inside them; they are generic agents that can be inspected, edited, versioned, and reused in other contexts. The CLI embeds these folders into the Go binary.
-
-- `docs-user-tester-agent` — lightweight simulated-user testing agent
-- `docs-editor-agent` — remote editor agent
-
-`dari-docs init` extracts them into:
+`dari-docs init` extracts them into the user's repo:
 
 ```text
+.dari-docs/agents/modal_app.py
 .dari-docs/agents/docs-user-tester-agent/
 .dari-docs/agents/docs-editor-agent/
 ```
 
-`dari-docs init --deploy` deploys those agents into the user's current dari.dev org and writes their agent IDs to `.dari-docs/config.json`. Once deployed, dari.dev gives each agent a hosted endpoint, which lets `dari-docs` fan out isolated tester and editor sessions without running local agent workers.
+They are ordinary Flue projects. Each agent has `package.json`, `bun.lock`, `flue.config.ts`, a TypeScript agent entrypoint under `agents/`, prompts, skills, `.flue/app.ts`, and one HTTP workflow under `.flue/workflows/`.
 
-## LLM configuration
+- `docs-user-tester-agent` exposes `POST /workflows/test?wait=result`.
+- `docs-editor-agent` exposes `POST /workflows/edit?wait=result`.
 
-By default the templates omit `llm.api_key_secret`, so dari.dev uses the platform-managed OpenAI or Anthropic credential for each option. Claude options use `provider: anthropic`, and GPT options use `provider: openai`.
+The intended deployment is Modal:
 
-For BYOK at publish time, create provider-specific dari.dev credentials and pass `--anthropic-api-key-secret` and/or `--openai-api-key-secret` to `dari-docs init --deploy`. The CLI sets `api_key_secret` only on matching `llm.options` entries. No per-session LLM key is required by `dari-docs`.
+```bash
+uvx modal deploy .dari-docs/agents/modal_app.py
+```
 
-The bundled agents define these LLM option IDs for runtime selection:
+`modal_app.py` deploys the tester and editor as separate Modal gateway endpoints. The gateway functions do not run the agents directly; each workflow request creates a fresh `modal.Sandbox`, starts the matching Flue server inside that sandbox, forwards the workflow call, and terminates the sandbox after the result. With `dari-docs check --parallel 30`, the CLI can keep many sandbox-backed tester workflows in flight and aggregate them after completion.
 
-- `claude-haiku-4-5`
-- `claude-sonnet-4-6`
-- `claude-opus-4-7`
-- `gpt-5-mini`
-- `gpt-5.1`
-- `gpt-5.5`
+## Model Configuration
 
-Self-managed runs use all of these tester LLM options per task by default. Pass one option to all sessions with `--llm`, or override the tester matrix with repeated/comma-separated `--feedback-llm`.
+The templates put the default model in `agents/<name>.ts` and default to `anthropic/claude-sonnet-4-6`. Put model provider keys in the Modal secret, or edit the model/provider code and set the provider key required by that provider.
 
-## Runtime product/API secrets
+`dari-docs` can request a per-run model in the workflow payload with `--llm`, `--feedback-llm`, and `--editor-llm`. A model string can use the provider/model format expected by Flue, such as `anthropic/claude-sonnet-4-6`; the bundled agents also normalize common short IDs such as `claude-sonnet-4-6` and `gpt-5.5`.
 
-Runtime product/API keys are separate from LLM credentials. `dari-docs --live-verify --secret-env NAME` passes runtime product/API keys directly to sessions as environment variables for that run only.
+## Runtime Product/API Secrets
+
+Runtime product/API keys are separate from model provider credentials. `dari-docs --live-verify --secret-env NAME` reads local environment variables and sends them in the workflow payload for that run only. The bundled workflows expose those values to the sandbox environment and instruct agents not to print secret values.

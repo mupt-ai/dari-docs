@@ -3,51 +3,33 @@ package main
 import "fmt"
 
 func usage() {
-	fmt.Print(`dari-docs runs lightweight user-test sessions, feeds the results into a hosted editor, and pulls updated docs back to your repo.
+	fmt.Print(`dari-docs runs deployed Flue tester and editor apps against your documentation.
 
 Usage:
   dari-docs --version
-  dari-docs auth login
-  dari-docs auth status
-  dari-docs auth api-key create --name github-actions
-  dari-docs auth api-key list
-  dari-docs auth api-key revoke <api-key-id>
-  dari-docs auth logout [--all] [--interactive-only|--automation-only]
   dari-docs init [repo]
-  dari-docs billing balance
-  dari-docs runs status <run-id>
-  dari-docs runs wait <run-id>
-  dari-docs runs feedback <run-id>
-  dari-docs runs download <run-id> [repo]
-  dari-docs runs apply <run-id> [repo]
-  dari-docs optimize [repo|docs-url] --task "Implement auth" [--task "Set up webhooks"] [flags]
-  dari-docs check [repo|docs-url] --task "Implement auth" [flags]
+  dari-docs check [repo|docs-url] --tester-url URL --task "Implement auth" [flags]
+  dari-docs optimize [repo] --tester-url URL --editor-url URL --task "Implement auth" [flags]
 
-Managed setup:
-  dari-docs auth login
-
-Self-managed setup:
-  export DARI_API_KEY=...
-  dari-docs init --deploy
+Setup:
+  dari-docs init
+  cd .dari-docs/agents/docs-user-tester-agent && bun install --frozen-lockfile && bun run build && bun run start
+  cd ../docs-editor-agent && bun install --frozen-lockfile && bun run build && bun run start
 
 Important flags:
+  --tester-url URL            base URL of the deployed tester Flue app
+  --editor-url URL            base URL of the deployed editor Flue app
   --task TEXT                 task/prompt to test; repeatable
   --tasks-file PATH           tasks file; repeatable
+  --llm MODEL                 request a model for tester/editor workflows
+  --feedback-llm MODEL        request tester model(s); repeatable or comma-separated
+  --editor-llm MODEL          request editor model for optimize
   --live-verify               permit safe credential-dependent checks
-  --secret-env NAME           pass runtime product/API key from env var; repeatable
-  --managed                   use the managed dari-docs service instead of your Dari org
-  --wait                      wait for a managed run to finish before exiting
+  --secret-env NAME           pass runtime product/API key to Flue workflow payload; repeatable
   --bundle-include GLOB       include extra repo-relative docs bundle paths; repeatable
   --bundle-exclude GLOB       exclude repo-relative docs bundle paths; repeatable
-  --docs-url URL              give agents a public docs URL to use with internet access; repeatable
-  --apply                     copy downloaded updated docs back into repo
-  --api-base-url URL          Dari API base URL; self-managed only
-  --parallel N                tester sessions per batch; self-managed only
-  --llm ID                    select an LLM option for all sessions
-  --feedback-llm ID           select tester LLM option(s); repeat or comma-separate; supports all, claude, gpt
-  --editor-llm ID             select a manifest LLM option for the editor session
-  --anthropic-api-key-secret  stored Dari credential name for Anthropic BYOK deploys
-  --openai-api-key-secret     stored Dari credential name for OpenAI BYOK deploys
+  --docs-url URL              give tester agents a public docs URL to use with internet access; repeatable
+  --apply                     copy downloaded updated docs back into repo after optimize
 
 Init outputs:
   .dari-docs/config.json
@@ -57,7 +39,6 @@ Run outputs:
   .dari-docs/input-docs-bundle.tar.gz
   .dari-docs/runs/feedback-*.md
   .dari-docs/aggregate-feedback.md
-  .dari-docs/updated-docs-workspace.zip
   .dari-docs/updated/
 `)
 }

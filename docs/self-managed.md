@@ -1,47 +1,137 @@
-# Self-Managed Usage
+# Flue App Setup
 
-Use self-managed mode when you want runs to execute in your own dari.dev org.
+`dari-docs` runs against Flue agents that you deploy. Flue packages the agent code and workflow files into HTTP servers. The CLI only needs the tester base URL, and for `optimize`, the editor base URL.
 
-The bundled tester and editor are ordinary dari.dev agents: folders of prompts, skills, setup scripts, and a `dari.yml` manifest. Deploying them to your org gives each agent a hosted endpoint that `dari-docs` can call for tester and editor sessions.
+The bundled path is Modal: `dari-docs init` extracts two Flue projects plus a Modal deploy file. The deployed Modal endpoints are lightweight gateways; each workflow request runs the actual Flue agent inside a fresh Modal Sandbox.
 
-## Set up self-managed mode
+## Initialize
 
-Log in with the dari.dev CLI, export your API key, and deploy the bundled agents:
+Run init in the repository that contains your docs:
 
 ```bash
-dari auth login
-export DARI_API_KEY=...
-dari-docs init --deploy
+dari-docs init
 ```
 
-Then run the same commands without `--managed`:
+This extracts:
+
+```text
+.dari-docs/agents/modal_app.py
+.dari-docs/agents/docs-user-tester-agent/
+.dari-docs/agents/docs-editor-agent/
+```
+
+Each agent project includes `package.json`, `bun.lock`, `flue.config.ts`, an agent entrypoint under `agents/`, prompts, skills, a small `.flue/app.ts` HTTP entrypoint, and one workflow under `.flue/workflows/`.
+
+## Deploy To Modal
+
+Create a Modal secret for model provider keys. Include whichever providers your model choices need:
+
+```bash
+uvx modal setup
+uvx modal secret create dari-docs-model-providers \
+  ANTHROPIC_API_KEY=... \
+  OPENAI_API_KEY=...
+```
+
+Deploy both agents:
+
+```bash
+uvx modal deploy .dari-docs/agents/modal_app.py
+```
+
+Modal prints two HTTPS URLs: one for the `tester` gateway and one for the `editor` gateway. The CLI calls:
+
+```text
+POST <tester-url>/workflows/test?wait=result
+POST <editor-url>/workflows/edit?wait=result
+```
+
+If you want a different Modal secret name, set it when deploying:
+
+```bash
+DARI_DOCS_MODAL_SECRET=my-model-provider-secret \
+  uvx modal deploy .dari-docs/agents/modal_app.py
+```
+
+## Run Checks
 
 ```bash
 dari-docs check . \
+  --tester-url https://your-tester-url.modal.run \
   --task "Install the SDK and make a first API call"
+```
 
+`check` writes reports to `.dari-docs/runs/` and `.dari-docs/aggregate-feedback.md`.
+
+## Run Optimize
+
+```bash
 dari-docs optimize . \
+  --tester-url https://your-tester-url.modal.run \
+  --editor-url https://your-editor-url.modal.run \
   --task "Install the SDK and make a first API call"
 ```
 
-## Choose model tiers
+`optimize` runs the tester workflow first, then sends the aggregate feedback and source docs to the editor workflow. Proposed files are written to `.dari-docs/updated/`.
 
-By default, the bundled agents expose named LLM options such as `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-7`, `gpt-5-mini`, `gpt-5.1`, and `gpt-5.5`. The Claude options use the `anthropic` provider and the GPT options use the `openai` provider.
+Use `--apply` only after you are comfortable overwriting matching files in your repo.
 
-In self-managed mode, tester sessions run every task across all six options by default. The CLI creates tester sessions through the Dari session-batch API, in chunks controlled by `--parallel`, and attaches metadata such as `kind`, `task_index`, and `llm_id` so agent webhooks can correlate lifecycle events. The editor uses the manifest default, `claude-sonnet-4-6`.
+## Save URLs
 
-To explicitly choose tester model tiers:
+To avoid passing URLs every time, save them in `.dari-docs/config.json`:
+
+```bash
+dari-docs init \
+  --tester-url https://your-tester-url.modal.run \
+  --editor-url https://your-editor-url.modal.run
+```
+
+## Local Development
+
+For local development instead of Modal, run an extracted app directly. The templates use Bun for install/build and Node 22+ for runtime; `bun run start` invokes `node dist/server.mjs` because Flue currently imports Node runtime modules that Bun does not implement.
+
+Tester app:
+
+```bash
+cd .dari-docs/agents/docs-user-tester-agent
+bun install --frozen-lockfile
+bun run build
+PORT=8787 ANTHROPIC_API_KEY=... bun run start
+```
+
+Editor app:
+
+```bash
+cd .dari-docs/agents/docs-editor-agent
+bun install --frozen-lockfile
+bun run build
+PORT=8788 ANTHROPIC_API_KEY=... bun run start
+```
+
+The workflow URLs must be reachable by the `dari-docs` CLI. Modal URLs can execute an agent that runs shell commands. Keep them private to your org, or add authentication/private ingress before using them with sensitive docs or secrets.
+
+## Parallel Runs And Model Configuration
+
+The Modal template is configured for sandbox fanout. Each tester workflow request creates its own Modal Sandbox, starts the Flue tester server in that sandbox, forwards `POST /workflows/test?wait=result`, then terminates the sandbox after the result. Use `--parallel` to control how many tester workflow calls the CLI keeps in flight, then it combines the finished reports into the normal aggregate feedback file.
+
+The Flue app has a default model, and each `dari-docs` run can request a model override in the workflow payload:
 
 ```bash
 dari-docs check . \
-  --task "Install the SDK and make a first API call" \
-  --feedback-llm claude-haiku-4-5,claude-sonnet-4-6,claude-opus-4-7
+  --tester-url https://your-tester-url.modal.run \
+  --parallel 30 \
+  --feedback-llm gpt-5.5 \
+  --feedback-llm claude-opus-4-8 \
+  --feedback-llm claude-sonnet-4-6 \
+  --task "Install the SDK"
 ```
 
-`--feedback-llm` also accepts `claude`, `gpt`, and `all` groups, and groups can be mixed with explicit IDs.
+Short model IDs are normalized for common providers: `claude-*` becomes `anthropic/claude-*`, and `gpt-*` becomes `openai/gpt-*`. The Modal secret or app environment still needs the matching provider key.
 
-Use `--llm ID` to collapse the run to one option for all sessions, or `--editor-llm ID` to select the editor model independently.
+Default provider key names:
 
-Managed mode uses the same model-selection flags with the hosted Claude and GPT options. See [Managed mode and billing](managed.md#model-selection).
-
-If you need BYOK at agent deploy time, add provider-specific dari.dev credentials and pass `--anthropic-api-key-secret` and/or `--openai-api-key-secret` to `dari-docs init --deploy`.
+```text
+ANTHROPIC_API_KEY
+OPENAI_API_KEY
+OPENROUTER_API_KEY
+```

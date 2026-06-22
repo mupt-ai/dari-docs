@@ -1,13 +1,37 @@
 # docs-user-tester-agent
 
-A lightweight dari.dev/Pi agent that simulates a developer using supplied docs to complete one task.
+This is the bundled Flue tester app for `dari-docs`. The HTTP workflow is `.flue/workflows/test.ts`, exposed as:
 
-It is intentionally not a formal docs auditor. It reads the attached docs bundle, tries the task in `/workspace/attempt`, runs the smallest safe verification it can, then returns brief user-style feedback.
+```text
+POST /workflows/test?wait=result
+```
 
-Used by the `dari-docs` CLI as the fanout testing agent. The manifest exposes named LLM options (`claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-7`, `gpt-5-mini`, `gpt-5.1`, `gpt-5.5`) so the CLI runs each task under all bundled model tiers by default, or under an explicit repeated/comma-separated `--feedback-llm` matrix.
+The workflow receives a task plus docs files, writes the docs under `input-docs/files/`, and asks the tester agent to try the task in an isolated workspace. It returns structured feedback as Markdown.
 
-## Deploy
+## Deploy With Modal
+
+From the extracted `.dari-docs/agents/` directory, deploy both bundled agents:
 
 ```bash
-dari deploy .
+uvx modal deploy modal_app.py
 ```
+
+The Modal gateway starts a fresh Modal Sandbox for each tester workflow request, so `dari-docs check --parallel 30` can run many isolated tester sandboxes at once and aggregate the reports after completion.
+
+## Run Locally
+
+```bash
+bun install --frozen-lockfile
+bun run build
+PORT=8787 ANTHROPIC_API_KEY=... bun run start
+```
+
+Then run:
+
+```bash
+dari-docs check . \
+  --tester-url http://127.0.0.1:8787 \
+  --task "Install the SDK"
+```
+
+The default model is `anthropic/claude-sonnet-4-6`. Change it in `agents/docs-user-tester-agent.ts` before rebuilding, set `DARI_DOCS_DEFAULT_MODEL`, or pass a model in the workflow payload via `dari-docs --llm` / `--feedback-llm`.

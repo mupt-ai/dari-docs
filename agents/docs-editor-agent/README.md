@@ -1,37 +1,38 @@
 # docs-editor-agent
 
-A dari.dev/Pi agent that applies documentation feedback to user-supplied docs.
+This is the bundled Flue editor app for `dari-docs`. The HTTP workflow is `.flue/workflows/edit.ts`, exposed as:
 
-The manifest exposes the same named LLM options as the tester agent; `claude-sonnet-4-6` remains the default, and self-managed runs can select a different editor model with `--editor-llm`.
+```text
+POST /workflows/edit?wait=result
+```
 
-Pair it with `docs-checker-agent`:
+The workflow receives docs files plus aggregate tester feedback and returns proposed files for the CLI to write under `.dari-docs/updated/`.
 
-1. Run `docs-checker-agent` with an implementation task and a Mintlify `llms.txt`, `llms-full.txt`, URL list, or uploaded docs.
-2. Pass the checker's feedback report plus the docs source files to `docs-editor-agent`.
-3. The editor updates markdown/MDX/README/API docs, validates the changes when possible, and reports what was changed or left unresolved.
+## Deploy With Modal
 
-## Inputs
-
-The agent works best with:
-
-- docs source files or a mounted docs repo,
-- feedback from the docs checker or reviewer comments,
-- the target implementation task/audience,
-- optional source-of-truth files such as OpenAPI specs, SDK types, CLI help output, or config examples.
-
-If only pasted docs are provided, the agent returns rewritten replacement content and a patch-style summary.
-
-## Safety
-
-- Does not invent product behavior.
-- Does not ask for raw secrets.
-- Uses environment variable names or platform secrets for credential-dependent verification.
-- Avoids production-mutating tests unless explicitly requested and documented as safe.
-
-## Validate/deploy
+From the extracted `.dari-docs/agents/` directory, deploy both bundled agents:
 
 ```bash
-cd docs-editor-agent
-dari deploy --dry-run .
-dari deploy .
+uvx modal deploy modal_app.py
 ```
+
+The tester gateway creates one Modal Sandbox per workflow request and can be fanned out with `dari-docs check --parallel 30`; the editor gateway is called once after aggregate feedback is ready and also runs the editor inside a sandbox.
+
+## Run Locally
+
+```bash
+bun install --frozen-lockfile
+bun run build
+PORT=8788 ANTHROPIC_API_KEY=... bun run start
+```
+
+Use it with a tester app:
+
+```bash
+dari-docs optimize . \
+  --tester-url http://127.0.0.1:8787 \
+  --editor-url http://127.0.0.1:8788 \
+  --task "Install the SDK"
+```
+
+The default model is `anthropic/claude-sonnet-4-6`. Change it in `agents/docs-editor-agent.ts` before rebuilding, set `DARI_DOCS_DEFAULT_MODEL`, or pass a model in the workflow payload via `dari-docs --llm` / `--editor-llm`.

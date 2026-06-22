@@ -2,93 +2,122 @@
 
 > Make your docs so good even the dumbest agent can ship.
 
-`dari-docs` is a CLI for testing whether your documentation is clear enough for agents to use. It sends your docs to simulated developer agents, asks them to complete real tasks, reports where they get stuck, and can generate proposed docs edits from that feedback.
+`dari-docs` checks whether your documentation is clear enough to use. It bundles selected docs files, sends them with a real task to a Flue tester agent, and collects feedback from an agent that reads the docs, writes files, and runs shell commands in a workspace. It can also ask a Flue editor agent to propose documentation changes.
 
-Use it to turn documentation quality from “seems understandable” into “an agent can actually complete the task.”
-
-## Why dari-docs?
-
-Good docs used to mean “a developer can eventually figure this out.” That is no longer enough.
-
-When the reader is an agent, ambiguity becomes measurable. Inconsistent terminology, hidden assumptions, scattered context, and missing setup steps all increase the chance that the agent fails the task or wastes context trying to infer what the docs meant.
-
-`dari-docs` gives you a repeatable feedback loop for agent-readable documentation: define the task, run simulated users, inspect failures, and optionally pull back edited docs.
-
-## What it does
-
-- **Tests docs with simulated developers** — agents attempt concrete tasks using only the docs you provide.
-- **Finds task-blocking ambiguity** — reports missing context, unclear setup, inconsistent terms, and places where the agent had to guess.
-- **Generates proposed fixes** — `optimize` turns tester feedback into edited documentation you can review locally.
-- **Runs managed or self-managed** — use the hosted dari.dev Docs service, or run against agents in your own dari.dev org.
-- **Uses normal agent projects** — the tester and editor are just folders of prompts, skills, setup scripts, and a `dari.yml` manifest.
-
-## Install
-
-Install the latest native macOS/Linux `dari-docs` binary with the install script, then verify the CLI is available:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/mupt-ai/dari-docs/main/install.sh | bash
-dari-docs --help
-```
+The supported path is user-managed Flue agents on third-party infra. The bundled templates deploy cleanly to Modal, so you do not need to keep local agent servers running.
 
 ## Quickstart
 
-Managed mode uses the hosted dari.dev Docs service and a separate dari.dev Docs credit balance. New accounts start with five dollars worth of free credits.
-
-From your docs repo:
+Install the CLI:
 
 ```bash
-dari-docs auth login
+curl -fsSL https://raw.githubusercontent.com/mupt-ai/dari-docs/main/install.sh | bash
 ```
 
-Run a docs check:
+From the repo that contains your docs, extract the bundled Flue apps:
+
+```bash
+dari-docs init
+```
+
+Deploy the tester and editor agents to Modal. Put your model provider keys in one Modal secret; include whichever providers your model choices need.
+
+```bash
+uvx modal setup
+uvx modal secret create dari-docs-model-providers \
+  ANTHROPIC_API_KEY=... \
+  OPENAI_API_KEY=...
+uvx modal deploy .dari-docs/agents/modal_app.py
+```
+
+Modal prints two HTTPS endpoints, one labeled `tester` and one labeled `editor`. Use the tester URL for checks:
 
 ```bash
 dari-docs check . \
-  --managed \
+  --tester-url https://your-tester-url.modal.run \
   --task "Install the SDK and make a first API call"
 ```
 
-The command submits a managed run and prints the run ID. To wait for completion in the same command, add `--wait`.
+Feedback is written to `.dari-docs/aggregate-feedback.md` and `.dari-docs/runs/`. A completed check is not a pass/fail score: the command exits zero when the workflow completed, even if the tester feedback says the docs were confusing.
 
-Generate proposed docs edits:
+## Optimize Docs
+
+Use both Modal URLs when you want proposed edits:
 
 ```bash
 dari-docs optimize . \
-  --managed \
-  --wait \
+  --tester-url https://your-tester-url.modal.run \
+  --editor-url https://your-editor-url.modal.run \
   --task "Install the SDK and make a first API call"
 ```
 
-With `--wait`, edited files are downloaded into `.dari-docs/updated/` without changing your repo. Review that folder and copy changes into your repo when ready.
+`optimize` runs a fresh tester pass first, sends the aggregate feedback to the editor agent, and writes proposed files under `.dari-docs/updated/`. It does not change your repo unless you pass `--apply`; with `--apply`, files are copied by repo-relative path, existing files at those paths are overwritten, new files are created, and files missing from `.dari-docs/updated/` are not deleted.
 
-## How it works
+## Save Agent URLs
 
-1. You point `dari-docs` at a docs directory or public docs URL and give it one or more tasks.
-2. The CLI bundles your local docs, or passes public docs URLs for checker agents to inspect with internet access, then submits a run to hosted Dari Docs agents.
-3. Tester agents try to complete the task and report where the docs blocked progress.
-4. Use `dari-docs runs wait`, `dari-docs runs download`, or pass `--wait` to collect local run artifacts.
-5. If you run `optimize`, an editor agent proposes documentation changes.
-6. Proposed edits can be downloaded to `.dari-docs/updated/` for review.
+Save tester/editor URLs once:
 
-The simulated users are plain dari.dev agents. Managed mode uses the hosted Dari Docs tester and editor agents automatically. If you want to customize the agent prompts, skills, setup scripts, or `dari.yml`, use self-managed mode.
+```bash
+dari-docs init \
+  --tester-url https://your-tester-url.modal.run \
+  --editor-url https://your-editor-url.modal.run
+```
 
-## Managed vs self-managed
+After that, you can omit the URL flags:
 
-| Mode | Use when | Requires |
-| --- | --- | --- |
-| Managed | You want the fastest setup and hosted execution. | `dari-docs auth login` |
-| Self-managed | You want runs in your own dari.dev org. | A dari.dev API key and deployed agents |
+```bash
+dari-docs check . --task "Install the SDK"
+```
 
-Most users should start with managed mode.
+## Model Matrix
+
+One tester deployment can run the same task with multiple models. Add `--parallel 30` to fan out up to 30 tester workflow calls at once. The Modal gateway starts a fresh Modal Sandbox for each workflow request, runs Flue inside that sandbox, terminates it after the result, and then the CLI combines the returned reports:
+
+```bash
+dari-docs check . \
+  --tester-url https://your-tester-url.modal.run \
+  --parallel 30 \
+  --feedback-llm gpt-5.5 \
+  --feedback-llm claude-opus-4-8 \
+  --feedback-llm claude-sonnet-4-6 \
+  --task "Install the SDK"
+```
+
+Short model IDs are normalized for common providers: `claude-*` becomes `anthropic/claude-*`, and `gpt-*` becomes `openai/gpt-*`. The Modal secret still needs the matching provider key, such as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
+
+## What Gets Deployed
+
+`dari-docs init` writes normal Flue projects under `.dari-docs/agents/`:
+
+- `docs-user-tester-agent/` exposes `POST /workflows/test?wait=result`.
+- `docs-editor-agent/` exposes `POST /workflows/edit?wait=result`.
+- `modal_app.py` deploys tester/editor gateway endpoints. Each workflow request creates a Modal Sandbox, starts the matching Flue server inside it, forwards the workflow call, then terminates the sandbox.
+
+The app templates use Bun for install/build (`bun install --frozen-lockfile`, `bun run build`) and Node 22+ for runtime (`bun run start` runs `node dist/server.mjs`). Flue currently imports Node runtime modules that Bun does not implement, so the runtime is intentionally Node.
+
+For local development instead of Modal, run an extracted app directly:
+
+```bash
+cd .dari-docs/agents/docs-user-tester-agent
+bun install --frozen-lockfile
+bun run build
+PORT=8787 ANTHROPIC_API_KEY=... bun run start
+```
+
+## Bundling And Secrets
+
+Before running against a local checkout, make sure the repo does not contain secrets that match the bundle rules. By default, `dari-docs` includes common docs and docs-adjacent files such as Markdown, MDX, JSON, YAML, TOML, CSS, JavaScript, and TypeScript; see [Bundle selection](docs/bundle-selection.md) for the full behavior. Use `--bundle-exclude` for files that should not be sent to the Flue app.
+
+Environment variables are not included unless you explicitly pass them with `--live-verify --secret-env NAME`. Live verification means the agent may use those named credentials to try safe test-mode API calls while following the docs. Model provider keys belong in the Modal secret or Flue app environment, not in the docs bundle.
+
+Modal URLs can execute an agent that runs shell commands. Keep them private to your org, or add authentication/private ingress before using them with sensitive docs or secrets.
 
 ## Documentation
 
-- [Managed mode and billing](docs/managed.md)
+- [Flue app setup](docs/self-managed.md)
+- [Agent customization](docs/agent-customization.md)
 - [GitHub Actions](docs/github-actions.md)
 - [Task files and repeated checks](docs/tasks.md)
 - [Bundle selection](docs/bundle-selection.md)
 - [Live verification secrets](docs/live-verification.md)
-- [Agent customization](docs/agent-customization.md)
-- [Self-managed usage](docs/self-managed.md)
 - [Local development](docs/local-development.md)

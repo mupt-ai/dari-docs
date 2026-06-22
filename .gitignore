@@ -3,6 +3,8 @@
 .env.local
 .dari-docs/
 agents/**/.dari/
+agents/**/dist/
+agents/**/node_modules/
 bin/
 /dari-docs
 /dari-docs-service
