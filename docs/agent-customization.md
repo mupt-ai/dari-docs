@@ -1,6 +1,6 @@
 # Agent Customization
 
-`dari-docs init` extracts editable Flue projects plus `modal_app.py` into `.dari-docs/agents/`. Customize those projects the same way you would customize any other Flue app, then redeploy the Modal app. In these templates, prompts are Markdown instruction files, and skills are Markdown instruction bundles imported by the agent for a specific kind of work.
+`dari-docs init` extracts editable Flue projects plus `modal_app.py` into `.dari-docs/agents/`. Customize those projects the same way you would customize any other Flue app, then redeploy the Modal app. The Modal app is a gateway that launches the actual Flue agent inside a fresh Modal Sandbox for each workflow request. In these templates, prompts are Markdown instruction files, and skills are Markdown instruction bundles imported by the agent for a specific kind of work.
 
 ## Project Layout
 

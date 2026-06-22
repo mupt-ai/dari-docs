@@ -2,7 +2,7 @@
 
 `dari-docs` runs against Flue agents that you deploy. Flue packages the agent code and workflow files into HTTP servers. The CLI only needs the tester base URL, and for `optimize`, the editor base URL.
 
-The bundled path is Modal: `dari-docs init` extracts two Flue projects plus a Modal deploy file that serves both agents.
+The bundled path is Modal: `dari-docs init` extracts two Flue projects plus a Modal deploy file. The deployed Modal endpoints are lightweight gateways; each workflow request runs the actual Flue agent inside a fresh Modal Sandbox.
 
 ## Initialize
 
@@ -39,7 +39,7 @@ Deploy both agents:
 uvx modal deploy .dari-docs/agents/modal_app.py
 ```
 
-Modal prints two HTTPS URLs: one for the `tester` web server and one for the `editor` web server. The CLI calls:
+Modal prints two HTTPS URLs: one for the `tester` gateway and one for the `editor` gateway. The CLI calls:
 
 ```text
 POST <tester-url>/workflows/test?wait=result
@@ -112,7 +112,7 @@ The workflow URLs must be reachable by the `dari-docs` CLI. Modal URLs can execu
 
 ## Parallel Runs And Model Configuration
 
-The Modal template is configured for horizontal fanout: one request per container and up to 50 containers. Use `--parallel` to control how many tester workflow calls the CLI keeps in flight, then it combines the finished reports into the normal aggregate feedback file.
+The Modal template is configured for sandbox fanout. Each tester workflow request creates its own Modal Sandbox, starts the Flue tester server in that sandbox, forwards `POST /workflows/test?wait=result`, then terminates the sandbox after the result. Use `--parallel` to control how many tester workflow calls the CLI keeps in flight, then it combines the finished reports into the normal aggregate feedback file.
 
 The Flue app has a default model, and each `dari-docs` run can request a model override in the workflow payload:
 

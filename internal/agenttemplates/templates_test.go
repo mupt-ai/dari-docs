@@ -13,8 +13,8 @@ func TestExtractedAgentsAreFlueProjects(t *testing.T) {
 		t.Fatal(err)
 	}
 	modalApp := readText(t, filepath.Join(dir, "modal_app.py"))
-	if !strings.Contains(modalApp, "modal.App") || !strings.Contains(modalApp, "@modal.web_server") || !strings.Contains(modalApp, "@modal.concurrent") || !strings.Contains(modalApp, "max_containers=50") {
-		t.Fatalf("modal_app.py missing Modal web server fanout setup:\n%s", modalApp)
+	if !strings.Contains(modalApp, "modal.App") || !strings.Contains(modalApp, "modal.Sandbox.create") || !strings.Contains(modalApp, "@modal.asgi_app") || !strings.Contains(modalApp, "encrypted_ports=[PORT]") {
+		t.Fatalf("modal_app.py missing Modal sandbox gateway setup:\n%s", modalApp)
 	}
 
 	for _, tt := range []struct {

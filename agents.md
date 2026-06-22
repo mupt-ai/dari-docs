@@ -27,7 +27,7 @@ The intended deployment is Modal:
 uvx modal deploy .dari-docs/agents/modal_app.py
 ```
 
-`modal_app.py` deploys the tester and editor as separate Modal web servers. The functions are configured for horizontal fanout with one request per container and up to 50 containers, so `dari-docs check --parallel 30` can run many tester workflows at once and aggregate them after completion.
+`modal_app.py` deploys the tester and editor as separate Modal gateway endpoints. The gateway functions do not run the agents directly; each workflow request creates a fresh `modal.Sandbox`, starts the matching Flue server inside that sandbox, forwards the workflow call, and terminates the sandbox after the result. With `dari-docs check --parallel 30`, the CLI can keep many sandbox-backed tester workflows in flight and aggregate them after completion.
 
 ## Model Configuration
 

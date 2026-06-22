@@ -41,4 +41,4 @@ bun install --frozen-lockfile
 bun run build
 ```
 
-A full local optimize smoke test needs both apps running on different ports and both URLs passed to `dari-docs optimize`. For Modal fanout changes, also smoke-check `uvx modal deploy .dari-docs/agents/modal_app.py` from an extracted template when credentials are available.
+A full local optimize smoke test needs both apps running on different ports and both URLs passed to `dari-docs optimize`. For Modal sandbox-gateway changes, also smoke-check `uvx modal deploy .dari-docs/agents/modal_app.py` from an extracted template when credentials are available.

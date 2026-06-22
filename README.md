@@ -71,7 +71,7 @@ dari-docs check . --task "Install the SDK"
 
 ## Model Matrix
 
-One tester deployment can run the same task with multiple models. Add `--parallel 30` to fan out up to 30 tester workflow calls at once; the Modal template allows one request per container and can scale up to 50 containers, then the CLI combines the returned reports:
+One tester deployment can run the same task with multiple models. Add `--parallel 30` to fan out up to 30 tester workflow calls at once. The Modal gateway starts a fresh Modal Sandbox for each workflow request, runs Flue inside that sandbox, terminates it after the result, and then the CLI combines the returned reports:
 
 ```bash
 dari-docs check . \
@@ -91,7 +91,7 @@ Short model IDs are normalized for common providers: `claude-*` becomes `anthrop
 
 - `docs-user-tester-agent/` exposes `POST /workflows/test?wait=result`.
 - `docs-editor-agent/` exposes `POST /workflows/edit?wait=result`.
-- `modal_app.py` deploys both apps as Modal web servers configured for horizontal fanout (`max_containers=50`, one request per container).
+- `modal_app.py` deploys tester/editor gateway endpoints. Each workflow request creates a Modal Sandbox, starts the matching Flue server inside it, forwards the workflow call, then terminates the sandbox.
 
 The app templates use Bun for install/build (`bun install --frozen-lockfile`, `bun run build`) and Node 22+ for runtime (`bun run start` runs `node dist/server.mjs`). Flue currently imports Node runtime modules that Bun does not implement, so the runtime is intentionally Node.
 

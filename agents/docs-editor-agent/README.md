@@ -16,7 +16,7 @@ From the extracted `.dari-docs/agents/` directory, deploy both bundled agents:
 uvx modal deploy modal_app.py
 ```
 
-The tester endpoint can be fanned out with `dari-docs check --parallel 30`; the editor endpoint is called once after aggregate feedback is ready.
+The tester gateway creates one Modal Sandbox per workflow request and can be fanned out with `dari-docs check --parallel 30`; the editor gateway is called once after aggregate feedback is ready and also runs the editor inside a sandbox.
 
 ## Run Locally
 

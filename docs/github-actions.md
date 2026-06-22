@@ -71,7 +71,7 @@ Avoid `--apply` in pull-request CI unless your workflow commits changes intentio
 
 ## Running The Flue App In CI
 
-For quick experiments, you can build and start the tester app inside the job. This is slower than using the Modal deployment, does not fan out across Modal containers, and requires a model provider key in GitHub Secrets.
+For quick experiments, you can build and start the tester app inside the job. This is slower than using the Modal sandbox gateway, does not fan out into Modal Sandboxes, and requires a model provider key in GitHub Secrets.
 
 ```yaml
 - name: Extract Flue apps

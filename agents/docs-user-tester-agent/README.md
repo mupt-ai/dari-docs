@@ -16,7 +16,7 @@ From the extracted `.dari-docs/agents/` directory, deploy both bundled agents:
 uvx modal deploy modal_app.py
 ```
 
-The Modal app is configured for horizontal fanout, so `dari-docs check --parallel 30` can run many tester workflows at once and aggregate the reports after completion.
+The Modal gateway starts a fresh Modal Sandbox for each tester workflow request, so `dari-docs check --parallel 30` can run many isolated tester sandboxes at once and aggregate the reports after completion.
 
 ## Run Locally
 
