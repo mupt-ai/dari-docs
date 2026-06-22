@@ -12,6 +12,7 @@
   "dependencies": {
     "@flue/cli": "0.10.1",
     "@flue/runtime": "0.10.1",
+    "hono": "4.12.26",
     "valibot": "1.4.1"
   }
 }

@@ -39,7 +39,7 @@ func newInitCommand() *cobra.Command {
 			return runInitWithOptions(cmd.Context(), opts)
 		},
 	}
-	cmd.Flags().BoolVar(&opts.Deploy, "deploy", false, "unsupported; run the Flue apps with Bun and Node on your host")
+	cmd.Flags().BoolVar(&opts.Deploy, "deploy", false, "unsupported; deploy .dari-docs/agents/modal_app.py with Modal")
 	cmd.Flags().StringVar(&opts.APIKeyEnv, "api-key-env", opts.APIKeyEnv, "unsupported; Dari API keys are not used by Flue deployments")
 	cmd.Flags().StringVar(&opts.APIKey, "api-key", "", "unsupported; Dari API keys are not used by Flue deployments")
 	cmd.Flags().StringVar(&opts.APIBaseURL, "api-base-url", opts.APIBaseURL, "unsupported; Dari API URLs are not used by Flue deployments")
@@ -70,7 +70,7 @@ func runInitWithOptions(ctx context.Context, opts initOptions) error {
 		return err
 	}
 	if opts.Deploy || opts.APIKeyEnv != "" || opts.APIKey != "" || opts.APIBaseURL != "" || opts.LLMAPIKeySecret != "" || opts.AnthropicAPIKeySecret != "" || opts.OpenAIAPIKeySecret != "" {
-		return fmt.Errorf("Dari deploy/credential flags are not supported; run the extracted Flue apps with Bun/Node and configure provider env vars on that deployment")
+		return fmt.Errorf("Dari deploy/credential flags are not supported; deploy .dari-docs/agents/modal_app.py with Modal and configure provider keys in a Modal secret")
 	}
 
 	agentsDir := opts.AgentsDir
@@ -87,6 +87,6 @@ func runInitWithOptions(ctx context.Context, opts initOptions) error {
 		return err
 	}
 	fmt.Printf("Wrote %s\n", projectconfig.Path(absRepo))
-	fmt.Println("Run each Flue app with `bun install --frozen-lockfile && bun run build && bun run start`, then run `dari-docs check --tester-url <url>`.")
+	fmt.Println("Deploy the Modal app with `uvx modal deploy .dari-docs/agents/modal_app.py`, then run `dari-docs check --tester-url <tester-url>`.")
 	return nil
 }

@@ -50,7 +50,7 @@ func newVersionCommand() *cobra.Command {
 }
 
 func unsupportedManagedModeError() error {
-	return fmt.Errorf("the hosted/managed Dari Docs path is not supported in this CLI; run the Flue apps yourself and call their URLs instead:\n  dari-docs init\n  cd .dari-docs/agents/docs-user-tester-agent && bun install --frozen-lockfile && bun run build && bun run start\n  dari-docs check . --tester-url https://your-tester.example --task \"Install the SDK\"")
+	return fmt.Errorf("the hosted/managed Dari Docs path is not supported in this CLI; deploy the bundled Flue agents on Modal and call their URLs instead:\n  dari-docs init\n  uvx modal secret create dari-docs-model-providers ANTHROPIC_API_KEY=...\n  uvx modal deploy .dari-docs/agents/modal_app.py\n  dari-docs check . --tester-url https://your-tester-url.modal.run --parallel 30 --task \"Install the SDK\"")
 }
 
 func newUnsupportedManagedCommand(use string) *cobra.Command {

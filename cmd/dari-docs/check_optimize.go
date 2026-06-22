@@ -121,8 +121,7 @@ func bindCheckOptimizeFlags(cmd *cobra.Command, opts *checkOptimizeOptions) {
 	_ = flags.MarkHidden("feedback-agent")
 	_ = flags.MarkHidden("editor-agent")
 	flags.StringVar(&opts.OutDir, "out", "", "output directory (default: <repo>/.dari-docs)")
-	flags.IntVar(&opts.Parallel, "parallel", opts.Parallel, "unsupported; Flue workflow runs are sequential for now")
-	_ = flags.MarkHidden("parallel")
+	flags.IntVar(&opts.Parallel, "parallel", opts.Parallel, "maximum concurrent tester workflow runs")
 	if opts.Command != "check" {
 		flags.BoolVar(&opts.Apply, "apply", false, "copy updated docs back into the repo after downloading")
 	}
@@ -173,6 +172,12 @@ func (opts *checkOptimizeOptions) prepare() error {
 		return fmt.Errorf("--apply cannot be used with public docs URLs; review downloaded updated docs manually")
 	}
 	opts.BundleOptions = bundle.CreateOptions{Include: opts.BundleIncludes, Exclude: opts.BundleExcludes}
+	if opts.Parallel == 0 {
+		opts.Parallel = 1
+	}
+	if opts.Parallel < 0 {
+		return fmt.Errorf("--parallel must be at least 1")
+	}
 	if len(opts.PublicDocURLs) > 0 {
 		urls, err := publicdocs.NormalizeURLs(opts.PublicDocURLs)
 		if err != nil {
@@ -287,6 +292,7 @@ func runFlueCheckOrOptimize(ctx context.Context, opts checkOptimizeOptions) erro
 		PublicDocsOnly: opts.PublicDocsOnly,
 		SkipEditor:     opts.Command == "check",
 		Timeout:        time.Duration(opts.TimeoutMinutes) * time.Minute,
+		Parallel:       opts.Parallel,
 		BundleOptions:  opts.BundleOptions,
 	})
 	if err != nil {
@@ -304,10 +310,7 @@ func runFlueCheckOrOptimize(ctx context.Context, opts checkOptimizeOptions) erro
 
 func resolveFlueCheckOptimizeConfig(opts *checkOptimizeOptions) error {
 	if opts.APIKey != "" || opts.APIKeyEnv != "" || opts.APIBaseURL != "" || opts.FeedbackAgent != "" || opts.EditorAgent != "" {
-		return fmt.Errorf("Dari API and agent ID flags are not supported; deploy the Flue apps and pass --tester-url/--editor-url")
-	}
-	if opts.Parallel != 1 {
-		return fmt.Errorf("--parallel is not supported for Flue workflow runs yet")
+		return fmt.Errorf("Dari API and agent ID flags are not supported; deploy the Modal Flue agents and pass --tester-url/--editor-url")
 	}
 	if c, ok, err := projectconfig.Load(opts.RepoRoot); err != nil {
 		return err
@@ -323,10 +326,10 @@ func resolveFlueCheckOptimizeConfig(opts *checkOptimizeOptions) error {
 		}
 	}
 	if opts.TesterURL == "" {
-		return fmt.Errorf("missing Flue tester URL; run .dari-docs/agents/docs-user-tester-agent with `bun run build && bun run start` and pass --tester-url")
+		return fmt.Errorf("missing Flue tester URL; deploy .dari-docs/agents/modal_app.py with Modal, then pass --tester-url")
 	}
 	if opts.Command != "check" && opts.EditorURL == "" {
-		return fmt.Errorf("missing Flue editor URL; run .dari-docs/agents/docs-editor-agent with `bun run build && bun run start` and pass --editor-url")
+		return fmt.Errorf("missing Flue editor URL; deploy .dari-docs/agents/modal_app.py with Modal, then pass --editor-url")
 	}
 	return nil
 }

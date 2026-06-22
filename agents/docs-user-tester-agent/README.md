@@ -8,6 +8,16 @@ POST /workflows/test?wait=result
 
 The workflow receives a task plus docs files, writes the docs under `input-docs/files/`, and asks the tester agent to try the task in an isolated workspace. It returns structured feedback as Markdown.
 
+## Deploy With Modal
+
+From the extracted `.dari-docs/agents/` directory, deploy both bundled agents:
+
+```bash
+uvx modal deploy modal_app.py
+```
+
+The Modal app is configured for horizontal fanout, so `dari-docs check --parallel 30` can run many tester workflows at once and aggregate the reports after completion.
+
 ## Run Locally
 
 ```bash

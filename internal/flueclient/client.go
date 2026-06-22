@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mupt-ai/dari-docs/internal/bundle"
@@ -35,6 +36,7 @@ type Config struct {
 	PublicDocsOnly bool
 	SkipEditor     bool
 	Timeout        time.Duration
+	Parallel       int
 	BundleOptions  bundle.CreateOptions
 }
 
@@ -132,29 +134,10 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		return Result{}, err
 	}
 	feedbackModels := feedbackModelsOrDefault(cfg.FeedbackModels)
-	reports := make([]string, 0, len(cfg.Tasks)*len(feedbackModels))
 	client := &http.Client{Timeout: cfg.Timeout}
-	reportIndex := 0
-	for i, task := range cfg.Tasks {
-		for _, model := range feedbackModels {
-			result, err := callWorkflow[testerResult](ctx, client, cfg.TesterURL, "test", testerPayload{
-				Task:           task,
-				Model:          model,
-				Files:          files,
-				PublicDocURLs:  cfg.PublicDocURLs,
-				LiveVerify:     cfg.LiveVerify,
-				RuntimeSecrets: secrets,
-			})
-			if err != nil {
-				return Result{}, fmt.Errorf("feedback task %d model %q: %w", i+1, displayModel(model), err)
-			}
-			report := formatFeedbackReport(i, len(cfg.Tasks), model, result.Feedback)
-			if err := writeFeedbackReport(cfg.OutDir, reportIndex, model, report); err != nil {
-				return Result{}, err
-			}
-			reports = append(reports, report)
-			reportIndex++
-		}
+	reports, err := runTesterWorkflows(ctx, client, cfg, files, secrets, feedbackModels)
+	if err != nil {
+		return Result{}, err
 	}
 	if err := writeAggregate(cfg.OutDir, reports); err != nil {
 		return Result{}, err
@@ -182,6 +165,108 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	res.UpdatedDir = updatedDir
 	fmt.Fprintf(os.Stderr, "Downloaded updated docs to: %s\n", updatedDir)
 	return res, nil
+}
+
+type testerRunSpec struct {
+	Index     int
+	TaskIndex int
+	TaskCount int
+	Task      string
+	Model     string
+}
+
+type testerRunOutput struct {
+	Index  int
+	Report string
+	Err    error
+}
+
+func runTesterWorkflows(ctx context.Context, client *http.Client, cfg Config, files []docFile, secrets map[string]string, feedbackModels []string) ([]string, error) {
+	specs := make([]testerRunSpec, 0, len(cfg.Tasks)*len(feedbackModels))
+	for i, task := range cfg.Tasks {
+		for _, model := range feedbackModels {
+			specs = append(specs, testerRunSpec{
+				Index:     len(specs),
+				TaskIndex: i,
+				TaskCount: len(cfg.Tasks),
+				Task:      task,
+				Model:     model,
+			})
+		}
+	}
+	parallel := cfg.Parallel
+	if parallel < 1 {
+		parallel = 1
+	}
+	if parallel > len(specs) {
+		parallel = len(specs)
+	}
+	if len(specs) > 1 {
+		fmt.Fprintf(os.Stderr, "Running %d tester workflow(s) with parallel=%d\n", len(specs), parallel)
+	}
+
+	jobs := make(chan testerRunSpec)
+	results := make(chan testerRunOutput)
+	var wg sync.WaitGroup
+	wg.Add(parallel)
+	for range parallel {
+		go func() {
+			defer wg.Done()
+			for spec := range jobs {
+				result, err := callWorkflow[testerResult](ctx, client, cfg.TesterURL, "test", testerPayload{
+					Task:           spec.Task,
+					Model:          spec.Model,
+					Files:          files,
+					PublicDocURLs:  cfg.PublicDocURLs,
+					LiveVerify:     cfg.LiveVerify,
+					RuntimeSecrets: secrets,
+				})
+				if err != nil {
+					results <- testerRunOutput{Index: spec.Index, Err: fmt.Errorf("feedback task %d model %q: %w", spec.TaskIndex+1, displayModel(spec.Model), err)}
+					continue
+				}
+				report := formatFeedbackReport(spec.TaskIndex, spec.TaskCount, spec.Model, result.Feedback)
+				if err := writeFeedbackReport(cfg.OutDir, spec.Index, spec.Model, report); err != nil {
+					results <- testerRunOutput{Index: spec.Index, Err: err}
+					continue
+				}
+				results <- testerRunOutput{Index: spec.Index, Report: report}
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for _, spec := range specs {
+			select {
+			case jobs <- spec:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	reports := make([]string, len(specs))
+	var firstErr error
+	for result := range results {
+		if result.Err != nil {
+			if firstErr == nil {
+				firstErr = result.Err
+			}
+			continue
+		}
+		reports[result.Index] = result.Report
+	}
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return reports, nil
 }
 
 func callWorkflow[T any](ctx context.Context, client *http.Client, baseURL, workflow string, payload any) (T, error) {

@@ -2,9 +2,9 @@
 
 > Make your docs so good even the dumbest agent can ship.
 
-`dari-docs` checks whether your documentation is clear enough to use. It bundles selected docs files, sends them with a real task to a Flue tester app, and collects feedback from an agent that reads the docs, writes files, and runs shell commands in a workspace. It can also ask a Flue editor app to propose documentation changes.
+`dari-docs` checks whether your documentation is clear enough to use. It bundles selected docs files, sends them with a real task to a Flue tester agent, and collects feedback from an agent that reads the docs, writes files, and runs shell commands in a workspace. It can also ask a Flue editor agent to propose documentation changes.
 
-Flue is the JavaScript agent runtime used by the bundled tester/editor apps. There is no hosted or managed Dari Docs service in this flow: you run the Flue apps yourself and point the CLI at their URLs. Because the tester app can run shell commands, keep those URLs private. The templates use Bun for installs/builds and Node 22+ for the Flue server runtime.
+The supported path is user-managed Flue agents on third-party infra. The bundled templates deploy cleanly to Modal, so you do not need to keep local agent servers running.
 
 ## Quickstart
 
@@ -20,20 +20,21 @@ From the repo that contains your docs, extract the bundled Flue apps:
 dari-docs init
 ```
 
-Start the tester app. The bundled apps default to `anthropic/claude-sonnet-4-6`, so set `ANTHROPIC_API_KEY` unless you request a different provider/model.
+Deploy the tester and editor agents to Modal. Put your model provider keys in one Modal secret; include whichever providers your model choices need.
 
 ```bash
-cd .dari-docs/agents/docs-user-tester-agent
-bun install --frozen-lockfile
-bun run build
-PORT=8787 ANTHROPIC_API_KEY=... bun run start
+uvx modal setup
+uvx modal secret create dari-docs-model-providers \
+  ANTHROPIC_API_KEY=... \
+  OPENAI_API_KEY=...
+uvx modal deploy .dari-docs/agents/modal_app.py
 ```
 
-In another terminal, run a check:
+Modal prints two HTTPS endpoints, one labeled `tester` and one labeled `editor`. Use the tester URL for checks:
 
 ```bash
 dari-docs check . \
-  --tester-url http://127.0.0.1:8787 \
+  --tester-url https://your-tester-url.modal.run \
   --task "Install the SDK and make a first API call"
 ```
 
@@ -41,34 +42,25 @@ Feedback is written to `.dari-docs/aggregate-feedback.md` and `.dari-docs/runs/`
 
 ## Optimize Docs
 
-Start the editor app when you want proposed edits:
-
-```bash
-cd .dari-docs/agents/docs-editor-agent
-bun install --frozen-lockfile
-bun run build
-PORT=8788 ANTHROPIC_API_KEY=... bun run start
-```
-
-Then run:
+Use both Modal URLs when you want proposed edits:
 
 ```bash
 dari-docs optimize . \
-  --tester-url http://127.0.0.1:8787 \
-  --editor-url http://127.0.0.1:8788 \
+  --tester-url https://your-tester-url.modal.run \
+  --editor-url https://your-editor-url.modal.run \
   --task "Install the SDK and make a first API call"
 ```
 
-`optimize` runs a fresh tester pass first, sends the aggregate feedback to the editor app, and writes proposed files under `.dari-docs/updated/`. It does not change your repo unless you pass `--apply`; with `--apply`, files are copied by repo-relative path, existing files at those paths are overwritten, new files are created, and files missing from `.dari-docs/updated/` are not deleted.
+`optimize` runs a fresh tester pass first, sends the aggregate feedback to the editor agent, and writes proposed files under `.dari-docs/updated/`. It does not change your repo unless you pass `--apply`; with `--apply`, files are copied by repo-relative path, existing files at those paths are overwritten, new files are created, and files missing from `.dari-docs/updated/` are not deleted.
 
-## Save App URLs
+## Save Agent URLs
 
 Save tester/editor URLs once:
 
 ```bash
 dari-docs init \
-  --tester-url https://your-tester.example \
-  --editor-url https://your-editor.example
+  --tester-url https://your-tester-url.modal.run \
+  --editor-url https://your-editor-url.modal.run
 ```
 
 After that, you can omit the URL flags:
@@ -79,40 +71,46 @@ dari-docs check . --task "Install the SDK"
 
 ## Model Matrix
 
-One tester app can run the same task with multiple models. Runs are sequential and reported separately, then aggregated:
+One tester deployment can run the same task with multiple models. Add `--parallel 30` to fan out up to 30 tester workflow calls at once; the Modal template allows one request per container and can scale up to 50 containers, then the CLI combines the returned reports:
 
 ```bash
 dari-docs check . \
-  --tester-url https://your-tester.example \
+  --tester-url https://your-tester-url.modal.run \
+  --parallel 30 \
   --feedback-llm gpt-5.5 \
   --feedback-llm claude-opus-4-8 \
   --feedback-llm claude-sonnet-4-6 \
   --task "Install the SDK"
 ```
 
-Short model IDs are normalized for common providers: `claude-*` becomes `anthropic/claude-*`, and `gpt-*` becomes `openai/gpt-*`. The Flue app still needs the matching provider key in its environment, such as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
+Short model IDs are normalized for common providers: `claude-*` becomes `anthropic/claude-*`, and `gpt-*` becomes `openai/gpt-*`. The Modal secret still needs the matching provider key, such as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
 
-## Deploy The Flue Apps
+## What Gets Deployed
 
-Each extracted app is a normal Flue project with `package.json`, `bun.lock`, `flue.config.ts`, agent code under `agents/`, and workflows under `.flue/workflows/`.
+`dari-docs init` writes normal Flue projects under `.dari-docs/agents/`:
 
-For production, deploy each app as a long-running service with Bun and Node 22+ available:
+- `docs-user-tester-agent/` exposes `POST /workflows/test?wait=result`.
+- `docs-editor-agent/` exposes `POST /workflows/edit?wait=result`.
+- `modal_app.py` deploys both apps as Modal web servers configured for horizontal fanout (`max_containers=50`, one request per container).
+
+The app templates use Bun for install/build (`bun install --frozen-lockfile`, `bun run build`) and Node 22+ for runtime (`bun run start` runs `node dist/server.mjs`). Flue currently imports Node runtime modules that Bun does not implement, so the runtime is intentionally Node.
+
+For local development instead of Modal, run an extracted app directly:
 
 ```bash
+cd .dari-docs/agents/docs-user-tester-agent
 bun install --frozen-lockfile
 bun run build
-bun run start
+PORT=8787 ANTHROPIC_API_KEY=... bun run start
 ```
-
-`bun run start` runs `node dist/server.mjs`; Flue currently imports Node runtime modules that Bun does not implement. Set `PORT` and model provider keys in the deployment environment. Render, Fly.io, Railway, a VM, ECS, or Kubernetes are fine as long as the service can run a persistent HTTP server.
-
-The CLI does not add an authorization header. Do not expose the Flue apps publicly without network-level protection such as a VPN, private ingress, or firewall rules.
 
 ## Bundling And Secrets
 
 Before running against a local checkout, make sure the repo does not contain secrets that match the bundle rules. By default, `dari-docs` includes common docs and docs-adjacent files such as Markdown, MDX, JSON, YAML, TOML, CSS, JavaScript, and TypeScript; see [Bundle selection](docs/bundle-selection.md) for the full behavior. Use `--bundle-exclude` for files that should not be sent to the Flue app.
 
-Environment variables are not included unless you explicitly pass them with `--live-verify --secret-env NAME`. Live verification means the agent may use those named credentials to try safe test-mode API calls while following the docs. Model provider keys belong in the Flue app environment, not in the docs bundle.
+Environment variables are not included unless you explicitly pass them with `--live-verify --secret-env NAME`. Live verification means the agent may use those named credentials to try safe test-mode API calls while following the docs. Model provider keys belong in the Modal secret or Flue app environment, not in the docs bundle.
+
+Modal URLs can execute an agent that runs shell commands. Keep them private to your org, or add authentication/private ingress before using them with sensitive docs or secrets.
 
 ## Documentation
 

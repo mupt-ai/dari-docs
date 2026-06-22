@@ -104,7 +104,7 @@ func TestCheckHelpShowsModelFlagsAndHidesManagedFlags(t *testing.T) {
 			t.Fatalf("check help should not contain %q:\n%s", hidden, help)
 		}
 	}
-	for _, shown := range []string{"--tester-url", "--task", "--docs-url", "--llm", "--feedback-llm"} {
+	for _, shown := range []string{"--tester-url", "--task", "--docs-url", "--llm", "--feedback-llm", "--parallel"} {
 		if !strings.Contains(help, shown) {
 			t.Fatalf("check help missing %q:\n%s", shown, help)
 		}

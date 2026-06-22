@@ -8,6 +8,16 @@ POST /workflows/edit?wait=result
 
 The workflow receives docs files plus aggregate tester feedback and returns proposed files for the CLI to write under `.dari-docs/updated/`.
 
+## Deploy With Modal
+
+From the extracted `.dari-docs/agents/` directory, deploy both bundled agents:
+
+```bash
+uvx modal deploy modal_app.py
+```
+
+The tester endpoint can be fanned out with `dari-docs check --parallel 30`; the editor endpoint is called once after aggregate feedback is ready.
+
 ## Run Locally
 
 ```bash

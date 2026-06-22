@@ -8,12 +8,13 @@ Pass one or more `--task` values:
 
 ```bash
 dari-docs check . \
-  --tester-url https://docs-tester.example.com \
+  --tester-url https://your-tester-url.modal.run \
+  --parallel 30 \
   --task "Install the SDK" \
   --task "Set up authentication"
 ```
 
-Each task is run independently by the deployed Flue tester workflow.
+Each task is run independently by the deployed Flue tester workflow. With `--parallel`, the CLI keeps multiple task/model runs in flight and then combines the reports.
 
 ## Keep Tasks In A File
 
@@ -31,7 +32,8 @@ Run it with:
 
 ```bash
 dari-docs check . \
-  --tester-url https://docs-tester.example.com \
+  --tester-url https://your-tester-url.modal.run \
+  --parallel 30 \
   --tasks-file docs-test-tasks.txt
 ```
 
@@ -41,8 +43,8 @@ Local files are written under `.dari-docs/` by default, and later runs overwrite
 
 ```bash
 dari-docs optimize . \
-  --tester-url https://docs-tester.example.com \
-  --editor-url https://docs-editor.example.com \
+  --tester-url https://your-tester-url.modal.run \
+  --editor-url https://your-editor-url.modal.run \
   --out .dari-docs/runs/install-sdk \
   --task "Install the SDK and make a first API call"
 ```

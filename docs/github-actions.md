@@ -1,6 +1,6 @@
 # GitHub Actions
 
-Run `dari-docs` in CI against the same deployed Flue apps you use locally. The simplest workflow stores the tester app URL as a repository variable and runs `check` on every pull request.
+Run `dari-docs` in CI against the same Modal-deployed Flue agents you use locally. The simplest workflow stores the tester URL as a repository variable and runs `check` on every pull request.
 
 ## Check With A Deployed Tester App
 
@@ -29,6 +29,7 @@ jobs:
         run: |
           dari-docs check . \
             --tester-url "$DARI_DOCS_TESTER_URL" \
+            --parallel 8 \
             --task "Install the SDK and make a first API call"
         env:
           DARI_DOCS_TESTER_URL: ${{ vars.DARI_DOCS_TESTER_URL }}
@@ -70,7 +71,7 @@ Avoid `--apply` in pull-request CI unless your workflow commits changes intentio
 
 ## Running The Flue App In CI
 
-For quick experiments, you can build and start the tester app inside the job. This is slower than using a deployed app and requires a model provider key in GitHub Secrets.
+For quick experiments, you can build and start the tester app inside the job. This is slower than using the Modal deployment, does not fan out across Modal containers, and requires a model provider key in GitHub Secrets.
 
 ```yaml
 - name: Extract Flue apps

@@ -12,6 +12,10 @@ func TestExtractedAgentsAreFlueProjects(t *testing.T) {
 	if err := Extract(dir); err != nil {
 		t.Fatal(err)
 	}
+	modalApp := readText(t, filepath.Join(dir, "modal_app.py"))
+	if !strings.Contains(modalApp, "modal.App") || !strings.Contains(modalApp, "@modal.web_server") || !strings.Contains(modalApp, "@modal.concurrent") || !strings.Contains(modalApp, "max_containers=50") {
+		t.Fatalf("modal_app.py missing Modal web server fanout setup:\n%s", modalApp)
+	}
 
 	for _, tt := range []struct {
 		name     string
@@ -31,6 +35,9 @@ func TestExtractedAgentsAreFlueProjects(t *testing.T) {
 		entry := filepath.Join(agentDir, "agents", tt.name+".ts")
 		if _, err := os.Stat(entry); err != nil {
 			t.Fatalf("%s missing Flue entrypoint: %v", tt.name, err)
+		}
+		if _, err := os.Stat(filepath.Join(agentDir, ".flue", "app.ts")); err != nil {
+			t.Fatalf("%s missing Flue app entrypoint: %v", tt.name, err)
 		}
 		workflow := filepath.Join(agentDir, ".flue", "workflows", tt.workflow)
 		if _, err := os.Stat(workflow); err != nil {

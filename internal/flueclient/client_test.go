@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestRunSendsTesterModelMatrix(t *testing.T) {
@@ -49,6 +51,54 @@ func TestRunSendsTesterModelMatrix(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(repo, ".dari-docs", "runs", "feedback-002-claude-opus-4-8.md")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRunRunsTesterWorkflowsInParallel(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# Docs\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	active := 0
+	maxActive := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload testerPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		mu.Unlock()
+
+		time.Sleep(100 * time.Millisecond)
+
+		mu.Lock()
+		active--
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(workflowResponse[testerResult]{Result: testerResult{Feedback: "ok " + payload.Task}})
+	}))
+	defer server.Close()
+
+	_, err := Run(context.Background(), Config{
+		RepoRoot:   repo,
+		OutDir:     filepath.Join(repo, ".dari-docs"),
+		TesterURL:  server.URL,
+		Tasks:      []string{"Install", "Configure", "Deploy"},
+		SkipEditor: true,
+		Parallel:   3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if maxActive < 2 {
+		t.Fatalf("max active requests = %d, want parallel workflow calls", maxActive)
 	}
 }
 

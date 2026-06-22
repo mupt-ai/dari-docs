@@ -12,7 +12,7 @@ Use repo-relative globs when your docs need extra inputs or when generated paths
 
 ```bash
 dari-docs check . \
-  --tester-url https://docs-tester.example.com \
+  --tester-url https://your-tester-url.modal.run \
   --bundle-include "schemas/*.proto" \
   --bundle-exclude "docs/generated/**" \
   --task "Create an API key"
@@ -26,7 +26,7 @@ Use `--docs-url` with `check` to test public docs without checking out a repo. T
 
 ```bash
 dari-docs check \
-  --tester-url https://docs-tester.example.com \
+  --tester-url https://your-tester-url.modal.run \
   --docs-url https://docs.example.com/llms.txt \
   --task "Create a browser session"
 ```
@@ -35,7 +35,7 @@ You can also pass the URL as the source argument:
 
 ```bash
 dari-docs check https://docs.example.com/llms.txt \
-  --tester-url https://docs-tester.example.com \
+  --tester-url https://your-tester-url.modal.run \
   --task "Create a browser session"
 ```
 

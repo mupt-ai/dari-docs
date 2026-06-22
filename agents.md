@@ -1,8 +1,9 @@
-# Bundled Flue Apps
+# Bundled Flue Agents
 
-`dari-docs` ships two Flue app templates under `agents/`:
+`dari-docs` ships two Flue agent templates plus a Modal deploy file under `agents/`:
 
 ```text
+agents/modal_app.py
 agents/docs-user-tester-agent/
 agents/docs-editor-agent/
 ```
@@ -10,20 +11,27 @@ agents/docs-editor-agent/
 `dari-docs init` extracts them into the user's repo:
 
 ```text
+.dari-docs/agents/modal_app.py
 .dari-docs/agents/docs-user-tester-agent/
 .dari-docs/agents/docs-editor-agent/
 ```
 
-They are ordinary Flue projects. Each app has `package.json`, `flue.config.ts`, a TypeScript agent entrypoint under `agents/`, prompts, skills, and one HTTP workflow under `.flue/workflows/`.
+They are ordinary Flue projects. Each agent has `package.json`, `bun.lock`, `flue.config.ts`, a TypeScript agent entrypoint under `agents/`, prompts, skills, `.flue/app.ts`, and one HTTP workflow under `.flue/workflows/`.
 
 - `docs-user-tester-agent` exposes `POST /workflows/test?wait=result`.
 - `docs-editor-agent` exposes `POST /workflows/edit?wait=result`.
 
-Users run or deploy these apps with Bun, then pass the base URLs to `dari-docs check` and `dari-docs optimize` with `--tester-url` and `--editor-url`.
+The intended deployment is Modal:
+
+```bash
+uvx modal deploy .dari-docs/agents/modal_app.py
+```
+
+`modal_app.py` deploys the tester and editor as separate Modal web servers. The functions are configured for horizontal fanout with one request per container and up to 50 containers, so `dari-docs check --parallel 30` can run many tester workflows at once and aggregate them after completion.
 
 ## Model Configuration
 
-The templates put the default model in `agents/<name>.ts` and default to `anthropic/claude-sonnet-4-6`. Set `ANTHROPIC_API_KEY` in the app deployment environment, or edit the model/provider code and set the provider key required by that provider.
+The templates put the default model in `agents/<name>.ts` and default to `anthropic/claude-sonnet-4-6`. Put model provider keys in the Modal secret, or edit the model/provider code and set the provider key required by that provider.
 
 `dari-docs` can request a per-run model in the workflow payload with `--llm`, `--feedback-llm`, and `--editor-llm`. A model string can use the provider/model format expected by Flue, such as `anthropic/claude-sonnet-4-6`; the bundled agents also normalize common short IDs such as `claude-sonnet-4-6` and `gpt-5.5`.
 
