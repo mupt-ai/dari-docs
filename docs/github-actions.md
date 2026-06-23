@@ -74,7 +74,7 @@ Avoid `--apply` in pull-request CI unless your workflow commits changes intentio
 For quick experiments, you can build and start the tester app inside the job. This is slower than using the Modal sandbox gateway, does not fan out into Modal Sandboxes, and requires a model provider key in GitHub Secrets.
 
 ```yaml
-- name: Extract Flue apps
+- name: Extract Flue agent folders
   run: dari-docs init
 
 - uses: oven-sh/setup-bun@v2

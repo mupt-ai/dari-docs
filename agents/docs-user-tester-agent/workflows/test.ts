@@ -1,6 +1,6 @@
 import type { FlueContext, FlueHarness, WorkflowRouteHandler } from '@flue/runtime';
 import * as v from 'valibot';
-import testerAgent from '../../agents/docs-user-tester-agent';
+import testerAgent from '../agents/docs-user-tester-agent';
 
 export const route: WorkflowRouteHandler = async (_c, next) => next();
 

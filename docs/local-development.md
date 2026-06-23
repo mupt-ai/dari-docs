@@ -14,7 +14,7 @@ go run ./cmd/dari-docs init --help
 go run ./cmd/dari-docs check --help
 ```
 
-The bundled Flue apps and Modal deploy file live under `agents/` and are embedded into the CLI binary. The embed patterns intentionally include source files, `.flue/app.ts`, `.flue/workflows/`, `modal_app.py`, and Bun lockfiles, but not local `node_modules` or `dist` directories.
+The bundled Flue agent folders and Modal deploy file live under `agents/` and are embedded into the CLI binary. The embed patterns intentionally include visible source files such as `app.ts`, `agents/`, `workflows/`, `prompts/`, `skills/`, `modal_app.py`, and Bun lockfiles, but not local generated directories such as `.flue/`, `.flue-vite/`, `node_modules/`, or `dist/`.
 
 After editing an app template, validate it from that app folder:
 

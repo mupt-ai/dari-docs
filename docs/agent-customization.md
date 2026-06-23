@@ -1,6 +1,6 @@
 # Agent Customization
 
-`dari-docs init` extracts editable Flue projects plus `modal_app.py` into `.dari-docs/agents/`. Customize those projects the same way you would customize any other Flue app, then redeploy the Modal app. The Modal app is a gateway that launches the actual Flue agent inside a fresh Modal Sandbox for each workflow request. In these templates, prompts are Markdown instruction files, and skills are Markdown instruction bundles imported by the agent for a specific kind of work.
+`dari-docs init` extracts editable Flue projects plus `modal_app.py` into `.dari-docs/agents/`. Customize those projects the same way you would customize any other Flue app, then redeploy the Modal app. The Modal app is a gateway that launches the actual Flue agent inside a fresh Modal Sandbox for each workflow request. In these templates, the agent source, workflow source, prompts, and skills are all visible files in the agent folder; there is no hidden `.flue/` layout to edit.
 
 ## Project Layout
 
@@ -11,9 +11,9 @@
   flue.config.ts
   package.json
   bun.lock
+  app.ts
   agents/docs-user-tester-agent.ts
-  .flue/app.ts
-  .flue/workflows/test.ts
+  workflows/test.ts
   prompts/system.md
   skills/docs-user-test/SKILL.md
 
@@ -21,11 +21,11 @@
   flue.config.ts
   package.json
   bun.lock
+  app.ts
   agents/docs-editor-agent.ts
-  .flue/app.ts
-  .flue/workflows/edit.ts
+  workflows/edit.ts
   prompts/system.md
-  skills/docs-editor/SKILL.md
+  skills/documentation-editor/SKILL.md
 ```
 
 The tester workflow receives a task and docs files, writes them into the workspace under `input-docs/files/`, and asks the tester agent to try the task. The editor workflow receives aggregate feedback plus docs files and returns proposed files.

@@ -4,7 +4,7 @@
 
 `dari-docs` checks whether your documentation is clear enough to use. It bundles selected docs files, sends them with a real task to a Flue tester agent, and collects feedback from an agent that reads the docs, writes files, and runs shell commands in a workspace. It can also ask a Flue editor agent to propose documentation changes.
 
-The supported path is user-managed Flue agents on third-party infra. The bundled templates deploy cleanly to Modal, so you do not need to keep local agent servers running.
+The supported path is user-managed Flue agents on third-party infra. Flue is the TypeScript agent runtime used by the bundled tester and editor, and Modal is the cloud service used by the included deploy file. The bundled templates deploy cleanly to Modal, so you do not need to keep local agent servers running.
 
 ## Quickstart
 
@@ -14,7 +14,7 @@ Install the CLI:
 curl -fsSL https://raw.githubusercontent.com/mupt-ai/dari-docs/main/install.sh | bash
 ```
 
-From the repo that contains your docs, extract the bundled Flue apps:
+From the repo that contains your docs, extract the bundled Flue agent folders:
 
 ```bash
 dari-docs init
@@ -38,7 +38,7 @@ dari-docs check . \
   --task "Install the SDK and make a first API call"
 ```
 
-Feedback is written to `.dari-docs/aggregate-feedback.md` and `.dari-docs/runs/`. A completed check is not a pass/fail score: the command exits zero when the workflow completed, even if the tester feedback says the docs were confusing.
+Feedback is written to `.dari-docs/aggregate-feedback.md` and `.dari-docs/runs/`. A completed check is not a pass/fail score: the command exits zero when the workflow completed, even if the tester feedback says the docs were confusing. In CI, add your own policy step that reads the aggregate feedback if you want confusing docs to block a change.
 
 ## Optimize Docs
 
@@ -87,13 +87,13 @@ Short model IDs are normalized for common providers: `claude-*` becomes `anthrop
 
 ## What Gets Deployed
 
-`dari-docs init` writes normal Flue projects under `.dari-docs/agents/`:
+`dari-docs init` writes normal Flue projects under `.dari-docs/agents/`. Each agent folder has visible source files: `app.ts`, `agents/`, `workflows/`, `prompts/`, and `skills/`. There is no hidden `.flue/` layout to learn or edit.
 
 - `docs-user-tester-agent/` exposes `POST /workflows/test?wait=result`.
 - `docs-editor-agent/` exposes `POST /workflows/edit?wait=result`.
 - `modal_app.py` deploys tester/editor gateway endpoints. Each workflow request creates a Modal Sandbox, starts the matching Flue server inside it, forwards the workflow call, then terminates the sandbox.
 
-The app templates use Bun for install/build (`bun install --frozen-lockfile`, `bun run build`) and Node 22+ for runtime (`bun run start` runs `node dist/server.mjs`). Flue currently imports Node runtime modules that Bun does not implement, so the runtime is intentionally Node.
+The agent templates use Bun for install/build (`bun install --frozen-lockfile`, `bun run build`) and Node 22+ for runtime (`bun run start` runs `node dist/server.mjs`). Flue currently imports Node runtime modules that Bun does not implement, so the runtime is intentionally Node.
 
 For local development instead of Modal, run an extracted app directly:
 

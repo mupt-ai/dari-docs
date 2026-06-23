@@ -16,7 +16,7 @@ agents/docs-editor-agent/
 .dari-docs/agents/docs-editor-agent/
 ```
 
-They are ordinary Flue projects. Each agent has `package.json`, `bun.lock`, `flue.config.ts`, a TypeScript agent entrypoint under `agents/`, prompts, skills, `.flue/app.ts`, and one HTTP workflow under `.flue/workflows/`.
+They are ordinary Flue projects with visible source files. Each agent has `package.json`, `bun.lock`, `flue.config.ts`, root `app.ts`, a TypeScript agent entrypoint under `agents/`, one workflow under `workflows/`, prompts, and skills. There is no hidden `.flue/` directory in the bundled templates or initialized output.
 
 - `docs-user-tester-agent` exposes `POST /workflows/test?wait=result`.
 - `docs-editor-agent` exposes `POST /workflows/edit?wait=result`.

@@ -1,6 +1,6 @@
 # docs-editor-agent
 
-This is the bundled Flue editor app for `dari-docs`. The HTTP workflow is `.flue/workflows/edit.ts`, exposed as:
+This is the bundled Flue editor app for `dari-docs`. The HTTP workflow is `workflows/edit.ts`, exposed as:
 
 ```text
 POST /workflows/edit?wait=result

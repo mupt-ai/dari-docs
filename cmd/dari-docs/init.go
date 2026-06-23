@@ -28,7 +28,7 @@ func newInitCommand() *cobra.Command {
 	opts := initOptions{}
 	cmd := &cobra.Command{
 		Use:           "init [repo]",
-		Short:         "Extract bundled Flue apps",
+		Short:         "Extract bundled Flue agent folders",
 		Args:          cobra.ArbitraryArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -48,7 +48,7 @@ func newInitCommand() *cobra.Command {
 	cmd.Flags().StringVar(&opts.OpenAIAPIKeySecret, "openai-api-key-secret", "", "unsupported; configure OPENAI_API_KEY on the Flue deployment")
 	cmd.Flags().StringVar(&opts.TesterURL, "tester-url", "", "base URL of a deployed tester Flue app to save in config")
 	cmd.Flags().StringVar(&opts.EditorURL, "editor-url", "", "base URL of a deployed editor Flue app to save in config")
-	cmd.Flags().StringVar(&opts.AgentsDir, "agents-dir", "", "where to extract Flue apps (default: <repo>/.dari-docs/agents)")
+	cmd.Flags().StringVar(&opts.AgentsDir, "agents-dir", "", "where to extract Flue agent folders (default: <repo>/.dari-docs/agents)")
 	_ = cmd.Flags().MarkHidden("deploy")
 	_ = cmd.Flags().MarkHidden("api-key-env")
 	_ = cmd.Flags().MarkHidden("api-key")
@@ -80,7 +80,7 @@ func runInitWithOptions(ctx context.Context, opts initOptions) error {
 	if err := agenttemplates.Extract(agentsDir); err != nil {
 		return err
 	}
-	fmt.Printf("Extracted bundled Flue apps to %s\n", agentsDir)
+	fmt.Printf("Extracted bundled Flue agent folders to %s\n", agentsDir)
 
 	cfg := projectconfig.Config{AgentsDir: agentsDir, AgentRuntime: "flue", LLMMode: "flue-env", TesterURL: opts.TesterURL, EditorURL: opts.EditorURL}
 	if err := projectconfig.Save(absRepo, cfg); err != nil {
