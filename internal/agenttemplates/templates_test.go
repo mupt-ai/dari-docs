@@ -47,6 +47,9 @@ func TestExtractedAgentsAreSimpleFlueProjects(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(agentDir, "bun.lock")); err != nil {
 			t.Fatalf("%s missing Bun lockfile: %v", tt.name, err)
 		}
+		if _, err := os.Stat(filepath.Join(agentDir, "dari.yml")); !os.IsNotExist(err) {
+			t.Fatalf("%s should not extract the managed-hosting dari.yml, stat err=%v", tt.name, err)
+		}
 		assertNoGeneratedTemplateJunk(t, agentDir)
 	}
 }

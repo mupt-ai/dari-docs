@@ -1,6 +1,6 @@
-# Bundled Flue Agents
+# Bundled Agents
 
-`dari-docs` ships two Flue agent templates plus a Modal deploy file under `agents/`:
+`dari-docs` ships two self-managed Flue agent templates plus a Modal deploy file under `agents/`:
 
 ```text
 agents/modal_app.py
@@ -38,3 +38,14 @@ The templates put the default model in `agents/<name>.ts` and default to `anthro
 ## Runtime Product/API Secrets
 
 Runtime product/API keys are separate from model provider credentials. `dari-docs --live-verify --secret-env NAME` reads local environment variables and sends them in the workflow payload for that run only. The bundled workflows expose those values to the sandbox environment and instruct agents not to print secret values.
+
+## Hosted Managed Agents
+
+The source agent directories also contain `dari.yml` manifests for the production managed offering:
+
+```text
+agents/docs-user-tester-agent/dari.yml
+agents/docs-editor-agent/dari.yml
+```
+
+Those manifests are not embedded into `dari-docs init` output. They are deployed by maintainers with `dari deploy ... --agent-id "$MANAGED_*_AGENT_ID"`. They use `sandbox.provider: modal`, omit `sandbox.provider_api_key_secret`, and omit LLM `api_key_secret` fields so hosted managed runs use platform-managed Modal and model-provider credentials.

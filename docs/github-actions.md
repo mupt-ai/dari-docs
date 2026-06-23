@@ -1,8 +1,21 @@
 # GitHub Actions
 
-Run `dari-docs` in CI against the same Modal-deployed Flue agents you use locally. The simplest workflow stores the tester URL as a repository variable and runs `check` on every pull request.
+Managed checks can run in CI with a scoped Dari Docs API key. Add `--wait` so the job waits until the hosted Modal-backed run finishes and writes feedback artifacts.
 
-## Check With A Deployed Tester App
+## Create An API Key
+
+Create the API key locally after logging in:
+
+```bash
+dari-docs auth login
+dari-docs auth api-key create --name github-actions
+```
+
+Add the printed value to your repository or environment secrets as `DARI_DOCS_API_KEY`.
+
+By default, API keys can read managed account/run state and create managed checks. Add scopes explicitly for broader workflows, for example `--scope managed:read --scope managed:optimize` if CI should generate proposed revisions.
+
+## Managed Check
 
 ```yaml
 name: docs-check
@@ -25,14 +38,15 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/mupt-ai/dari-docs/main/install.sh | bash
           echo "$HOME/.dari-docs/bin" >> "$GITHUB_PATH"
 
-      - name: Run docs check
+      - name: Run managed docs check
         run: |
           dari-docs check . \
-            --tester-url "$DARI_DOCS_TESTER_URL" \
-            --parallel 8 \
+            --managed \
+            --wait \
+            --feedback-llm claude-haiku-4-5 \
             --task "Install the SDK and make a first API call"
         env:
-          DARI_DOCS_TESTER_URL: ${{ vars.DARI_DOCS_TESTER_URL }}
+          DARI_DOCS_API_KEY: ${{ secrets.DARI_DOCS_API_KEY }}
 
       - name: Upload feedback
         if: always()
@@ -42,60 +56,8 @@ jobs:
           path: .dari-docs/
 ```
 
-A completed tester report is not an automatic docs-quality gate. The job fails when setup, bundling, workflow execution, or download fails. If you want CI to block on content quality, add a follow-up step that inspects `.dari-docs/aggregate-feedback.md` for your own policy.
+A completed tester report is not an automatic docs-quality gate. The job fails when setup, bundling, managed run execution, or download fails. If you want CI to block on content quality, add a follow-up step that inspects `.dari-docs/aggregate-feedback.md` for your own policy.
 
-## Optimize In CI
+## Self-Managed Flue Apps
 
-Use `optimize` when you want CI to produce an artifact with proposed changes:
-
-```yaml
-- name: Optimize docs
-  run: |
-    dari-docs optimize . \
-      --tester-url "$DARI_DOCS_TESTER_URL" \
-      --editor-url "$DARI_DOCS_EDITOR_URL" \
-      --task "Install the SDK and make a first API call"
-  env:
-    DARI_DOCS_TESTER_URL: ${{ vars.DARI_DOCS_TESTER_URL }}
-    DARI_DOCS_EDITOR_URL: ${{ vars.DARI_DOCS_EDITOR_URL }}
-
-- name: Upload proposed docs
-  if: always()
-  uses: actions/upload-artifact@v4
-  with:
-    name: dari-docs-updated
-    path: .dari-docs/updated/
-```
-
-Avoid `--apply` in pull-request CI unless your workflow commits changes intentionally.
-
-## Running The Flue App In CI
-
-For quick experiments, you can build and start the tester app inside the job. This is slower than using the Modal sandbox gateway, does not fan out into Modal Sandboxes, and requires a model provider key in GitHub Secrets.
-
-```yaml
-- name: Extract Flue agent folders
-  run: dari-docs init
-
-- uses: oven-sh/setup-bun@v2
-
-- name: Start tester app
-  working-directory: .dari-docs/agents/docs-user-tester-agent
-  run: |
-    bun install --frozen-lockfile
-    bun run build
-    PORT=8787 ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" bun run start > /tmp/dari-docs-tester.log 2>&1 &
-    echo $! > /tmp/dari-docs-tester.pid
-  env:
-    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-
-- name: Run check against local app
-  run: |
-    for i in $(seq 1 30); do
-      if curl -sS http://127.0.0.1:8787/ >/dev/null 2>&1; then break; fi
-      sleep 1
-    done
-    dari-docs check . \
-      --tester-url http://127.0.0.1:8787 \
-      --task "Install the SDK"
-```
+If you operate your own Modal-deployed Flue tester/editor URLs, run the same commands documented in [Flue app setup](self-managed.md) and pass `--tester-url`/`--editor-url` instead of `--managed`.

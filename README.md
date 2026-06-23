@@ -2,9 +2,9 @@
 
 > Make your docs so good even the dumbest agent can ship.
 
-`dari-docs` checks whether your documentation is clear enough to use. It bundles selected docs files, sends them with a real task to a Flue tester agent, and collects feedback from an agent that reads the docs, writes files, and runs shell commands in a workspace. It can also ask a Flue editor agent to propose documentation changes.
+`dari-docs` checks whether your documentation is clear enough to use. It bundles selected docs files or passes public docs URLs, sends them with a real task to hosted tester agents, and collects feedback from agents that read docs, write files, and run shell commands in a workspace. It can also ask an editor agent to propose documentation changes.
 
-The supported path is user-managed Flue agents on third-party infra. Flue is the TypeScript agent runtime used by the bundled tester and editor, and Modal is the cloud service used by the included deploy file. The bundled templates deploy cleanly to Modal, so you do not need to keep local agent servers running.
+The fastest path is managed mode: `dari-docs` submits runs to the hosted Dari Docs service. The managed tester and editor agents run on Modal-backed Dari sandboxes, so you do not deploy or operate agent infrastructure. If you want to customize the agents, use the self-managed Flue templates and deploy their Modal gateway yourself.
 
 ## Quickstart
 
@@ -14,13 +14,28 @@ Install the CLI:
 curl -fsSL https://raw.githubusercontent.com/mupt-ai/dari-docs/main/install.sh | bash
 ```
 
-From the repo that contains your docs, extract the bundled Flue agent folders:
+From the repo that contains your docs, log in and run a managed check:
+
+```bash
+dari-docs auth login
+dari-docs check . \
+  --managed \
+  --wait \
+  --feedback-llm claude-haiku-4-5 \
+  --task "Install the SDK and make a first API call"
+```
+
+Feedback is written to `.dari-docs/aggregate-feedback.md` and `.dari-docs/runs/`. A completed check is not a pass/fail score: the command exits zero when the managed run completed, even if the tester feedback says the docs were confusing. In CI, add your own policy step that reads the aggregate feedback if you want confusing docs to block a change.
+
+## Self-Managed Flue Apps
+
+Use self-managed mode when you want to edit the bundled Flue agents or run them under your own Modal account. From the repo that contains your docs, extract the bundled Flue agent folders:
 
 ```bash
 dari-docs init
 ```
 
-Deploy the tester and editor agents to Modal. Put your model provider keys in one Modal secret; include whichever providers your model choices need.
+Deploy the tester and editor Flue apps to Modal. Put your model provider keys in one Modal secret; include whichever providers your model choices need.
 
 ```bash
 uvx modal setup
@@ -38,11 +53,18 @@ dari-docs check . \
   --task "Install the SDK and make a first API call"
 ```
 
-Feedback is written to `.dari-docs/aggregate-feedback.md` and `.dari-docs/runs/`. A completed check is not a pass/fail score: the command exits zero when the workflow completed, even if the tester feedback says the docs were confusing. In CI, add your own policy step that reads the aggregate feedback if you want confusing docs to block a change.
-
 ## Optimize Docs
 
-Use both Modal URLs when you want proposed edits:
+Managed optimize runs use the hosted Modal-backed editor agent:
+
+```bash
+dari-docs optimize . \
+  --managed \
+  --wait \
+  --task "Install the SDK and make a first API call"
+```
+
+Self-managed optimize uses both Modal URLs:
 
 ```bash
 dari-docs optimize . \
@@ -71,23 +93,35 @@ dari-docs check . --task "Install the SDK"
 
 ## Model Matrix
 
-One tester deployment can run the same task with multiple models. Add `--parallel 30` to fan out up to 30 tester workflow calls at once. The Modal gateway starts a fresh Modal Sandbox for each workflow request, runs Flue inside that sandbox, terminates it after the result, and then the CLI combines the returned reports:
+Managed mode can run the same task with multiple hosted model options:
+
+```bash
+dari-docs check . \
+  --managed \
+  --wait \
+  --feedback-llm claude \
+  --task "Install the SDK"
+```
+
+For self-managed Flue apps, add `--parallel 30` to fan out up to 30 tester workflow calls at once. The Modal gateway starts a fresh Modal Sandbox for each workflow request, runs Flue inside that sandbox, terminates it after the result, and then the CLI combines the returned reports:
 
 ```bash
 dari-docs check . \
   --tester-url https://your-tester-url.modal.run \
   --parallel 30 \
   --feedback-llm gpt-5.5 \
-  --feedback-llm claude-opus-4-8 \
+  --feedback-llm claude-opus-4-7 \
   --feedback-llm claude-sonnet-4-6 \
   --task "Install the SDK"
 ```
 
-Short model IDs are normalized for common providers: `claude-*` becomes `anthropic/claude-*`, and `gpt-*` becomes `openai/gpt-*`. The Modal secret still needs the matching provider key, such as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
+Short model IDs are normalized for common providers in self-managed Flue apps: `claude-*` becomes `anthropic/claude-*`, and `gpt-*` becomes `openai/gpt-*`. The Modal secret still needs the matching provider key, such as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. Managed mode uses platform-managed model credentials.
 
 ## What Gets Deployed
 
-`dari-docs init` writes normal Flue projects under `.dari-docs/agents/`. Each agent folder has visible source files: `app.ts`, `agents/`, `workflows/`, `prompts/`, and `skills/`. There is no hidden `.flue/` layout to learn or edit.
+Managed users do not deploy agents. The hosted Dari Docs tester/editor agents are deployed from this repo with `dari.yml` manifests that set `sandbox.provider: modal` and omit BYOK LLM or Modal credential fields.
+
+`dari-docs init` writes normal self-managed Flue projects under `.dari-docs/agents/`. Each agent folder has visible source files: `app.ts`, `agents/`, `workflows/`, `prompts/`, and `skills/`. There is no hidden `.flue/` layout to learn or edit.
 
 - `docs-user-tester-agent/` exposes `POST /workflows/test?wait=result`.
 - `docs-editor-agent/` exposes `POST /workflows/edit?wait=result`.
@@ -114,6 +148,7 @@ Modal URLs can execute an agent that runs shell commands. Keep them private to y
 
 ## Documentation
 
+- [Managed mode and billing](docs/managed.md)
 - [Flue app setup](docs/self-managed.md)
 - [Agent customization](docs/agent-customization.md)
 - [GitHub Actions](docs/github-actions.md)

@@ -93,7 +93,7 @@ func bindCheckOptimizeFlags(cmd *cobra.Command, opts *checkOptimizeOptions) {
 	flags := cmd.Flags()
 	flags.StringArrayVar(&opts.TaskInputs, "task", nil, "implementation task/prompt to test; repeatable")
 	flags.StringArrayVar(&opts.TaskFiles, "tasks-file", nil, "file containing tasks, one per paragraph or bullet; repeatable")
-	flags.StringArrayVar(&opts.SecretEnvs, "secret-env", nil, "runtime product/API secret env var to pass to workflow payloads; repeatable")
+	flags.StringArrayVar(&opts.SecretEnvs, "secret-env", nil, "runtime product/API secret env var to pass to managed runs or Flue workflow payloads; repeatable")
 	flags.StringArrayVar(&opts.BundleIncludes, "bundle-include", nil, "repo-relative glob to include in the docs bundle in addition to defaults; repeatable")
 	flags.StringArrayVar(&opts.BundleExcludes, "bundle-exclude", nil, "repo-relative glob to exclude from the docs bundle; repeatable")
 	if opts.Command == "check" {
@@ -126,19 +126,17 @@ func bindCheckOptimizeFlags(cmd *cobra.Command, opts *checkOptimizeOptions) {
 		flags.BoolVar(&opts.Apply, "apply", false, "copy updated docs back into the repo after downloading")
 	}
 	flags.BoolVar(&opts.LiveVerify, "live-verify", false, "allow agents to run safe live verification using provided runtime secrets")
-	flags.BoolVar(&opts.Managed, "managed", false, "unsupported; hosted managed mode has been removed")
-	flags.BoolVar(&opts.Wait, "wait", false, "unsupported; Flue workflow runs wait by default")
-	_ = flags.MarkHidden("managed")
-	_ = flags.MarkHidden("wait")
+	flags.BoolVar(&opts.Managed, "managed", false, "run through the hosted managed Dari Docs service")
+	flags.BoolVar(&opts.Wait, "wait", false, "wait for a managed run to finish before exiting")
 	flags.IntVar(&opts.TimeoutMinutes, "timeout-minutes", opts.TimeoutMinutes, "CLI wait timeout in minutes")
 	cmd.MarkFlagsOneRequired("task", "tasks-file")
 }
 
 func checkOptimizeShort(command string) string {
 	if command == "check" {
-		return "Run a Flue tester app against your docs"
+		return "Run managed or self-managed tester agents against your docs"
 	}
-	return "Run Flue tester and editor apps against your docs"
+	return "Run managed or self-managed tester and editor agents against your docs"
 }
 
 func runCheckOrOptimizeOptions(ctx context.Context, opts *checkOptimizeOptions) error {
@@ -146,12 +144,41 @@ func runCheckOrOptimizeOptions(ctx context.Context, opts *checkOptimizeOptions) 
 		return err
 	}
 	if opts.Managed {
-		return unsupportedManagedModeError()
+		return runManagedCheckOrOptimizeFromOptions(ctx, *opts)
 	}
 	if opts.Wait {
-		return fmt.Errorf("--wait is not supported for Flue runs; check and optimize already wait for the Flue workflow result")
+		return fmt.Errorf("--wait is only needed with --managed; Flue workflow runs already wait for the workflow result")
 	}
 	return runFlueCheckOrOptimize(ctx, *opts)
+}
+
+func runManagedCheckOrOptimizeFromOptions(ctx context.Context, opts checkOptimizeOptions) error {
+	if opts.APIKey != "" || opts.APIKeyEnv != "" || opts.APIBaseURL != "" || opts.FeedbackAgent != "" || opts.EditorAgent != "" || opts.TesterURL != "" || opts.EditorURL != "" {
+		return fmt.Errorf("--managed cannot be combined with self-managed URL, Dari API, or agent ID flags")
+	}
+	if opts.Apply && !opts.Wait {
+		return fmt.Errorf("--apply requires --wait when using --managed")
+	}
+	feedbackLLMIDs := opts.FeedbackLLMIDs
+	if len(feedbackLLMIDs) == 0 && opts.LLMID != "" {
+		feedbackLLMIDs = []string{opts.LLMID}
+	}
+	return runManagedCheckOrOptimize(ctx, managedRunConfig{
+		Command:        opts.Command,
+		RepoRoot:       opts.RepoRoot,
+		OutDir:         opts.OutDir,
+		Tasks:          opts.Tasks,
+		FeedbackLLMIDs: feedbackLLMIDs,
+		EditorLLMID:    opts.EditorLLMID,
+		Apply:          opts.Apply,
+		Wait:           opts.Wait,
+		LiveVerify:     opts.LiveVerify,
+		RuntimeSecrets: opts.RuntimeSecrets,
+		PublicDocURLs:  opts.PublicDocURLs,
+		PublicDocsOnly: opts.PublicDocsOnly,
+		Timeout:        time.Duration(opts.TimeoutMinutes) * time.Minute,
+		BundleOptions:  opts.BundleOptions,
+	})
 }
 
 func (opts *checkOptimizeOptions) prepare() error {

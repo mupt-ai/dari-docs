@@ -1,8 +1,10 @@
 # Flue App Setup
 
-`dari-docs` runs against Flue agents that you deploy. Flue is the TypeScript agent runtime used by the bundled tester and editor; it packages the agent code and workflow files into HTTP servers. The CLI only needs the tester base URL, and for `optimize`, the editor base URL.
+`dari-docs` runs against Flue agents that you deploy when you choose self-managed mode. Flue is the TypeScript agent runtime used by the bundled tester and editor; it packages the agent code and workflow files into HTTP servers. The CLI only needs the tester base URL, and for `optimize`, the editor base URL.
 
 The bundled path is Modal: `dari-docs init` extracts two Flue agent folders plus a Modal deploy file. The deployed Modal endpoints are lightweight gateways; each workflow request runs the actual Flue agent inside a fresh Modal Sandbox.
+
+This is separate from `--managed`. Managed mode uses hosted Dari Docs agents deployed by the project maintainers with `sandbox.provider: modal`; self-managed users deploy their own Modal gateway URLs.
 
 ## Initialize
 
@@ -121,7 +123,7 @@ dari-docs check . \
   --tester-url https://your-tester-url.modal.run \
   --parallel 30 \
   --feedback-llm gpt-5.5 \
-  --feedback-llm claude-opus-4-8 \
+  --feedback-llm claude-opus-4-7 \
   --feedback-llm claude-sonnet-4-6 \
   --task "Install the SDK"
 ```
