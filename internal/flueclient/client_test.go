@@ -37,19 +37,19 @@ func TestRunSendsTesterModelMatrix(t *testing.T) {
 		OutDir:         filepath.Join(repo, ".dari-docs"),
 		TesterURL:      server.URL,
 		Tasks:          []string{"Install"},
-		FeedbackModels: []string{"gpt-5.5", "claude-opus-4-8"},
+		FeedbackModels: []string{"gpt-5.5", "claude-opus-4-7"},
 		SkipEditor:     true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(gotModels, ",") != "gpt-5.5,claude-opus-4-8" {
+	if strings.Join(gotModels, ",") != "gpt-5.5,claude-opus-4-7" {
 		t.Fatalf("models = %#v", gotModels)
 	}
 	if _, err := os.Stat(filepath.Join(repo, ".dari-docs", "runs", "feedback-001-gpt-5.5.md")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(repo, ".dari-docs", "runs", "feedback-002-claude-opus-4-8.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(repo, ".dari-docs", "runs", "feedback-002-claude-opus-4-7.md")); err != nil {
 		t.Fatal(err)
 	}
 }

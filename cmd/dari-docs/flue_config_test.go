@@ -36,9 +36,9 @@ func TestResolveLLMFlagsUsesGlobalModelForFeedback(t *testing.T) {
 }
 
 func TestResolveLLMFlagsFeedbackOverridesGlobalModel(t *testing.T) {
-	opts := checkOptimizeOptions{LLMID: "claude-sonnet-4-6", FeedbackLLMRaw: []string{"gpt-5.5,claude-opus-4-8"}, EditorLLMIDFlag: "claude-haiku-4-5"}
+	opts := checkOptimizeOptions{LLMID: "claude-sonnet-4-6", FeedbackLLMRaw: []string{"gpt-5.5,claude-opus-4-7"}, EditorLLMIDFlag: "claude-haiku-4-5"}
 	opts.resolveLLMFlags()
-	if strings.Join(opts.FeedbackLLMIDs, ",") != "gpt-5.5,claude-opus-4-8" {
+	if strings.Join(opts.FeedbackLLMIDs, ",") != "gpt-5.5,claude-opus-4-7" {
 		t.Fatalf("feedback models = %#v", opts.FeedbackLLMIDs)
 	}
 	if opts.EditorLLMID != "claude-haiku-4-5" {

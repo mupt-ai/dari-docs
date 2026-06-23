@@ -1,11 +1,18 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/mupt-ai/dari-docs/internal/managed"
 )
 
 func TestPrepareUsesPublicDocsURLWithoutBundlingCWD(t *testing.T) {
@@ -50,21 +57,262 @@ func TestPrepareRejectsOptimizeWithPublicDocsURL(t *testing.T) {
 	}
 }
 
-func TestManagedCheckFlagIsUnsupported(t *testing.T) {
+func TestParseDollarsToCents(t *testing.T) {
+	tests := map[string]int64{
+		"5":     500,
+		"20.00": 2000,
+		"0.99":  99,
+		"12.3":  1230,
+	}
+	for in, want := range tests {
+		got, err := parseDollarsToCents(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("parseDollarsToCents(%q) = %d, want %d", in, got, want)
+		}
+	}
+	if _, err := parseDollarsToCents("1.234"); err == nil {
+		t.Fatal("expected too many decimal places error")
+	}
+}
+
+func TestParseExpiresIn(t *testing.T) {
+	got, err := parseExpiresIn("2d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || time.Until(*got) < 47*time.Hour || time.Until(*got) > 49*time.Hour {
+		t.Fatalf("expires in 2d parsed to %v", got)
+	}
+	got, err = parseExpiresIn("24h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || time.Until(*got) < 23*time.Hour || time.Until(*got) > 25*time.Hour {
+		t.Fatalf("expires in 24h parsed to %v", got)
+	}
+	if got, err := parseExpiresIn(""); err != nil || got != nil {
+		t.Fatalf("empty expires = %v, %v; want nil nil", got, err)
+	}
+	if _, err := parseExpiresIn("0d"); err == nil {
+		t.Fatal("expected error for zero duration")
+	}
+}
+
+func TestManagedRunReserveCents(t *testing.T) {
+	cfg := managed.RunConfig{TesterSessionReserveCents: 75, EditorSessionReserveCents: 150}
+	if got := managedRunReserveCents("check", 3, 3, cfg); got != 675 {
+		t.Fatalf("check reserve = %d, want 675", got)
+	}
+	if got := managedRunReserveCents("optimize", 3, 3, cfg); got != 825 {
+		t.Fatalf("optimize reserve = %d, want 825", got)
+	}
+}
+
+func TestManagedSessionSummary(t *testing.T) {
+	tests := map[string]struct {
+		command string
+		tasks   int
+		llms    int
+		want    string
+	}{
+		"single check":    {command: "check", tasks: 1, llms: 1, want: "1 tester session"},
+		"multi check":     {command: "check", tasks: 3, llms: 1, want: "3 tester sessions"},
+		"matrix check":    {command: "check", tasks: 3, llms: 3, want: "9 tester sessions (3 tasks x 3 LLMs)"},
+		"single optimize": {command: "optimize", tasks: 1, llms: 1, want: "1 tester session + 1 editor session"},
+		"multi optimize":  {command: "optimize", tasks: 3, llms: 3, want: "9 tester sessions (3 tasks x 3 LLMs) + 1 editor session"},
+	}
+	for name, tt := range tests {
+		if got := managedSessionSummary(tt.command, tt.tasks, tt.llms); got != tt.want {
+			t.Fatalf("%s summary = %q, want %q", name, got, tt.want)
+		}
+	}
+}
+
+func TestManagedLLMSelectionDefaultsToAllowedClaudeMatrix(t *testing.T) {
+	cfg := managed.RunConfig{
+		DefaultLLMID:          "claude-sonnet-4-6",
+		DefaultFeedbackLLMIDs: []string{"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"},
+		AllowedLLMIDs:         []string{"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7", "gpt-5-mini", "gpt-5.1", "gpt-5.5"},
+	}
+	feedback, editor, err := managedLLMSelection(nil, "", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(feedback, ",") != "claude-haiku-4-5,claude-sonnet-4-6,claude-opus-4-7" {
+		t.Fatalf("feedback = %#v", feedback)
+	}
+	if editor != "claude-sonnet-4-6" {
+		t.Fatalf("editor = %q", editor)
+	}
+}
+
+func TestManagedLLMSelectionAllowsGPT(t *testing.T) {
+	cfg := managed.RunConfig{
+		DefaultLLMID:          "claude-sonnet-4-6",
+		DefaultFeedbackLLMIDs: []string{"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"},
+		AllowedLLMIDs:         []string{"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7", "gpt-5-mini", "gpt-5.1", "gpt-5.5"},
+	}
+	feedback, editor, err := managedLLMSelection([]string{"gpt-5.5"}, "gpt-5.1", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(feedback, ",") != "gpt-5.5" || editor != "gpt-5.1" {
+		t.Fatalf("feedback/editor = %#v/%q", feedback, editor)
+	}
+}
+
+func TestDownloadManagedRunArtifactsForCheckWritesFeedback(t *testing.T) {
+	outDir := t.TempDir()
+	client := managed.New("http://127.0.0.1:1", "token")
+	status := managed.RunStatus{
+		ID:                "run_check",
+		Mode:              "check",
+		Status:            "completed",
+		FeedbackReports:   []string{"feedback one"},
+		AggregateFeedback: "# aggregate\n",
+	}
+	updatedDir, err := downloadManagedRunArtifacts(context.Background(), client, status, outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedDir != "" {
+		t.Fatalf("updatedDir = %q, want empty for check", updatedDir)
+	}
+	aggregate, err := os.ReadFile(filepath.Join(outDir, "aggregate-feedback.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(aggregate) != "# aggregate\n" {
+		t.Fatalf("aggregate = %q", aggregate)
+	}
+	report, err := os.ReadFile(filepath.Join(outDir, "runs", "feedback-001.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(report) != "feedback one\n" {
+		t.Fatalf("report = %q", report)
+	}
+}
+
+func TestDownloadManagedRunArtifactsRejectsActiveRun(t *testing.T) {
+	client := managed.New("http://127.0.0.1:1", "token")
+	status := managed.RunStatus{ID: "run_running", Mode: "check", Status: "running"}
+	if _, err := downloadManagedRunArtifacts(context.Background(), client, status, t.TempDir()); err == nil {
+		t.Fatal("expected running run download to fail")
+	}
+}
+
+func TestDownloadManagedRunArtifactsForFailedRunWritesFeedback(t *testing.T) {
+	outDir := t.TempDir()
+	client := managed.New("http://127.0.0.1:1", "token")
+	status := managed.RunStatus{
+		ID:              "run_failed",
+		Mode:            "check",
+		Status:          "failed",
+		FeedbackReports: []string{"partial feedback"},
+	}
+	updatedDir, err := downloadManagedRunArtifacts(context.Background(), client, status, outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedDir != "" {
+		t.Fatalf("updatedDir = %q, want empty for failed run", updatedDir)
+	}
+	report, err := os.ReadFile(filepath.Join(outDir, "runs", "feedback-001.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(report) != "partial feedback\n" {
+		t.Fatalf("report = %q", report)
+	}
+}
+
+func TestDownloadManagedRunArtifactsDownloadsOptimizeOutput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/runs/run_opt/updated-docs.zip" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/zip")
+		if err := writeUpdatedDocsZip(w, map[string]string{"updated-docs/files/README.md": "updated docs\n"}); err != nil {
+			t.Fatal(err)
+		}
+	}))
+	defer server.Close()
+
+	outDir := t.TempDir()
+	client := managed.New(server.URL, "token")
+	status := managed.RunStatus{
+		ID:                   "run_opt",
+		Mode:                 "optimize",
+		Status:               "completed",
+		UpdatedDocsAvailable: true,
+		FeedbackReports:      []string{"feedback"},
+	}
+	updatedDir, err := downloadManagedRunArtifacts(context.Background(), client, status, outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(updatedDir, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "updated docs\n" {
+		t.Fatalf("downloaded README = %q", got)
+	}
+}
+
+func writeUpdatedDocsZip(w http.ResponseWriter, files map[string]string) error {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, contents := range files {
+		f, err := zw.Create(name)
+		if err != nil {
+			return err
+		}
+		if _, err := f.Write([]byte(contents)); err != nil {
+			return err
+		}
+	}
+	if err := zw.Close(); err != nil {
+		return err
+	}
+	_, err := w.Write(buf.Bytes())
+	return err
+}
+
+func TestManagedCheckRequiresLoginBeforeRunConfig(t *testing.T) {
 	repo := t.TempDir()
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
 
 	cmd := newCheckOptimizeCommand("check")
 	cmd.SetArgs([]string{repo, "--managed", "--task", "Run echo ok"})
 	err := cmd.Execute()
 	if err == nil {
-		t.Fatal("expected unsupported managed mode error")
+		t.Fatal("expected missing login error")
 	}
-	if !strings.Contains(err.Error(), "hosted/managed Dari Docs path is not supported") {
-		t.Fatalf("error = %q, want unsupported managed mode error", err.Error())
+	if !strings.Contains(err.Error(), "not logged in to managed service") {
+		t.Fatalf("error = %q, want login error", err.Error())
 	}
 }
 
-func TestWaitFlagIsUnsupported(t *testing.T) {
+func TestManagedApplyRequiresWait(t *testing.T) {
+	err := runManagedCheckOrOptimizeFromOptions(context.Background(), checkOptimizeOptions{
+		Command: "optimize",
+		Managed: true,
+		Apply:   true,
+	})
+	if err == nil {
+		t.Fatal("expected --apply without --wait error")
+	}
+	if !strings.Contains(err.Error(), "--apply requires --wait") {
+		t.Fatalf("error = %q, want --apply requires --wait", err.Error())
+	}
+}
+
+func TestWaitFlagRequiresManagedMode(t *testing.T) {
 	repo := t.TempDir()
 
 	cmd := newCheckOptimizeCommand("check")
@@ -73,24 +321,33 @@ func TestWaitFlagIsUnsupported(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unsupported --wait error")
 	}
-	if !strings.Contains(err.Error(), "--wait is not supported for Flue runs") {
+	if !strings.Contains(err.Error(), "--wait is only needed with --managed") {
 		t.Fatalf("error = %q, want --wait unsupported", err.Error())
 	}
 }
 
-func TestAgentsCommandIsUnsupported(t *testing.T) {
+func TestAgentsDeployManagedNoops(t *testing.T) {
 	cmd := newAgentsCommand()
 	cmd.SetArgs([]string{"deploy", "--managed", "repo"})
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("expected unsupported agents command error")
-	}
-	if !strings.Contains(err.Error(), "hosted/managed Dari Docs path is not supported") {
-		t.Fatalf("error = %q, want unsupported managed mode error", err.Error())
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("managed agent deploy should be a no-op: %v", err)
 	}
 }
 
-func TestCheckHelpShowsModelFlagsAndHidesManagedFlags(t *testing.T) {
+func TestAuthLogoutWithoutTokenSucceeds(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	t.Setenv("HOME", home)
+
+	cmd := newAuthLogoutCommand()
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".dari-docs", "credentials.json")); !os.IsNotExist(err) {
+		t.Fatalf("credentials file should not be created on no-op logout, stat err=%v", err)
+	}
+}
+
+func TestCheckHelpShowsModelAndManagedFlags(t *testing.T) {
 	cmd := newCheckOptimizeCommand("check")
 	var out bytes.Buffer
 	cmd.SetOut(&out)
@@ -99,12 +356,12 @@ func TestCheckHelpShowsModelFlagsAndHidesManagedFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	help := out.String()
-	for _, hidden := range []string{"--managed", "--wait", "--editor-llm", "--apply", "--editor-url", "--feedback-agent", "--editor-agent", "--api-key", "remote-editor"} {
+	for _, hidden := range []string{"--editor-llm", "--apply", "--editor-url", "--feedback-agent", "--editor-agent", "--api-key", "remote-editor"} {
 		if strings.Contains(help, hidden) {
 			t.Fatalf("check help should not contain %q:\n%s", hidden, help)
 		}
 	}
-	for _, shown := range []string{"--tester-url", "--task", "--docs-url", "--llm", "--feedback-llm", "--parallel"} {
+	for _, shown := range []string{"--tester-url", "--task", "--docs-url", "--llm", "--feedback-llm", "--parallel", "--managed", "--wait"} {
 		if !strings.Contains(help, shown) {
 			t.Fatalf("check help missing %q:\n%s", shown, help)
 		}
@@ -132,7 +389,7 @@ func TestInitHelpShowsFlueURLFlags(t *testing.T) {
 	}
 }
 
-func TestRootHelpShowsOnlyFlueCommands(t *testing.T) {
+func TestRootHelpShowsManagedAndFlueCommands(t *testing.T) {
 	cmd := newRootCommand()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
@@ -141,12 +398,12 @@ func TestRootHelpShowsOnlyFlueCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	help := out.String()
-	for _, hidden := range []string{"auth", "billing", "runs", "--managed", "--wait", "--llm", "--feedback-llm", "--editor-llm"} {
+	for _, hidden := range []string{"--managed", "--wait", "--llm", "--feedback-llm", "--editor-llm"} {
 		if strings.Contains(help, hidden) {
 			t.Fatalf("root help should not contain %q:\n%s", hidden, help)
 		}
 	}
-	for _, shown := range []string{"check", "init", "optimize"} {
+	for _, shown := range []string{"check", "init", "optimize", "auth", "billing", "runs"} {
 		if !strings.Contains(help, shown) {
 			t.Fatalf("root help missing %q:\n%s", shown, help)
 		}

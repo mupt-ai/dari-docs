@@ -1,10 +1,6 @@
 package main
 
-import (
-	"fmt"
-
-	"github.com/spf13/cobra"
-)
+import "github.com/spf13/cobra"
 
 func execute(args []string) error {
 	cmd := newRootCommand()
@@ -15,7 +11,7 @@ func execute(args []string) error {
 func newRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "dari-docs",
-		Short:         "Run Flue agents to test and improve docs",
+		Short:         "Run managed or self-managed agents to test and improve docs",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       version,
@@ -45,23 +41,6 @@ func newVersionCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.Println(versionLine())
 			return nil
-		},
-	}
-}
-
-func unsupportedManagedModeError() error {
-	return fmt.Errorf("the hosted/managed Dari Docs path is not supported in this CLI; deploy the bundled Flue agents on Modal and call their URLs instead:\n  dari-docs init\n  uvx modal secret create dari-docs-model-providers ANTHROPIC_API_KEY=...\n  uvx modal deploy .dari-docs/agents/modal_app.py\n  dari-docs check . --tester-url https://your-tester-url.modal.run --parallel 30 --task \"Install the SDK\"")
-}
-
-func newUnsupportedManagedCommand(use string) *cobra.Command {
-	return &cobra.Command{
-		Use:                use,
-		Hidden:             true,
-		DisableFlagParsing: true,
-		SilenceUsage:       true,
-		SilenceErrors:      true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return unsupportedManagedModeError()
 		},
 	}
 }
