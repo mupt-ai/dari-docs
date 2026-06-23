@@ -1,7 +1,7 @@
 // Package projectconfig reads and writes the per-repository .dari-docs/config.json file.
 //
 // That file is created by `dari-docs init` and stores local project metadata,
-// such as where bundled Flue apps were extracted and the deployment URLs to use
+// such as where bundled Flue agent folders were extracted and the deployment URLs to use
 // by default. Commands like `dari-docs check` and `dari-docs optimize` use it so
 // users do not have to pass URLs on every run.
 package projectconfig

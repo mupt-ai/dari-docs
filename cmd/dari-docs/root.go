@@ -15,7 +15,7 @@ func execute(args []string) error {
 func newRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "dari-docs",
-		Short:         "Run Flue apps to test and improve docs",
+		Short:         "Run Flue agents to test and improve docs",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       version,

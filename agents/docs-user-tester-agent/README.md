@@ -1,6 +1,6 @@
 # docs-user-tester-agent
 
-This is the bundled Flue tester app for `dari-docs`. The HTTP workflow is `.flue/workflows/test.ts`, exposed as:
+This is the bundled Flue tester app for `dari-docs`. The HTTP workflow is `workflows/test.ts`, exposed as:
 
 ```text
 POST /workflows/test?wait=result

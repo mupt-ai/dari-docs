@@ -15,7 +15,20 @@ model_secret = modal.Secret.from_name(MODEL_SECRET_NAME)
 
 
 def ignore_template_artifacts(path: Path) -> bool:
-    return any(part in {".dari", "node_modules", "dist"} for part in path.parts)
+    generated_parts = {
+        ".dari",
+        ".dari-docs",
+        ".flue",
+        ".flue-vite",
+        ".next",
+        ".turbo",
+        "build",
+        "coverage",
+        "dist",
+        "node_modules",
+        "package-lock.json",
+    }
+    return any(part in generated_parts for part in path.parts)
 
 
 runtime_image = (

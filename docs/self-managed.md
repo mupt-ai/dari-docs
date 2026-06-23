@@ -1,8 +1,8 @@
 # Flue App Setup
 
-`dari-docs` runs against Flue agents that you deploy. Flue packages the agent code and workflow files into HTTP servers. The CLI only needs the tester base URL, and for `optimize`, the editor base URL.
+`dari-docs` runs against Flue agents that you deploy. Flue is the TypeScript agent runtime used by the bundled tester and editor; it packages the agent code and workflow files into HTTP servers. The CLI only needs the tester base URL, and for `optimize`, the editor base URL.
 
-The bundled path is Modal: `dari-docs init` extracts two Flue projects plus a Modal deploy file. The deployed Modal endpoints are lightweight gateways; each workflow request runs the actual Flue agent inside a fresh Modal Sandbox.
+The bundled path is Modal: `dari-docs init` extracts two Flue agent folders plus a Modal deploy file. The deployed Modal endpoints are lightweight gateways; each workflow request runs the actual Flue agent inside a fresh Modal Sandbox.
 
 ## Initialize
 
@@ -20,7 +20,7 @@ This extracts:
 .dari-docs/agents/docs-editor-agent/
 ```
 
-Each agent project includes `package.json`, `bun.lock`, `flue.config.ts`, an agent entrypoint under `agents/`, prompts, skills, a small `.flue/app.ts` HTTP entrypoint, and one workflow under `.flue/workflows/`.
+Each agent project is a normal, editable Flue folder with visible source files: `package.json`, `bun.lock`, `flue.config.ts`, `app.ts`, an agent entrypoint under `agents/`, one workflow under `workflows/`, prompts, and skills. There is no hidden `.flue/` directory in the initialized output.
 
 ## Deploy To Modal
 

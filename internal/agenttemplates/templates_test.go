@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestExtractedAgentsAreFlueProjects(t *testing.T) {
+func TestExtractedAgentsAreSimpleFlueProjects(t *testing.T) {
 	dir := t.TempDir()
 	if err := Extract(dir); err != nil {
 		t.Fatal(err)
@@ -25,21 +25,18 @@ func TestExtractedAgentsAreFlueProjects(t *testing.T) {
 		{name: "docs-editor-agent", workflow: "edit.ts"},
 	} {
 		agentDir := filepath.Join(dir, tt.name)
-		if _, err := os.Stat(filepath.Join(agentDir, "dari.yml")); !os.IsNotExist(err) {
-			t.Fatalf("%s should not include a Dari deploy manifest, stat err=%v", tt.name, err)
-		}
 		config := readText(t, filepath.Join(agentDir, "flue.config.ts"))
 		if !strings.Contains(config, "defineConfig") || !strings.Contains(config, "target: 'node'") {
 			t.Fatalf("%s missing node Flue config:\n%s", tt.name, config)
+		}
+		if _, err := os.Stat(filepath.Join(agentDir, "app.ts")); err != nil {
+			t.Fatalf("%s missing visible Flue app entrypoint: %v", tt.name, err)
 		}
 		entry := filepath.Join(agentDir, "agents", tt.name+".ts")
 		if _, err := os.Stat(entry); err != nil {
 			t.Fatalf("%s missing Flue entrypoint: %v", tt.name, err)
 		}
-		if _, err := os.Stat(filepath.Join(agentDir, ".flue", "app.ts")); err != nil {
-			t.Fatalf("%s missing Flue app entrypoint: %v", tt.name, err)
-		}
-		workflow := filepath.Join(agentDir, ".flue", "workflows", tt.workflow)
+		workflow := filepath.Join(agentDir, "workflows", tt.workflow)
 		if _, err := os.Stat(workflow); err != nil {
 			t.Fatalf("%s missing Flue workflow %s: %v", tt.name, tt.workflow, err)
 		}
@@ -50,12 +47,90 @@ func TestExtractedAgentsAreFlueProjects(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(agentDir, "bun.lock")); err != nil {
 			t.Fatalf("%s missing Bun lockfile: %v", tt.name, err)
 		}
-		if _, err := os.Stat(filepath.Join(agentDir, "package-lock.json")); !os.IsNotExist(err) {
-			t.Fatalf("%s should not embed npm package-lock.json, stat err=%v", tt.name, err)
+		assertNoGeneratedTemplateJunk(t, agentDir)
+	}
+}
+
+func TestExtractRemovesStaleGeneratedJunk(t *testing.T) {
+	dir := t.TempDir()
+	stalePaths := []string{
+		filepath.Join("docs-user-tester-agent", ".flue", "workflows", "test.ts"),
+		filepath.Join("docs-user-tester-agent", "node_modules", "pkg", "index.js"),
+		filepath.Join("docs-user-tester-agent", "dist", "server.mjs"),
+		filepath.Join("docs-editor-agent", ".flue", "workflows", "edit.ts"),
+		filepath.Join("docs-editor-agent", ".flue-vite", "_entry.ts"),
+		filepath.Join("docs-editor-agent", "package-lock.json"),
+	}
+	for _, rel := range stalePaths {
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
 		}
-		if _, err := os.Stat(filepath.Join(agentDir, "node_modules")); !os.IsNotExist(err) {
-			t.Fatalf("%s should not embed node_modules, stat err=%v", tt.name, err)
+		if err := os.WriteFile(path, []byte("stale\n"), 0o644); err != nil {
+			t.Fatal(err)
 		}
+	}
+
+	if err := Extract(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, rel := range stalePaths {
+		if _, err := os.Stat(filepath.Join(dir, rel)); !os.IsNotExist(err) {
+			t.Fatalf("stale generated path %s still exists, stat err=%v", rel, err)
+		}
+	}
+	for _, rel := range []string{
+		filepath.Join("docs-user-tester-agent", "workflows", "test.ts"),
+		filepath.Join("docs-editor-agent", "workflows", "edit.ts"),
+	} {
+		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
+			t.Fatalf("missing extracted source %s: %v", rel, err)
+		}
+	}
+}
+
+func TestValidateTemplatePathRejectsGeneratedJunk(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{name: "source file", path: "docs-user-tester-agent/workflows/test.ts"},
+		{name: "hidden flue directory", path: "docs-user-tester-agent/.flue/workflows/test.ts", wantErr: true},
+		{name: "node modules", path: "docs-user-tester-agent/node_modules/pkg/index.js", wantErr: true},
+		{name: "build output", path: "docs-user-tester-agent/dist/server.mjs", wantErr: true},
+		{name: "flue vite output", path: "docs-user-tester-agent/.flue-vite/_entry.ts", wantErr: true},
+		{name: "npm lock", path: "docs-user-tester-agent/package-lock.json", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateTemplatePath(tt.path)
+			if tt.wantErr && err == nil {
+				t.Fatal("expected error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func assertNoGeneratedTemplateJunk(t *testing.T, root string) {
+	t.Helper()
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil || rel == "." {
+			return err
+		}
+		return validateTemplatePath(filepath.ToSlash(rel))
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
