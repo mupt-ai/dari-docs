@@ -20,7 +20,7 @@
   <a href="https://github.com/mupt-ai/dari-docs/actions/workflows/pr-checks.yml"><img src="https://github.com/mupt-ai/dari-docs/actions/workflows/pr-checks.yml/badge.svg" alt="PR Checks"></a>
 </p>
 
-`dari-docs` bundles selected documentation and sends it with your task to a Flue agent that tries to follow the instructions in a workspace. Flue is the TypeScript agent runtime used by the bundled tester and editor; Modal hosts the deployment gateways that run them. You deploy these agents yourself.
+`dari-docs` bundles selected documentation and sends it with your task to a tester agent that tries to follow the instructions in a workspace. The CLI talks to tester and editor services over HTTP; the bundled deployment uses Flue for the agent runtime and Modal for sandboxed execution. You deploy these services yourself.
 
 ## How it works
 
@@ -32,7 +32,7 @@ A successful check means the tester workflows completed—it is **not** a pass/f
 
 ## Get started
 
-The bundled agents run on Modal. You’ll need [`uvx`](https://docs.astral.sh/uv/), a Modal account, and model-provider credentials for the model you use.
+The bundled deployment runs agents on Modal. You’ll need [`uvx`](https://docs.astral.sh/uv/), a Modal account, and model-provider credentials for the model you use. The CLI uses service URLs, so you can also connect it to your own compatible tester and editor services.
 
 1. **Install the CLI** (macOS or Linux, x86_64 or arm64):
 
@@ -121,7 +121,7 @@ dari-docs check . \
   --task "Configure retries"
 ```
 
-The Modal template starts a temporary Modal Sandbox for each workflow request and terminates it when the result returns. Model-provider credentials belong in the Modal secret, not in the docs bundle. See [task files and repeated checks](docs/tasks.md) for batching, timeouts, and model groups.
+The bundled Modal template starts a temporary Modal Sandbox for each workflow request and terminates it when the result returns. Model-provider credentials belong in the Modal secret, not in the docs bundle. See [task files and repeated checks](docs/tasks.md) for batching, timeouts, and model groups.
 
 ## Configuration and safety
 
@@ -132,7 +132,7 @@ The Modal template starts a temporary Modal Sandbox for each workflow request an
 
 ## Documentation
 
-**Setup:** [Deploy and configure Flue agents](docs/self-managed.md) · [Local development](docs/local-development.md) · [Agent customization](docs/agent-customization.md)
+**Setup:** [Deploy the bundled agents](docs/self-managed.md) · [Local development](docs/local-development.md) · [Agent customization](docs/agent-customization.md)
 
 **Workflows:** [Task files and repeated checks](docs/tasks.md) · [GitHub Actions](docs/github-actions.md)
 
