@@ -54,7 +54,7 @@ func TestWorkflowExecutionAndAuthorization(t *testing.T) {
 				if r.URL.Path == "/workflows/test" {
 					_, _ = w.Write([]byte(`{"result":{"feedback":"feedback"}}`))
 				} else if r.URL.Path == "/workflows/edit" {
-					_, _ = w.Write([]byte(`{"result":{"files":[{"path":"README.md","content":"updated"}]}}`))
+					_, _ = w.Write([]byte(`{"result":{"changelog":"Updated README","files":[{"path":"README.md","content":"updated"}]}}`))
 				} else {
 					t.Errorf("unexpected path %s", r.URL.Path)
 					w.WriteHeader(404)

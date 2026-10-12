@@ -172,6 +172,9 @@ func runCheckOrOptimizeOptions(ctx context.Context, opts *checkOptimizeOptions) 
 }
 
 func (opts *checkOptimizeOptions) prepare() error {
+	if opts.TimeoutMinutes <= 0 || int64(opts.TimeoutMinutes) > int64((1<<63-1)/time.Minute) {
+		return fmt.Errorf("--timeout-minutes must be positive and fit in a Go duration")
+	}
 	if err := opts.resolveRepoAndOutput(); err != nil {
 		return err
 	}

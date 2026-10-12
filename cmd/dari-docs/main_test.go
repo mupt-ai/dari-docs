@@ -15,9 +15,10 @@ func TestPrepareUsesPublicDocsURLWithoutBundlingCWD(t *testing.T) {
 		t.Fatal(err)
 	}
 	opts := &checkOptimizeOptions{
-		Command:       "check",
-		TaskInputs:    []string{"Read docs"},
-		PublicDocURLs: []string{"https://docs.dari.dev/llms.txt"},
+		Command:        "check",
+		TimeoutMinutes: 30,
+		TaskInputs:     []string{"Read docs"},
+		PublicDocURLs:  []string{"https://docs.dari.dev/llms.txt"},
 	}
 	if err := opts.prepare(); err != nil {
 		t.Fatal(err)
@@ -39,10 +40,11 @@ func TestPrepareUsesPublicDocsURLWithoutBundlingCWD(t *testing.T) {
 func TestPrepareRejectsOptimizeWithPublicDocsURL(t *testing.T) {
 	repo := t.TempDir()
 	opts := &checkOptimizeOptions{
-		Command:       "optimize",
-		RepoArg:       repo,
-		TaskInputs:    []string{"Improve docs"},
-		PublicDocURLs: []string{"https://example.com/llms.txt"},
+		Command:        "optimize",
+		TimeoutMinutes: 30,
+		RepoArg:        repo,
+		TaskInputs:     []string{"Improve docs"},
+		PublicDocURLs:  []string{"https://example.com/llms.txt"},
 	}
 	err := opts.prepare()
 	if err == nil || !strings.Contains(err.Error(), "support check only") {

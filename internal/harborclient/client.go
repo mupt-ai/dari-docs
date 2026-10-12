@@ -84,7 +84,51 @@ type editorResult struct {
 }
 
 type workflowResponse[T any] struct {
-	Result T `json:"result"`
+	Result *T `json:"result"`
+}
+
+// UnmarshalJSON requires both file fields while allowing intentionally empty content.
+func (f *docFile) UnmarshalJSON(data []byte) error {
+	var fields struct {
+		Path    *string `json:"path"`
+		Content *string `json:"content"`
+	}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if fields.Path == nil || fields.Content == nil {
+		return fmt.Errorf("documentation file requires path and content strings")
+	}
+	f.Path, f.Content = *fields.Path, *fields.Content
+	return nil
+}
+
+func (r testerResult) validate() error {
+	if strings.TrimSpace(r.Feedback) == "" {
+		return fmt.Errorf("tester result requires nonempty feedback")
+	}
+	return nil
+}
+
+func (r editorResult) validate() error {
+	if strings.TrimSpace(r.Changelog) == "" {
+		return fmt.Errorf("editor result requires nonempty changelog")
+	}
+	if r.Files == nil {
+		return fmt.Errorf("editor result requires a files array")
+	}
+	seen := make(map[string]bool, len(r.Files))
+	for _, file := range r.Files {
+		path := normalizeEditedPath(file.Path)
+		if err := bundle.ValidateRelativePath(path); err != nil {
+			return fmt.Errorf("editor result path: %w", err)
+		}
+		if seen[path] {
+			return fmt.Errorf("editor result contains duplicate file path %q", path)
+		}
+		seen[path] = true
+	}
+	return nil
 }
 
 type httpError struct {
@@ -107,6 +151,9 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	}
 	if cfg.OutDir == "" {
 		cfg.OutDir = filepath.Join(cfg.RepoRoot, ".dari-docs")
+	}
+	if cfg.Timeout < 0 {
+		return Result{}, fmt.Errorf("workflow timeout must be positive")
 	}
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 30 * time.Minute
@@ -171,6 +218,9 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	})
 	if err != nil {
 		return res, err
+	}
+	if len(files) > 0 && len(edited.Files) == 0 {
+		return res, fmt.Errorf("editor result contains no proposed documentation files")
 	}
 	updatedDir := filepath.Join(cfg.OutDir, "updated")
 	_ = os.RemoveAll(updatedDir)
@@ -285,7 +335,7 @@ func runTesterWorkflows(ctx context.Context, client *http.Client, cfg Config, fi
 	return reports, nil
 }
 
-func callWorkflow[T any](ctx context.Context, client *http.Client, baseURL, workflow, token string, payload any) (T, error) {
+func callWorkflow[T interface{ validate() error }](ctx context.Context, client *http.Client, baseURL, workflow, token string, payload any) (T, error) {
 	var zero T
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -317,9 +367,15 @@ func callWorkflow[T any](ctx context.Context, client *http.Client, baseURL, work
 	}
 	var out workflowResponse[T]
 	if err := json.Unmarshal(respBody, &out); err != nil {
-		return zero, fmt.Errorf("decode response: %w; body=%s", err, string(respBody))
+		return zero, fmt.Errorf("decode %s response: %w", workflow, err)
 	}
-	return out.Result, nil
+	if out.Result == nil {
+		return zero, fmt.Errorf("%s response requires a nonnull result object", workflow)
+	}
+	if err := (*out.Result).validate(); err != nil {
+		return zero, fmt.Errorf("invalid %s response: %w", workflow, err)
+	}
+	return *out.Result, nil
 }
 
 func workflowURL(baseURL, workflow string) (string, error) {
