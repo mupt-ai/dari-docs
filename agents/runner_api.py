@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import logging
 import os
 import time
 from collections.abc import Callable
@@ -28,16 +29,28 @@ class RunRequest(BaseModel):
 
 
 def initial_state(workflow: str) -> dict[str, Any]:
-    return {"workflow": workflow, "status": "queued", "createdAt": time.time(), "events": [], "result": None, "error": None}
+    return {
+        "workflow": workflow,
+        "status": "queued",
+        "createdAt": time.time(),
+        "events": [],
+        "result": None,
+        "error": None,
+    }
 
 
-async def execute_run(backend, run_id: str, workflow: str, payload: Payload, runner=run_workflow):
+async def execute_run(
+    backend, run_id: str, workflow: str, payload: Payload, runner=run_workflow
+):
     state = await backend.get(run_id)
     state["status"] = "running"
+    state["startedAt"] = time.time()
     await backend.put(run_id, state)
 
     async def emit(event):
-        state["events"].append({"sequence": len(state["events"]) + 1, "timestamp": time.time(), **event})
+        state["events"].append(
+            {"sequence": len(state["events"]) + 1, "timestamp": time.time(), **event}
+        )
         await backend.put(run_id, state)
 
     await emit({"event": "running"})
@@ -56,10 +69,19 @@ async def execute_run(backend, run_id: str, workflow: str, payload: Payload, run
         state["status"] = "completed"
     except asyncio.CancelledError:
         state["status"] = "cancelled"
+        if asyncio.current_task().cancelling():
+            raise
     except Exception as exc:
         state["status"] = "failed"
+        logging.getLogger(__name__).error(
+            "Run %s failed: %s", run_id, type(exc).__name__
+        )
         # Harbor exception messages/tracebacks may echo command arguments or credentials.
-        state["error"] = str(exc) if isinstance(exc, InputError) else "Execution failed; inspect private controller logs"
+        state["error"] = (
+            str(exc)
+            if isinstance(exc, InputError)
+            else "Execution failed; inspect private controller logs"
+        )
     finally:
         watcher.cancel()
         await asyncio.gather(watcher, return_exceptions=True)
@@ -135,7 +157,10 @@ def create_app(service: str, backend, token: str | None = None) -> FastAPI:
     async def authenticate(request: Request, call_next: Callable):
         if request.url.path != "/healthz" and token:
             from fastapi.responses import JSONResponse
-            if not hmac.compare_digest(request.headers.get("authorization", ""), f"Bearer {token}"):
+
+            if not hmac.compare_digest(
+                request.headers.get("authorization", ""), f"Bearer {token}"
+            ):
                 return JSONResponse({"detail": "Unauthorized"}, status_code=401)
         return await call_next(request)
 
@@ -157,21 +182,35 @@ def create_app(service: str, backend, token: str | None = None) -> FastAPI:
 
     def validate(raw, asynchronous=False):
         try:
-            submitted = RunRequest.model_validate(raw) if asynchronous else RunRequest(workflow=workflow, payload=raw)
+            submitted = (
+                RunRequest.model_validate(raw)
+                if asynchronous
+                else RunRequest(workflow=workflow, payload=raw)
+            )
             if submitted.workflow != workflow:
                 raise InputError("wrong workflow for this service")
             workflow_instruction(workflow, submitted.payload)
             return submitted
         except (ValueError, ValidationError):
             # Pydantic errors include input values; do not echo secret payloads.
-            raise HTTPException(422, "Invalid workflow payload; check required fields, paths and execution settings") from None
+            raise HTTPException(
+                422,
+                "Invalid workflow payload; check required fields, paths and execution settings",
+            ) from None
 
     async def state_for(run_id):
         state = await backend.get(run_id)
         if state is None or state["workflow"] != workflow:
             raise HTTPException(404, "Run not found")
-        if state["status"] not in TERMINAL and time.time() - state["createdAt"] > 3700:
-            state = {**state, "status": "failed", "error": "Controller exceeded its execution deadline"}
+        if (
+            state["status"] == "running"
+            and time.time() - state.get("startedAt", state["createdAt"]) > 3700
+        ):
+            state = {
+                **state,
+                "status": "failed",
+                "error": "Controller exceeded its execution deadline",
+            }
         return state
 
     @app.get("/healthz")
@@ -182,12 +221,24 @@ def create_app(service: str, backend, token: str | None = None) -> FastAPI:
     async def submit(request: Request):
         submitted = validate(await body(request), asynchronous=True)
         run_id = await backend.submit(workflow, submitted.payload)
-        return {"runId": run_id, "statusUrl": f"/runs/{run_id}", "resultUrl": f"/runs/{run_id}/result", "eventsUrl": f"/runs/{run_id}/events"}
+        return {
+            "runId": run_id,
+            "statusUrl": f"/runs/{run_id}",
+            "resultUrl": f"/runs/{run_id}/result",
+            "eventsUrl": f"/runs/{run_id}/events",
+        }
 
     @app.get("/runs/{run_id}")
     async def status(run_id: str):
         state = await state_for(run_id)
-        return {"runId": run_id, **{key: value for key, value in state.items() if key not in {"events", "result"}}}
+        return {
+            "runId": run_id,
+            **{
+                key: value
+                for key, value in state.items()
+                if key not in {"events", "result"}
+            },
+        }
 
     @app.get("/runs/{run_id}/events")
     async def events(run_id: str, after: int = 0):
@@ -195,7 +246,11 @@ def create_app(service: str, backend, token: str | None = None) -> FastAPI:
             raise HTTPException(422, "after must be nonnegative")
         state = await state_for(run_id)
         page = [event for event in state["events"] if event["sequence"] > after][:100]
-        return {"events": page, "next": page[-1]["sequence"] if page else after, "status": state["status"]}
+        return {
+            "events": page,
+            "next": page[-1]["sequence"] if page else after,
+            "status": state["status"],
+        }
 
     @app.get("/runs/{run_id}/result")
     async def result(run_id: str):

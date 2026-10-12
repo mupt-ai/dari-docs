@@ -70,6 +70,8 @@ async def execute(run_id: str, workflow: str, payload: dict):
 def tester():
     from runner_api import create_app
 
+    if not os.environ.get("DARI_DOCS_RUNNER_TOKEN"):
+        raise RuntimeError("Set DARI_DOCS_RUNNER_TOKEN in the Modal deployment secret")
     return create_app("tester", ModalBackend())
 
 
@@ -79,4 +81,6 @@ def tester():
 def editor():
     from runner_api import create_app
 
+    if not os.environ.get("DARI_DOCS_RUNNER_TOKEN"):
+        raise RuntimeError("Set DARI_DOCS_RUNNER_TOKEN in the Modal deployment secret")
     return create_app("editor", ModalBackend())

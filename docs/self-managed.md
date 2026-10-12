@@ -94,7 +94,7 @@ Use `DARI_DOCS_WORKSPACE_IMAGE` when the task needs tools that `python:3.13-slim
 
 To send model traffic to a proxy or gateway, set the provider's base URL variable, such as `ANTHROPIC_BASE_URL` or `OPENAI_BASE_URL`, in the runner environment next to its key. The runner forwards it to the agent like the key.
 
-A request can also set a `*_BASE_URL` with `--agent-env`, but only to a URL the operator allows: an exact match for an entry in `DARI_DOCS_ALLOWED_MODEL_ENDPOINTS`, or the same value already configured on the runner. Other values are rejected. This keeps a caller from redirecting the deployment's provider keys to an arbitrary server.
+A request can also set a `*_BASE_URL` with `--agent-env`, but only to a URL the operator allows: an exact match for an entry in `DARI_DOCS_ALLOWED_MODEL_ENDPOINTS`, or the same value already configured on the runner. Other values are rejected. This prevents accidental or direct endpoint redirection; it is not a security boundary against a malicious task or token holder.
 
 ### Sandbox Defaults
 
@@ -136,7 +136,7 @@ To read the token from a different variable, pass `--runner-token-env NAME`. The
 
 The runner token is a single operator-level credential. Anyone who holds it can start agents that spend your model provider keys and use the sandbox provider account, and can read the status and results of any run on the deployment. The runner doesn't separate callers from each other.
 
-Share one deployment only among people you would trust with those provider keys. Don't use it to run requests from untrusted users, and don't treat sandboxing as isolation between tenants. Give separate teams or customers separate deployments with separate tokens and secrets.
+Share one deployment only among people you would trust with those provider keys. Use spend-limited provider keys: an agent has access to them and can exfiltrate them despite output scanning. Don't use it to run requests from untrusted users, and don't treat sandboxing as isolation between tenants. Give separate teams or customers separate deployments with separate tokens and secrets.
 
 ### Result Retention
 
