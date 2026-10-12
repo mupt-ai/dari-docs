@@ -23,6 +23,8 @@ import (
 	"github.com/mupt-ai/dari-docs/internal/workspace"
 )
 
+const defaultWorkflowTimeout = 60 * time.Minute
+
 type Config struct {
 	Execution       *projectconfig.Execution
 	EditorExecution *projectconfig.Execution
@@ -156,7 +158,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		return Result{}, fmt.Errorf("workflow timeout must be positive")
 	}
 	if cfg.Timeout == 0 {
-		cfg.Timeout = 30 * time.Minute
+		cfg.Timeout = defaultWorkflowTimeout
 	}
 	if len(cfg.Tasks) == 0 {
 		return Result{}, fmt.Errorf("at least one --task or --tasks-file entry is required")

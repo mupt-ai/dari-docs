@@ -6,6 +6,12 @@ import (
 	"testing"
 )
 
+func TestDefaultTimeoutIsSixtyMinutes(t *testing.T) {
+	if got := defaultCheckOptimizeOptions("check").TimeoutMinutes; got != 60 {
+		t.Fatalf("default timeout = %d minutes, want 60", got)
+	}
+}
+
 func TestTimeoutMinutesMustBePositive(t *testing.T) {
 	for _, minutes := range []int{0, -1, int(^uint(0) >> 1)} {
 		t.Run(strconv.Itoa(minutes), func(t *testing.T) {

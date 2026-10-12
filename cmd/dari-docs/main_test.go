@@ -16,7 +16,7 @@ func TestPrepareUsesPublicDocsURLWithoutBundlingCWD(t *testing.T) {
 	}
 	opts := &checkOptimizeOptions{
 		Command:        "check",
-		TimeoutMinutes: 30,
+		TimeoutMinutes: 60,
 		TaskInputs:     []string{"Read docs"},
 		PublicDocURLs:  []string{"https://docs.dari.dev/llms.txt"},
 	}
@@ -41,7 +41,7 @@ func TestPrepareRejectsOptimizeWithPublicDocsURL(t *testing.T) {
 	repo := t.TempDir()
 	opts := &checkOptimizeOptions{
 		Command:        "optimize",
-		TimeoutMinutes: 30,
+		TimeoutMinutes: 60,
 		RepoArg:        repo,
 		TaskInputs:     []string{"Improve docs"},
 		PublicDocURLs:  []string{"https://example.com/llms.txt"},

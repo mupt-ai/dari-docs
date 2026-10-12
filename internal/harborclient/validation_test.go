@@ -54,6 +54,12 @@ func TestWorkflowResponseValidation(t *testing.T) {
 	}
 }
 
+func TestRunDefaultsTimeoutToSixtyMinutes(t *testing.T) {
+	if defaultWorkflowTimeout != 60*time.Minute {
+		t.Fatalf("default timeout = %s, want 60m", defaultWorkflowTimeout)
+	}
+}
+
 func TestRunRejectsNegativeTimeout(t *testing.T) {
 	_, err := Run(context.Background(), Config{Timeout: -time.Minute})
 	if err == nil || !strings.Contains(err.Error(), "timeout") {

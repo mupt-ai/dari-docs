@@ -95,7 +95,7 @@ func defaultCheckOptimizeOptions(command string) *checkOptimizeOptions {
 	return &checkOptimizeOptions{
 		Command:        command,
 		Parallel:       1,
-		TimeoutMinutes: 30,
+		TimeoutMinutes: 60,
 	}
 }
 
