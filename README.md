@@ -121,7 +121,7 @@ dari-docs check . \
   --task "Configure retries"
 ```
 
-Models must be ones the selected harness can run; to compare an OpenAI model, use a harness such as `codex` in a separate run. Each workflow request runs as its own Harbor trial in a fresh sandbox, which is torn down after the result is collected. Model-provider credentials belong in the Modal secret, not in the docs bundle. See [task files and repeated checks](docs/tasks.md) for batching, timeouts, and model groups.
+Models must be ones the selected harness can run; to compare an OpenAI model, use a harness such as `codex` in a separate run. Each workflow request runs as its own Harbor trial in a fresh sandbox, which is torn down after the result is collected. The runner also has an [async runs API](docs/self-managed.md#async-runs) with status and lifecycle events. Model-provider credentials belong in the Modal secret, not in the docs bundle. See [task files and repeated checks](docs/tasks.md) for batching, timeouts, and model groups.
 
 ## Choose a harness and sandbox
 
@@ -142,7 +142,8 @@ Harbor supports many harnesses, models, and sandboxes, but not every combination
 - **Save deployment URLs:** `dari-docs init --tester-url <tester-url> --editor-url <editor-url>` stores the URLs in `.dari-docs/config.json`, so later commands can omit the URL flags. Do this during initial setup if possible: running `dari-docs init` again re-extracts the bundled agent files and can overwrite your edits to those templates.
 - **Review the bundle:** defaults include docs and docs-adjacent formats such as Markdown, JSON, YAML, TOML, CSS, JavaScript, and TypeScript; common generated directories and files over 5 MB are skipped. Secrets committed to files matching the bundle rules are still included unless excluded.
 - **Runtime credentials are opt-in:** environment variables are not bundled. `--live-verify --secret-env NAME` explicitly sends the named runtime product/API credential to the workflow for live verification. The agent can use it in shell commands, SDK calls, or API requests; use test-mode, read-only, or otherwise safe credentials. Do not pass model-provider keys this way.
-- **Protect deployed URLs:** the Modal endpoints run agents that can execute shell commands. Set `DARI_DOCS_RUNNER_TOKEN` on the runner to require a bearer token, and pass `--runner-token-env DARI_DOCS_RUNNER_TOKEN` to the CLI. See [protect the endpoints](docs/self-managed.md#protect-the-endpoints).
+- **Protect deployed URLs:** the Modal endpoints run agents that can execute shell commands. Add `DARI_DOCS_RUNNER_TOKEN` to the Modal secret to require a bearer token; the CLI sends it automatically when the same variable is set locally. See [protect the endpoints](docs/self-managed.md#protect-the-endpoints).
+- **Upgrading from the Flue runtime:** run `dari-docs init` again and redeploy. Init keeps your prompts and skills. See [upgrading](docs/self-managed.md#upgrading-from-the-flue-runtime).
 
 ## Documentation
 

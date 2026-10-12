@@ -1,59 +1,55 @@
 # Bundled Harbor Runner
 
-`dari-docs` ships a Python runner plus a Modal deploy file under `agents/`:
+`dari-docs` ships a Python runner built on [Harbor](https://docs.harborframework.com), plus its Modal deployment and the tester and editor instructions, under `agents/`:
 
 ```text
-agents/modal_app.py
-agents/harbor_runner.py
-agents/requirements.txt
+agents/modal_app.py          Modal gateways and detached controller Function
+agents/harbor_runner.py      payload validation, Harbor trial setup, artifact validation, local server
+agents/runner_api.py         FastAPI app: blocking workflows, async /runs, run backends
+agents/requirements.txt      harbor[modal]==0.24.0, fastapi, uvicorn, httpx
+agents/Dockerfile            optional controller image for non-Modal hosts
+agents/docs-user-tester-agent/{prompts,skills}/
+agents/docs-editor-agent/{prompts,skills}/
+agents/tests/                Python tests (not embedded)
 ```
 
-`dari-docs init` extracts them into the user's repo:
+`agents/templates.go` embeds everything except the tests, and `dari-docs init` extracts it to `.dari-docs/agents/`. Re-running init removes only known legacy Flue runtime files and keeps custom prompts and skills. A Flue-era `.dari-docs/config.json` is rejected until the user re-runs init and redeploys.
 
-```text
-.dari-docs/agents/modal_app.py
-.dari-docs/agents/harbor_runner.py
-.dari-docs/agents/requirements.txt
-```
+## Services
 
-`harbor_runner.py` serves the tester and editor workflows on top of [Harbor](https://docs.harborframework.com). `requirements.txt` pins `harbor[modal]==0.24.0`.
+- The tester service exposes `POST /workflows/test?wait=result`; the editor exposes `POST /workflows/edit?wait=result`. Both block and return `{"result": ...}`. The CLI uses these.
+- Both services also expose `POST /runs`, `GET /runs/{id}`, `GET /runs/{id}/events?after=N` (returns `{events, next, status}`), `GET /runs/{id}/result` (returns `{result}`), `DELETE /runs/{id}` (cooperative cancel), and `GET /healthz`.
+- Status goes `queued` → `running` → `completed` | `failed` | `cancelled`. Events are lifecycle markers only (controller state, Harbor trial hooks, `artifact-retry`, `collecting-result`). There is no live log or trajectory endpoint; Harbor's optional `--stream` viewer is separate.
+- Limits: 10 MiB request body, 8 MiB collected output and result.
 
-- The tester service exposes `POST /workflows/test?wait=result`.
-- The editor service exposes `POST /workflows/edit?wait=result`.
+Local runs: `python harbor_runner.py --service tester|editor --port 8000` after installing `requirements.txt` in a venv. The local backend keeps state in memory, retains completed runs for one hour, and loses everything on restart.
 
-Both calls block until the result is ready. An asynchronous `/runs` API is planned; do not document or depend on its shape until it lands.
+Deployment: `uvx modal deploy .dari-docs/agents/modal_app.py`. Each run is a detached Modal Function (the controller) that creates one Harbor task sandbox. Run state is in the `dari-docs-harbor-runs` Modal Dict, which Modal expires after 30 days of inactivity. There is no durable queue and no automatic retry after a controller crash.
 
-Run a service locally after creating a virtual environment and installing `requirements.txt`:
+## Artifacts
 
-```bash
-python harbor_runner.py --service tester --port 8000
-python harbor_runner.py --service editor --port 8001
-```
-
-The intended deployment is Modal:
-
-```bash
-uvx modal deploy .dari-docs/agents/modal_app.py
-```
-
-`modal_app.py` deploys the tester and editor as separate Modal endpoints and reads model provider keys from the `dari-docs-model-providers` secret (override with `DARI_DOCS_MODAL_SECRET`). Each workflow request runs as a Harbor trial in a fresh sandbox. The tester agent writes `feedback.md`; the editor agent writes `updated-docs/files/` and `changelog.md`. The runner collects those artifacts and validates them on the trusted host before the sandbox is torn down. With `dari-docs check --parallel 30`, the CLI keeps many tester trials in flight and aggregates them after completion.
-
-If `DARI_DOCS_RUNNER_TOKEN` is set in the runner environment, requests must send `Authorization: Bearer <token>`. The CLI reads the token from the variable named by `--runner-token-env`.
+The tester agent writes `/app/output/feedback.md`. The editor writes `/app/output/changelog.md` and complete files under `/app/output/updated-docs/files/`. Harbor collects `/app/output` before tearing down the sandbox, and the controller validates it on the trusted host: no links or special files, portable repo-relative paths, size limits, no runtime secret values. The editor returns only created or changed files. If required output is missing after the agent finishes, the runner asks it once more to finish in the same session.
 
 ## Harness, Model, And Sandbox
 
-The defaults are the `claude-code` harness, the `anthropic/claude-sonnet-4-6` model, and the `modal` sandbox. Per run, the CLI can select:
+The defaults are `claude-code`, `anthropic/claude-sonnet-4-6`, and `modal`, overridable on the runner with `DARI_DOCS_DEFAULT_HARNESS`, `DARI_DOCS_DEFAULT_MODEL`, and `DARI_DOCS_DEFAULT_SANDBOX`. The task sandbox image defaults to `python:3.13-slim-bookworm` (`DARI_DOCS_WORKSPACE_IMAGE`).
 
-- `--harness` and `--editor-harness`: a Harbor agent name or a custom `module:Class` adapter.
-- `--llm`, `--feedback-llm`, `--editor-llm`: the model, in Harbor's `provider/model` form.
-- `--sandbox`: a Harbor environment type or a custom `module:Class` adapter.
-- `--agent-kwarg key=value`, `--sandbox-kwarg key=value`: constructor options.
-- `--agent-env NAME=value`: non-secret agent environment variables.
+Per run, the CLI sends an `execution` object built from `--harness`, `--editor-harness`, `--sandbox`, `--agent-kwarg`, `--agent-env`, and `--sandbox-kwarg`. Harness and sandbox accept Harbor names or custom `module:Class` adapters. Not every harness, model, and sandbox combination works; the default combination is the tested path. Short model IDs (`claude-*`, `gpt-*`, `o<N>*`) are normalized to `provider/model`.
 
-Not every harness, model, and sandbox combination works; the default combination is the tested path.
+The runner appends each workflow's `skills/*/SKILL.md` text to `prompts/system.md` rather than registering native Harbor skills, so any harness can use them.
 
-Harbor's trial lifecycle hooks are not surfaced through the blocking endpoints. Live trajectory streaming in Harbor is limited to Claude Code and Codex.
+## Credentials
 
-## Runtime Product/API Secrets
+- Model provider credentials go in the Modal secret (`dari-docs-model-providers`, overridable with `DARI_DOCS_MODAL_SECRET` at deploy time). The runner forwards Harbor's known provider variables, plus names listed in `DARI_DOCS_PROVIDER_ENV_NAMES`, to the agent. It never forwards `DARI_DOCS_RUNNER_TOKEN` or `MODAL_*`.
+- `DARI_DOCS_RUNNER_TOKEN` in the same secret enables bearer auth on everything except `/healthz`. The CLI reads `DARI_DOCS_RUNNER_TOKEN` automatically, or another variable named by `--runner-token-env`.
+- `--agent-env` is non-secret. The CLI and runner reject names containing `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `CREDENTIAL`, or `AUTH` (case-insensitive).
+- `--live-verify --secret-env NAME` sends runtime product/API secrets in the payload for that run only. They can't override provider, `MODAL_*`, `DARI_DOCS_*`, `PATH`, `HOME`, or `PYTHONPATH` variables, and the agents are told not to print them.
+- Tokens are never written to config or events. Failure errors are generic so Harbor exception text can't leak credentials.
 
-Runtime product/API keys are separate from model provider credentials. `dari-docs --live-verify --secret-env NAME` reads local environment variables and sends them in the workflow payload for that run only. The runner exposes those values to the agent's environment and instructs agents not to print secret values. Do not use `--agent-env` for secrets.
+## Tests
+
+```bash
+pip install -r agents/requirements.txt pytest pytest-asyncio
+python -m pytest agents/tests
+RUN_HARBOR_DOCKER_TESTS=1 python -m pytest agents/tests   # Docker smoke test with a fake harness; no inference key
+```

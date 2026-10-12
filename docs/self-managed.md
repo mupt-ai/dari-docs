@@ -1,6 +1,6 @@
 # Runner Setup
 
-`dari-docs` runs against tester and editor services that you deploy. The bundled services are a Python runner, `harbor_runner.py`, built on [Harbor](https://docs.harborframework.com). For each workflow request, the runner starts a Harbor trial: it creates a fresh sandbox, runs an agent harness inside it, collects the result files, and tears the sandbox down. The CLI only needs the tester base URL, and for `optimize`, the editor base URL.
+`dari-docs` runs against tester and editor services that you deploy. The bundled services are a Python runner built on [Harbor](https://docs.harborframework.com). For each workflow request, the runner's controller starts a Harbor trial: it creates a fresh task sandbox, runs an agent harness inside it, collects the result files, validates them on the controller, and lets Harbor tear the sandbox down. The CLI only needs the tester base URL, and for `optimize`, the editor base URL.
 
 The defaults are the `claude-code` harness, the `anthropic/claude-sonnet-4-6` model, and the `modal` sandbox.
 
@@ -15,12 +15,25 @@ dari-docs init
 This extracts:
 
 ```text
-.dari-docs/agents/modal_app.py
-.dari-docs/agents/harbor_runner.py
-.dari-docs/agents/requirements.txt
+.dari-docs/agents/
+  modal_app.py          Modal deployment
+  harbor_runner.py      Harbor trial controller and local server entrypoint
+  runner_api.py         HTTP API and run state
+  requirements.txt      harbor[modal]==0.24.0 plus the HTTP server
+  Dockerfile            optional controller image for non-Modal hosts
+  docs-user-tester-agent/
+    prompts/system.md
+    skills/docs-user-test/SKILL.md
+  docs-editor-agent/
+    prompts/system.md
+    skills/documentation-editor/SKILL.md
 ```
 
-`requirements.txt` pins `harbor[modal]==0.24.0`. `modal_app.py` deploys `harbor_runner.py` as two Modal web endpoints, one for the tester service and one for the editor service.
+The prompt and skill files are editable; see [harness, model, and sandbox selection](agent-customization.md#change-prompts-or-skills).
+
+### Upgrading From The Flue Runtime
+
+A `.dari-docs/` directory created for the earlier Flue runtime does not work with this runner. Run `dari-docs init` again and redeploy. Init removes only the known Flue runtime files (`package.json`, `bun.lock`, `flue.config.ts`, `app.ts`, the agent entrypoint, and the workflow file) and keeps your prompts and skills. Init also rewrites `.dari-docs/config.json`, so pass `--tester-url` and `--editor-url` again if you saved them before.
 
 ## Deploy To Modal
 
@@ -33,20 +46,13 @@ uvx modal secret create dari-docs-model-providers \
   OPENAI_API_KEY=...
 ```
 
-Deploy both services:
+Deploy:
 
 ```bash
 uvx modal deploy .dari-docs/agents/modal_app.py
 ```
 
-Modal prints two HTTPS URLs: one for the `tester` endpoint and one for the `editor` endpoint. The CLI calls:
-
-```text
-POST <tester-url>/workflows/test?wait=result
-POST <editor-url>/workflows/edit?wait=result
-```
-
-Both calls block until the Harbor trial finishes and its result has been collected. Keep `--timeout-minutes` long enough for sandbox startup plus the agent run.
+This creates the `dari-docs-agents` Modal app. Modal prints two HTTPS URLs: one for the `tester` endpoint and one for the `editor` endpoint. Each run executes in a detached Modal Function (the controller), which creates the task sandbox in the same Modal app.
 
 If you want a different Modal secret name, set it when deploying:
 
@@ -55,9 +61,26 @@ DARI_DOCS_MODAL_SECRET=my-model-provider-secret \
   uvx modal deploy .dari-docs/agents/modal_app.py
 ```
 
+### Runner Environment
+
+The runner reads these optional variables from its environment (on Modal, from the secret):
+
+| Variable | Purpose |
+| --- | --- |
+| `DARI_DOCS_RUNNER_TOKEN` | Require this bearer token on every endpoint except `/healthz`. See [Protect The Endpoints](#protect-the-endpoints). |
+| `DARI_DOCS_DEFAULT_HARNESS` | Harness when a request doesn't set one. Default `claude-code`. |
+| `DARI_DOCS_DEFAULT_MODEL` | Model when a request doesn't set one. Default `anthropic/claude-sonnet-4-6`. |
+| `DARI_DOCS_DEFAULT_SANDBOX` | Sandbox when a request doesn't set one. Default `modal`. |
+| `DARI_DOCS_WORKSPACE_IMAGE` | Registry image for the task sandbox. Default `python:3.13-slim-bookworm`. |
+| `DARI_DOCS_PROVIDER_ENV_NAMES` | Comma-separated extra variable names to forward to the agent as provider credentials. |
+
+The runner forwards known model-provider variables (the names Harbor's provider registry uses, such as `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`, plus any in `DARI_DOCS_PROVIDER_ENV_NAMES`) from its environment to the agent, because the harness needs them to call the model. It never forwards `DARI_DOCS_RUNNER_TOKEN` or `MODAL_*` variables.
+
+Use `DARI_DOCS_WORKSPACE_IMAGE` when the task needs tools that `python:3.13-slim-bookworm` lacks, such as Node.js.
+
 ## Protect The Endpoints
 
-The endpoints start agents that can run shell commands. To require a bearer token, add `DARI_DOCS_RUNNER_TOKEN` to the runner's environment, for example in the Modal secret, and redeploy:
+The endpoints start agents that can run shell commands. To require a bearer token, add `DARI_DOCS_RUNNER_TOKEN` to the Modal secret and redeploy:
 
 ```bash
 uvx modal secret create dari-docs-model-providers --force \
@@ -66,18 +89,17 @@ uvx modal secret create dari-docs-model-providers --force \
 uvx modal deploy .dari-docs/agents/modal_app.py
 ```
 
-When the token is set, requests without `Authorization: Bearer <token>` are rejected. Tell the CLI which local environment variable holds the token:
+When the token is set, requests without `Authorization: Bearer <token>` get `401`. The CLI sends the token automatically when `DARI_DOCS_RUNNER_TOKEN` is set in its environment:
 
 ```bash
 export DARI_DOCS_RUNNER_TOKEN=...
 
 dari-docs check . \
   --tester-url https://your-tester-url.modal.run \
-  --runner-token-env DARI_DOCS_RUNNER_TOKEN \
   --task "Install the SDK and make a first API call"
 ```
 
-The CLI reads the token from that variable locally; it is not written to `.dari-docs/`.
+To read the token from a different variable, pass `--runner-token-env NAME`. The CLI fails if that variable is empty. The token is never saved in `.dari-docs/config.json`.
 
 ## Run Checks
 
@@ -87,7 +109,7 @@ dari-docs check . \
   --task "Install the SDK and make a first API call"
 ```
 
-The tester agent writes `feedback.md` in its sandbox. The runner collects it and returns it as the tester response. `check` writes reports to `.dari-docs/runs/` and `.dari-docs/aggregate-feedback.md`.
+The tester agent writes `feedback.md` in its sandbox. The runner collects and validates it, and `check` writes reports to `.dari-docs/runs/` and `.dari-docs/aggregate-feedback.md`.
 
 ## Run Optimize
 
@@ -98,7 +120,7 @@ dari-docs optimize . \
   --task "Install the SDK and make a first API call"
 ```
 
-`optimize` runs the tester workflow first, then sends the aggregate feedback and source docs to the editor workflow. The editor agent writes complete proposed files under `updated-docs/files/` and a summary in `changelog.md`. The runner collects and validates those files on the trusted host before the sandbox is torn down, and the CLI writes them to `.dari-docs/updated/`.
+`optimize` runs the tester workflow first, then sends the aggregate feedback and source docs to the editor workflow. The editor agent writes complete proposed files under `updated-docs/files/` and a summary in `changelog.md`. The runner collects those artifacts before the sandbox is torn down, validates them, and returns only created or changed files. The CLI writes them to `.dari-docs/updated/`.
 
 Use `--apply` only after you are comfortable overwriting matching files in your repo.
 
@@ -114,7 +136,7 @@ dari-docs init \
 
 ## Run The Runner Locally
 
-You can run the runner on your machine instead of Modal. It needs Python 3.12 or newer. With the default `modal` sandbox, the runner still creates sandboxes in your Modal account, so run `uvx modal setup` first, or pass `--sandbox docker` to `dari-docs` to use local Docker.
+You can run the runner on your machine instead of Modal. It needs Python 3.12 or newer.
 
 ```bash
 cd .dari-docs/agents
@@ -131,23 +153,90 @@ Run the editor service on another port:
 ANTHROPIC_API_KEY=... python harbor_runner.py --service editor --port 8001
 ```
 
-Then point the CLI at them:
+The server listens on `127.0.0.1` unless you pass `--host`. With the default `modal` sandbox, a local runner still creates task sandboxes in your Modal account, so run `uvx modal setup` first. To keep sandboxes local, pass `--sandbox docker` to `dari-docs`; the runner's host then needs a running Docker engine.
 
 ```bash
 dari-docs optimize . \
   --tester-url http://127.0.0.1:8000 \
   --editor-url http://127.0.0.1:8001 \
+  --sandbox docker \
   --task "Follow the quickstart"
 ```
 
+A local runner keeps run state in memory. Completed runs are kept for one hour, and all runs are lost when the process restarts.
+
+### Controller Image
+
+`Dockerfile` builds an optional controller image for hosts other than Modal. It contains only the controller; task sandboxes are created separately by the selected sandbox provider. A containerized controller can't use `--sandbox docker` unless you separately give it access to a Docker engine. To use other sandbox providers, add their Harbor extras or SDKs to `requirements.txt` before building.
+
+## Workflow API
+
+### Blocking Workflows
+
+The CLI uses the blocking endpoints:
+
+```text
+POST <tester-url>/workflows/test?wait=result
+POST <editor-url>/workflows/edit?wait=result
+```
+
+Each call submits a run and waits for it to finish. A completed run returns `200` with `{ "result": ... }`. A failed or cancelled run returns `502`. If the client disconnects, the runner requests cancellation of the run. Keep `--timeout-minutes` long enough for sandbox startup plus the agent run.
+
+### Async Runs
+
+Both services also expose an asynchronous runs API. Use it to submit a run and poll it without holding a connection open.
+
+| Request | Response |
+| --- | --- |
+| `POST /runs` with `{ "workflow": "test" \| "edit", "payload": { ... } }` | `202` with `runId`, `statusUrl`, `resultUrl`, and `eventsUrl` |
+| `GET /runs/{runId}` | Run status: `runId`, `workflow`, `status`, `createdAt`, `finishedAt`, `error` |
+| `GET /runs/{runId}/events?after=N` | `{ "events": [...], "next": N, "status": "..." }` |
+| `GET /runs/{runId}/result` | `{ "result": ... }` once completed; `409` otherwise |
+| `DELETE /runs/{runId}` | `202` with `status: "cancellation-requested"`; `409` if already finished |
+| `GET /healthz` | `{ "ok": true, "service": "...", "runtime": "harbor" }`; no token required |
+
+The `workflow` must match the service: `test` on the tester URL, `edit` on the editor URL. The `payload` is the same object the blocking endpoint accepts. `GET` requests for a run created on the other service return `404`.
+
+Run `status` moves from `queued` to `running` and ends as `completed`, `failed`, or `cancelled`. A run that hasn't finished about an hour after creation is reported as `failed`.
+
+Cancellation is cooperative. `DELETE` records a request, and the controller cancels the Harbor trial the next time it checks, within about a second while the run is executing.
+
+### Events
+
+Events are lifecycle markers, not logs. Each event has `sequence`, `timestamp`, `event`, and, for Harbor trial events, `trialId`. Events include:
+
+- `running` when the controller starts.
+- Harbor trial lifecycle events, such as `start`, `environment-start`, `agent-start`, `agent-end`, and `end`.
+- `artifact-retry` when the agent finished without writing its required output and the runner asked it to finish once more.
+- `collecting-result` when the runner reads and validates artifacts.
+- A final `completed`, `failed`, or `cancelled` event.
+
+Each response returns up to 100 events after `after`. Pass the returned `next` as `after` on the next request, and stop when `status` is terminal and `events` is empty.
+
+There is no endpoint for live agent logs or trajectories. Harbor's own `--stream` viewer, which supports only Claude Code and Codex on some sandboxes, is separate from this runner and isn't wired into it.
+
+### Durability
+
+On Modal, run state lives in the `dari-docs-harbor-runs` Modal Dict. Modal expires a Dict after 30 days without activity. There is no durable application queue: if a controller crashes or Modal restarts it, the run is not retried, and it is reported as `failed` once the deadline passes. Resubmit failed runs.
+
+### Limits
+
+| Limit | Value |
+| --- | --- |
+| Request body | 10 MiB (`413` above it) |
+| Collected output and serialized result | 8 MiB each |
+| Agent run | 30 minutes |
+| Controller run | 55 minutes |
+
+Invalid payloads return `422` with a generic message. The runner doesn't echo payload values, because they may contain runtime secrets.
+
 ## Parallel Runs
 
-Use `--parallel` to control how many tester workflow calls the CLI keeps in flight. Each call runs in its own sandbox, and the CLI combines the finished reports into the normal aggregate feedback file. Sandbox provider quotas and model rate limits still apply.
+Use `--parallel` to control how many tester workflow calls the CLI keeps in flight. Each call runs in its own controller and task sandbox, and the CLI combines the finished reports into the normal aggregate feedback file. Modal concurrency settings in `modal_app.py`, sandbox provider quotas, and model rate limits still apply. A local runner runs up to 30 trials at a time and queues the rest.
 
-## Progress And Live Trajectories
+## Security Notes
 
-Harbor emits trial lifecycle events (start, environment start, agent start, agent end, end, cancel) through hooks. The blocking `?wait=result` endpoints return only the final result, so the CLI does not show these events while a run is in progress.
-
-An asynchronous `/runs` API with progress reporting is planned. Until it is available, treat `POST /workflows/<name>?wait=result` as the only supported contract.
-
-Harbor can stream a live agent trajectory only for some harnesses: currently Claude Code and Codex, on supported sandboxes such as Modal and Docker. Other harnesses report their trajectory only after the run finishes.
+- Tokens and credentials are not stored in `.dari-docs/config.json` or in run events.
+- Failed runs report a generic error instead of Harbor's exception text, which can echo command arguments or credentials. Inspect the controller's logs privately for details.
+- The runner rejects results that contain a runtime secret value passed with `--secret-env`.
+- Output artifacts can't contain symlinks, special files, or paths outside the output directory.

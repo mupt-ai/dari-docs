@@ -71,7 +71,7 @@ Avoid `--apply` in pull-request CI unless your workflow commits changes intentio
 
 ## Running The Runner In CI
 
-For quick experiments, you can start the tester runner inside the job. The runner still creates its sandbox through the selected sandbox provider, so this example passes `--sandbox docker` to use the runner's Docker daemon. It needs a model provider key in GitHub Secrets.
+For quick experiments, you can start the tester runner inside the job. This example passes `--sandbox docker` so the runner creates task sandboxes with the job's Docker engine instead of Modal. It needs a model provider key in GitHub Secrets.
 
 ```yaml
 - name: Extract runner
@@ -95,7 +95,7 @@ For quick experiments, you can start the tester runner inside the job. The runne
 - name: Run check against local runner
   run: |
     for i in $(seq 1 30); do
-      if curl -sS http://127.0.0.1:8000/ >/dev/null 2>&1; then break; fi
+      if curl -fsS http://127.0.0.1:8000/healthz >/dev/null 2>&1; then break; fi
       sleep 1
     done
     dari-docs check . \
@@ -106,14 +106,13 @@ For quick experiments, you can start the tester runner inside the job. The runne
 
 ## Protected Runners
 
-If the runner sets `DARI_DOCS_RUNNER_TOKEN`, store the same token as a GitHub secret and pass the variable name to the CLI:
+If the runner sets `DARI_DOCS_RUNNER_TOKEN`, store the same token as a GitHub secret and expose it to the step as `DARI_DOCS_RUNNER_TOKEN`. The CLI sends it automatically:
 
 ```yaml
 - name: Run docs check
   run: |
     dari-docs check . \
       --tester-url "$DARI_DOCS_TESTER_URL" \
-      --runner-token-env DARI_DOCS_RUNNER_TOKEN \
       --task "Install the SDK and make a first API call"
   env:
     DARI_DOCS_TESTER_URL: ${{ vars.DARI_DOCS_TESTER_URL }}
