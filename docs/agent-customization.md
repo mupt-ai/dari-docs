@@ -47,6 +47,10 @@ Valid kwargs depend on the harness; check its Harbor adapter.
 
 `--agent-env` is only for non-secret settings, because values are sent in plain text in the workflow payload. The CLI and the runner reject names that contain `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `CREDENTIAL`, or `AUTH`, in any case. Put model provider keys in the runner environment and product/API credentials in [`--secret-env`](live-verification.md).
 
+Values are literal. The runner rejects values containing `${...}` templates, which Harbor would otherwise resolve from the runner's environment.
+
+A `*_BASE_URL` variable, such as `ANTHROPIC_BASE_URL`, is accepted only when the value is listed in the runner's `DARI_DOCS_ALLOWED_MODEL_ENDPOINTS` or matches the base URL already configured on the runner. See [model endpoints](self-managed.md#model-endpoints).
+
 ## Choose A Sandbox
 
 Use `--sandbox` with a Harbor environment type, such as `modal` or `docker`, and `--sandbox-kwarg KEY=VALUE` (repeatable) for its constructor options:
@@ -58,7 +62,7 @@ dari-docs check . \
   --task "Install the SDK"
 ```
 
-The runner sets `app_name` and `sandbox_timeout_secs` for the `modal` sandbox unless you override them with `--sandbox-kwarg`.
+The runner sets `app_name` and a 55-minute `sandbox_timeout_secs` for the `modal` sandbox. Requests can't set `secrets`, `volumes`, or `registry_secret`; the operator sets those and other deployment-wide kwargs with `DARI_DOCS_ENVIRONMENT_KWARGS`. See [sandbox defaults](self-managed.md#sandbox-defaults).
 
 The runner process needs the sandbox provider's SDK and credentials. `requirements.txt` installs `harbor[modal]`; add the matching Harbor extra or SDK for other providers and redeploy. Keep sandbox provider credentials in the runner environment, never in `--agent-env`. A `docker` sandbox needs a Docker engine on the runner's host, so it suits a local runner rather than the Modal deployment.
 
@@ -76,6 +80,12 @@ dari-docs check . \
   --harness my_agents.docs_agent:DocsAgent \
   --sandbox my_sandboxes.vm:MySandbox \
   --task "Install the SDK"
+```
+
+The runner accepts a custom adapter only if the operator lists its exact `module:Class` path in `DARI_DOCS_CUSTOM_ADAPTERS` (comma-separated) on the runner. Built-in Harbor names need no listing.
+
+```bash
+DARI_DOCS_CUSTOM_ADAPTERS=my_agents.docs_agent:DocsAgent,my_sandboxes.vm:MySandbox
 ```
 
 The module must be importable by the runner. On Modal, the whole `.dari-docs/agents/` directory is copied into the image and is on `PYTHONPATH`, so you can add the module there and redeploy. Add any dependencies to `requirements.txt`. Agent adapters extend Harbor's `BaseInstalledAgent` or `BaseAgent`, and sandbox adapters extend `BaseEnvironment`. See Harbor's guides to [custom agents](https://docs.harborframework.com/agents/custom-agents) and [custom sandboxes](https://docs.harborframework.com/sandboxes/custom-sandboxes).

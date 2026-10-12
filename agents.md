@@ -24,7 +24,7 @@ agents/tests/                Python tests (not embedded)
 
 Local runs: `python harbor_runner.py --service tester|editor --port 8000` after installing `requirements.txt` in a venv. The local backend keeps state in memory, retains completed runs for one hour, and loses everything on restart.
 
-Deployment: `uvx modal deploy .dari-docs/agents/modal_app.py`. Each run is a detached Modal Function (the controller) that creates one Harbor task sandbox. Run state is in the `dari-docs-harbor-runs` Modal Dict, which Modal expires after 30 days of inactivity. There is no durable queue and no automatic retry after a controller crash.
+Deployment: `uvx modal deploy .dari-docs/agents/modal_app.py`. The task sandbox's hard lifetime equals the 55-minute (3300 s) controller budget; the CLI's `--timeout-minutes` defaults to 60. Each run is a detached Modal Function (the controller) that creates one Harbor task sandbox. Run state is in the `dari-docs-harbor-runs` Modal Dict, which Modal expires after 30 days of inactivity. There is no durable queue and no automatic retry after a controller crash.
 
 ## Artifacts
 
@@ -34,14 +34,22 @@ The tester agent writes `/app/output/feedback.md`. The editor writes `/app/outpu
 
 The defaults are `claude-code`, `anthropic/claude-sonnet-4-6`, and `modal`, overridable on the runner with `DARI_DOCS_DEFAULT_HARNESS`, `DARI_DOCS_DEFAULT_MODEL`, and `DARI_DOCS_DEFAULT_SANDBOX`. The task sandbox image defaults to `python:3.13-slim-bookworm` (`DARI_DOCS_WORKSPACE_IMAGE`).
 
-Per run, the CLI sends an `execution` object built from `--harness`, `--editor-harness`, `--sandbox`, `--agent-kwarg`, `--agent-env`, and `--sandbox-kwarg`. Harness and sandbox accept Harbor names or custom `module:Class` adapters. Not every harness, model, and sandbox combination works; the default combination is the tested path. Short model IDs (`claude-*`, `gpt-*`, `o<N>*`) are normalized to `provider/model`.
+Per run, the CLI sends an `execution` object built from `--harness`, `--editor-harness`, `--sandbox`, `--agent-kwarg`, `--agent-env`, and `--sandbox-kwarg`. Harness and sandbox accept Harbor names or custom `module:Class` adapters. Not every harness, model, and sandbox combination works; the default combination is the tested path.
+
+Request-side restrictions the runner enforces:
+
+- Custom `module:Class` harness or sandbox adapters must be listed in `DARI_DOCS_CUSTOM_ADAPTERS` (comma-separated) on the deployment. Built-in Harbor names are unrestricted.
+- `environmentKwargs` can't include `secrets`, `volumes`, or `registry_secret`. Operators set deployment-wide sandbox kwargs with `DARI_DOCS_ENVIRONMENT_KWARGS` (JSON).
+- An `agentEnv` `*_BASE_URL` must exactly match an entry in `DARI_DOCS_ALLOWED_MODEL_ENDPOINTS` (comma-separated) or the endpoint already configured on the runner, so requests can't redirect deployment keys.
+- `agentEnv` and `runtimeSecrets` values must be literals; `${...}` templates are rejected. Short model IDs (`claude-*`, `gpt-*`, `o<N>*`) are normalized to `provider/model`.
 
 The runner appends each workflow's `skills/*/SKILL.md` text to `prompts/system.md` rather than registering native Harbor skills, so any harness can use them.
 
 ## Credentials
 
 - Model provider credentials go in the Modal secret (`dari-docs-model-providers`, overridable with `DARI_DOCS_MODAL_SECRET` at deploy time). The runner forwards Harbor's known provider variables, plus names listed in `DARI_DOCS_PROVIDER_ENV_NAMES`, to the agent. It never forwards `DARI_DOCS_RUNNER_TOKEN` or `MODAL_*`.
-- `DARI_DOCS_RUNNER_TOKEN` in the same secret enables bearer auth on everything except `/healthz`. The CLI reads `DARI_DOCS_RUNNER_TOKEN` automatically, or another variable named by `--runner-token-env`.
+- `DARI_DOCS_RUNNER_TOKEN` in the same secret is required on Modal and for local runners on a non-loopback host (optional on loopback). It guards everything except `/healthz`. Generate it with `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`. The CLI reads `DARI_DOCS_RUNNER_TOKEN` automatically, or another variable named by `--runner-token-env`.
+- The token is an operator-level credential, not multi-tenant isolation: any holder can spend the deployment's provider keys and read any run's results. Results (feedback and proposed docs) stay in the Modal Dict until it expires; a result-deletion endpoint is planned but not implemented.
 - `--agent-env` is non-secret. The CLI and runner reject names containing `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `CREDENTIAL`, or `AUTH` (case-insensitive).
 - `--live-verify --secret-env NAME` sends runtime product/API secrets in the payload for that run only. They can't override provider, `MODAL_*`, `DARI_DOCS_*`, `PATH`, `HOME`, or `PYTHONPATH` variables, and the agents are told not to print them.
 - Tokens are never written to config or events. Failure errors are generic so Harbor exception text can't leak credentials.
@@ -51,5 +59,5 @@ The runner appends each workflow's `skills/*/SKILL.md` text to `prompts/system.m
 ```bash
 pip install -r agents/requirements.txt pytest pytest-asyncio
 python -m pytest agents/tests
-RUN_HARBOR_DOCKER_TESTS=1 python -m pytest agents/tests   # Docker smoke test with a fake harness; no inference key
+RUN_HARBOR_DOCKER_TESTS=1 python -m pytest agents/tests/test_docker.py   # real Harbor trials in Docker with a fake harness; no inference key
 ```

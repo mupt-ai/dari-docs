@@ -27,11 +27,13 @@ pip install -r agents/requirements.txt pytest pytest-asyncio
 python -m pytest agents/tests
 ```
 
-These tests don't need model keys or a sandbox provider. The Docker smoke test is skipped unless you opt in. It runs a real Harbor trial in local Docker with a fake harness, so it needs a running Docker engine but no inference key:
+These tests don't need model keys or a sandbox provider. The Docker smoke tests are skipped unless you opt in. They run real Harbor trials in local Docker with a fake harness, so they need a running Docker engine but no inference key:
 
 ```bash
-RUN_HARBOR_DOCKER_TESTS=1 python -m pytest agents/tests
+RUN_HARBOR_DOCKER_TESTS=1 python -m pytest agents/tests/test_docker.py
 ```
+
+PR checks run both commands.
 
 ## Smoke-Test Locally
 

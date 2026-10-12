@@ -19,6 +19,6 @@ Use test-mode, read-only, or otherwise safe credentials, such as a Stripe test k
 
 Model provider keys are different. Set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or another provider key in the Modal secret or the runner's environment. Do not pass model provider keys with `--secret-env`.
 
-Runtime secrets can't override runner configuration. The runner rejects names that are model provider variables, start with `MODAL_` or `DARI_DOCS_`, or are `PATH`, `HOME`, or `PYTHONPATH`. It also rejects a result that contains any runtime secret value, so a run fails rather than returning a leaked secret.
+Values are used literally; a value containing a `${...}` template is rejected. Runtime secrets can't override runner configuration. The runner rejects names that are model provider variables, start with `MODAL_` or `DARI_DOCS_`, or are `PATH`, `HOME`, or `PYTHONPATH`. It also rejects a result that contains any runtime secret value, so a run fails rather than returning a leaked secret.
 
 `--agent-env NAME=VALUE` is for non-secret harness settings only. Names that look like credentials, such as those containing `KEY`, `TOKEN`, or `SECRET`, are rejected; use `--secret-env` for product credentials.
