@@ -28,7 +28,7 @@ func newInitCommand() *cobra.Command {
 	opts := initOptions{}
 	cmd := &cobra.Command{
 		Use:           "init [repo]",
-		Short:         "Extract bundled Flue agent folders",
+		Short:         "Extract bundled Harbor agent folders",
 		Args:          cobra.ArbitraryArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -40,15 +40,15 @@ func newInitCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&opts.Deploy, "deploy", false, "unsupported; deploy .dari-docs/agents/modal_app.py with Modal")
-	cmd.Flags().StringVar(&opts.APIKeyEnv, "api-key-env", opts.APIKeyEnv, "unsupported; Dari API keys are not used by Flue deployments")
-	cmd.Flags().StringVar(&opts.APIKey, "api-key", "", "unsupported; Dari API keys are not used by Flue deployments")
-	cmd.Flags().StringVar(&opts.APIBaseURL, "api-base-url", opts.APIBaseURL, "unsupported; Dari API URLs are not used by Flue deployments")
-	cmd.Flags().StringVar(&opts.LLMAPIKeySecret, "llm-api-key-secret", "", "unsupported; configure provider env vars on the Flue deployment")
-	cmd.Flags().StringVar(&opts.AnthropicAPIKeySecret, "anthropic-api-key-secret", "", "unsupported; configure ANTHROPIC_API_KEY on the Flue deployment")
-	cmd.Flags().StringVar(&opts.OpenAIAPIKeySecret, "openai-api-key-secret", "", "unsupported; configure OPENAI_API_KEY on the Flue deployment")
-	cmd.Flags().StringVar(&opts.TesterURL, "tester-url", "", "base URL of a deployed tester Flue app to save in config")
-	cmd.Flags().StringVar(&opts.EditorURL, "editor-url", "", "base URL of a deployed editor Flue app to save in config")
-	cmd.Flags().StringVar(&opts.AgentsDir, "agents-dir", "", "where to extract Flue agent folders (default: <repo>/.dari-docs/agents)")
+	cmd.Flags().StringVar(&opts.APIKeyEnv, "api-key-env", opts.APIKeyEnv, "unsupported; Dari API keys are not used by Harbor deployments")
+	cmd.Flags().StringVar(&opts.APIKey, "api-key", "", "unsupported; Dari API keys are not used by Harbor deployments")
+	cmd.Flags().StringVar(&opts.APIBaseURL, "api-base-url", opts.APIBaseURL, "unsupported; Dari API URLs are not used by Harbor deployments")
+	cmd.Flags().StringVar(&opts.LLMAPIKeySecret, "llm-api-key-secret", "", "unsupported; configure provider env vars on the Harbor deployment")
+	cmd.Flags().StringVar(&opts.AnthropicAPIKeySecret, "anthropic-api-key-secret", "", "unsupported; configure ANTHROPIC_API_KEY on the Harbor deployment")
+	cmd.Flags().StringVar(&opts.OpenAIAPIKeySecret, "openai-api-key-secret", "", "unsupported; configure OPENAI_API_KEY on the Harbor deployment")
+	cmd.Flags().StringVar(&opts.TesterURL, "tester-url", "", "base URL of a deployed tester Harbor app to save in config")
+	cmd.Flags().StringVar(&opts.EditorURL, "editor-url", "", "base URL of a deployed editor Harbor app to save in config")
+	cmd.Flags().StringVar(&opts.AgentsDir, "agents-dir", "", "where to extract Harbor agent folders (default: <repo>/.dari-docs/agents)")
 	_ = cmd.Flags().MarkHidden("deploy")
 	_ = cmd.Flags().MarkHidden("api-key-env")
 	_ = cmd.Flags().MarkHidden("api-key")
@@ -80,9 +80,9 @@ func runInitWithOptions(ctx context.Context, opts initOptions) error {
 	if err := agenttemplates.Extract(agentsDir); err != nil {
 		return err
 	}
-	fmt.Printf("Extracted bundled Flue agent folders to %s\n", agentsDir)
+	fmt.Printf("Extracted bundled Harbor agent folders to %s\n", agentsDir)
 
-	cfg := projectconfig.Config{AgentsDir: agentsDir, AgentRuntime: "flue", LLMMode: "flue-env", TesterURL: opts.TesterURL, EditorURL: opts.EditorURL}
+	cfg := projectconfig.Config{AgentsDir: agentsDir, AgentRuntime: "harbor", LLMMode: "harbor-env", TesterURL: opts.TesterURL, EditorURL: opts.EditorURL}
 	if err := projectconfig.Save(absRepo, cfg); err != nil {
 		return err
 	}

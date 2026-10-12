@@ -1,4 +1,4 @@
-package flueclient
+package harborclient
 
 import (
 	"context"

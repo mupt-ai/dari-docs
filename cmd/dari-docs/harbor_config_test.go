@@ -8,15 +8,15 @@ import (
 	"github.com/mupt-ai/dari-docs/internal/projectconfig"
 )
 
-func TestResolveFlueConfigUsesDeploymentURLs(t *testing.T) {
+func TestResolveHarborConfigUsesDeploymentURLs(t *testing.T) {
 	repo := t.TempDir()
-	cfg := projectconfig.Config{TesterURL: "https://tester.example", EditorURL: "https://editor.example", AgentRuntime: "flue"}
+	cfg := projectconfig.Config{TesterURL: "https://tester.example", EditorURL: "https://editor.example", AgentRuntime: "harbor", LLMMode: "harbor-env"}
 	if err := projectconfig.Save(repo, cfg); err != nil {
 		t.Fatal(err)
 	}
 	opts := checkOptimizeOptions{Command: "optimize", RepoRoot: repo, Parallel: 1}
 
-	if err := resolveFlueCheckOptimizeConfig(&opts); err != nil {
+	if err := resolveHarborCheckOptimizeConfig(&opts); err != nil {
 		t.Fatal(err)
 	}
 	if opts.TesterURL != cfg.TesterURL || opts.EditorURL != cfg.EditorURL {
@@ -46,38 +46,38 @@ func TestResolveLLMFlagsFeedbackOverridesGlobalModel(t *testing.T) {
 	}
 }
 
-func TestResolveFlueConfigRejectsDariFlags(t *testing.T) {
+func TestResolveHarborConfigRejectsDariFlags(t *testing.T) {
 	repo := t.TempDir()
-	if err := projectconfig.Save(repo, projectconfig.Config{TesterURL: "https://tester.example", AgentRuntime: "flue"}); err != nil {
+	if err := projectconfig.Save(repo, projectconfig.Config{TesterURL: "https://tester.example", AgentRuntime: "harbor"}); err != nil {
 		t.Fatal(err)
 	}
 	opts := checkOptimizeOptions{Command: "check", RepoRoot: repo, Parallel: 1, APIKey: "dari_test"}
 
-	err := resolveFlueCheckOptimizeConfig(&opts)
+	err := resolveHarborCheckOptimizeConfig(&opts)
 	if err == nil || !strings.Contains(err.Error(), "Dari API and agent ID flags are not supported") {
 		t.Fatalf("err = %v, want Dari flag rejection", err)
 	}
 }
 
-func TestResolveFlueConfigRejectsLegacyConfig(t *testing.T) {
+func TestResolveHarborConfigRejectsLegacyConfig(t *testing.T) {
 	repo := t.TempDir()
 	if err := projectconfig.Save(repo, projectconfig.Config{TesterAgentID: "agt_tester"}); err != nil {
 		t.Fatal(err)
 	}
 	opts := checkOptimizeOptions{Command: "check", RepoRoot: repo, Parallel: 1}
 
-	err := resolveFlueCheckOptimizeConfig(&opts)
-	if err == nil || !strings.Contains(err.Error(), "was not created for Flue deployments") {
+	err := resolveHarborCheckOptimizeConfig(&opts)
+	if err == nil || !strings.Contains(err.Error(), "was not created for Harbor deployments") {
 		t.Fatalf("err = %v, want legacy config rejection", err)
 	}
 }
 
-func TestResolveFlueConfigRequiresTesterURL(t *testing.T) {
+func TestResolveHarborConfigRequiresTesterURL(t *testing.T) {
 	repo := t.TempDir()
 	opts := checkOptimizeOptions{Command: "check", RepoRoot: repo, Parallel: 1}
 
-	err := resolveFlueCheckOptimizeConfig(&opts)
-	if err == nil || !strings.Contains(err.Error(), "missing Flue tester URL") {
+	err := resolveHarborCheckOptimizeConfig(&opts)
+	if err == nil || !strings.Contains(err.Error(), "missing Harbor tester URL") {
 		t.Fatalf("err = %v, want tester URL error", err)
 	}
 }
