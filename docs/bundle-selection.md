@@ -1,6 +1,6 @@
 # Bundle Selection
 
-Before a local-docs run starts, `dari-docs` creates `.dari-docs/input-docs-bundle.tar.gz`. The bundle is the selected set of docs files for one run. The archive is kept locally for inspection, and the CLI sends the bundle contents to your Flue workflow, which writes them under `input-docs/files/` in the agent workspace.
+Before a local-docs run starts, `dari-docs` creates `.dari-docs/input-docs-bundle.tar.gz`. The bundle is the selected set of docs files for one run. The archive is kept locally for inspection, and the CLI sends the bundle contents to the tester or editor runner, which writes them under `input-docs/files/` in the agent's sandbox.
 
 By default, `dari-docs` includes files with docs-friendly extensions such as `.md`, `.mdx`, `.txt`, `.json`, `.yml`, `.yaml`, `.toml`, `.css`, `.js`, `.jsx`, `.ts`, and `.tsx`. It also includes common docs entrypoints such as `README.md`, `README`, `mint.json`, `docs.json`, `openapi.json`, `openapi.yaml`, `llms.txt`, and `llms-full.txt`.
 

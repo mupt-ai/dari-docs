@@ -14,7 +14,7 @@ dari-docs check . \
   --task "Set up authentication"
 ```
 
-Each task is run independently by the deployed Flue tester workflow. With `--parallel`, the CLI keeps multiple task/model runs in flight and then combines the reports.
+Each task is run independently by the tester runner, as its own Harbor trial in a fresh sandbox. With `--parallel`, the CLI keeps multiple task/model runs in flight and then combines the reports.
 
 ## Keep Tasks In A File
 

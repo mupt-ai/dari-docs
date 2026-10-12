@@ -20,7 +20,7 @@
   <a href="https://github.com/mupt-ai/dari-docs/actions/workflows/pr-checks.yml"><img src="https://github.com/mupt-ai/dari-docs/actions/workflows/pr-checks.yml/badge.svg" alt="PR Checks"></a>
 </p>
 
-`dari-docs` bundles selected documentation and sends it with your task to a tester agent that tries to follow the instructions in a workspace. The CLI talks to tester and editor services over HTTP; the bundled deployment uses Flue for the agent runtime and Modal for sandboxed execution. You deploy these services yourself.
+`dari-docs` bundles selected documentation and sends it with your task to a tester agent that tries to follow the instructions in a sandbox. The CLI talks to tester and editor services over HTTP. The bundled services are a small Python runner (`harbor_runner.py`) built on [Harbor](https://docs.harborframework.com), which runs an agent harness such as Claude Code inside a sandbox such as Modal. You deploy these services yourself.
 
 ## How it works
 
@@ -32,7 +32,7 @@ A successful check means the tester workflows completed—it is **not** a pass/f
 
 ## Get started
 
-The bundled deployment runs agents on Modal. You’ll need [`uvx`](https://docs.astral.sh/uv/), a Modal account, and model-provider credentials for the model you use. The CLI uses service URLs, so you can also connect it to your own compatible tester and editor services.
+The bundled deployment runs the runner and its sandboxes on Modal. You’ll need [`uvx`](https://docs.astral.sh/uv/), a Modal account, and model-provider credentials for the model you use. By default the agent harness is Claude Code (`claude-code`) with `anthropic/claude-sonnet-4-6` in a Modal sandbox. The CLI uses service URLs, so you can also connect it to your own compatible tester and editor services.
 
 1. **Install the CLI** (macOS or Linux, x86_64 or arm64):
 
@@ -46,7 +46,7 @@ The bundled deployment runs agents on Modal. You’ll need [`uvx`](https://docs.
    dari-docs init
    ```
 
-3. **Configure model credentials and deploy.** Include only the providers your selected models need. This example uses Anthropic and OpenAI credentials; the bundled tester defaults to `anthropic/claude-sonnet-4-6`.
+3. **Configure model credentials and deploy.** Include only the providers your selected harnesses and models need. This example uses Anthropic and OpenAI credentials; the default Claude Code harness needs `ANTHROPIC_API_KEY`.
 
    ```bash
    uvx modal setup
@@ -56,7 +56,7 @@ The bundled deployment runs agents on Modal. You’ll need [`uvx`](https://docs.
    uvx modal deploy .dari-docs/agents/modal_app.py
    ```
 
-   Modal prints two HTTPS URLs: one labeled `tester`, the other `editor`. `check` needs the tester URL; `optimize` needs both. See [agent setup](docs/self-managed.md#parallel-runs-and-model-configuration) for model overrides.
+   Modal prints two HTTPS URLs: one labeled `tester`, the other `editor`. `check` needs the tester URL; `optimize` needs both. See [runner setup](docs/self-managed.md) for bearer-token protection and [harness and model selection](docs/agent-customization.md).
 
 4. **Run a check** with the tester URL and a concrete task:
 
@@ -109,30 +109,44 @@ Each optimize run replaces the previous contents of `.dari-docs/updated/`. Use `
 
 ## Repeat tasks and compare models
 
-Pass `--task` more than once, or put tasks in a file with `--tasks-file` (one task per paragraph or bullet). Tester concurrency is one workflow at a time by default; use `--parallel` to run more concurrently. This example tries two tasks with two models:
+Pass `--task` more than once, or put tasks in a file with `--tasks-file` (one task per paragraph or bullet). Tester concurrency is one workflow at a time by default; use `--parallel` to run more concurrently. This example tries two tasks with two models on the default Claude Code harness:
 
 ```bash
 dari-docs check . \
   --tester-url <tester-url-from-modal> \
   --parallel 4 \
-  --feedback-llm claude-sonnet-4-6 \
-  --feedback-llm gpt-5.5 \
+  --feedback-llm anthropic/claude-sonnet-4-6 \
+  --feedback-llm anthropic/claude-opus-4-8 \
   --task "Install the SDK" \
   --task "Configure retries"
 ```
 
-The bundled Modal template starts a temporary Modal Sandbox for each workflow request and terminates it when the result returns. Model-provider credentials belong in the Modal secret, not in the docs bundle. See [task files and repeated checks](docs/tasks.md) for batching, timeouts, and model groups.
+Models must be ones the selected harness can run; to compare an OpenAI model, use a harness such as `codex` in a separate run. Each workflow request runs as its own Harbor trial in a fresh sandbox, which is torn down after the result is collected. Model-provider credentials belong in the Modal secret, not in the docs bundle. See [task files and repeated checks](docs/tasks.md) for batching, timeouts, and model groups.
+
+## Choose a harness and sandbox
+
+The runner defaults to Claude Code on Modal. Use `--harness` to pick another Harbor agent (for example `codex`) or a custom Harbor adapter given as `module:Class`, and `--sandbox` to pick another Harbor environment:
+
+```bash
+dari-docs check . \
+  --tester-url <tester-url-from-modal> \
+  --harness codex \
+  --feedback-llm openai/gpt-5.5 \
+  --task "Install the SDK"
+```
+
+Harbor supports many harnesses, models, and sandboxes, but not every combination works with `dari-docs`. Start from the default and verify a combination before relying on it. See [harness, model, and sandbox selection](docs/agent-customization.md).
 
 ## Configuration and safety
 
 - **Save deployment URLs:** `dari-docs init --tester-url <tester-url> --editor-url <editor-url>` stores the URLs in `.dari-docs/config.json`, so later commands can omit the URL flags. Do this during initial setup if possible: running `dari-docs init` again re-extracts the bundled agent files and can overwrite your edits to those templates.
 - **Review the bundle:** defaults include docs and docs-adjacent formats such as Markdown, JSON, YAML, TOML, CSS, JavaScript, and TypeScript; common generated directories and files over 5 MB are skipped. Secrets committed to files matching the bundle rules are still included unless excluded.
 - **Runtime credentials are opt-in:** environment variables are not bundled. `--live-verify --secret-env NAME` explicitly sends the named runtime product/API credential to the workflow for live verification. The agent can use it in shell commands, SDK calls, or API requests; use test-mode, read-only, or otherwise safe credentials. Do not pass model-provider keys this way.
-- **Protect deployed URLs:** the Modal endpoints run agents that can execute shell commands. Keep them private or add appropriate access controls, especially when using sensitive docs or credentials.
+- **Protect deployed URLs:** the Modal endpoints run agents that can execute shell commands. Set `DARI_DOCS_RUNNER_TOKEN` on the runner to require a bearer token, and pass `--runner-token-env DARI_DOCS_RUNNER_TOKEN` to the CLI. See [protect the endpoints](docs/self-managed.md#protect-the-endpoints).
 
 ## Documentation
 
-**Setup:** [Deploy the bundled agents](docs/self-managed.md) · [Local development](docs/local-development.md) · [Agent customization](docs/agent-customization.md)
+**Setup:** [Deploy the bundled agents](docs/self-managed.md) · [Local development](docs/local-development.md) · [Harness, model, and sandbox selection](docs/agent-customization.md)
 
 **Workflows:** [Task files and repeated checks](docs/tasks.md) · [GitHub Actions](docs/github-actions.md)
 

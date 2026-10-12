@@ -1,8 +1,8 @@
-# Flue App Setup
+# Runner Setup
 
-`dari-docs` runs against Flue agents that you deploy. Flue is the TypeScript agent runtime used by the bundled tester and editor; it packages the agent code and workflow files into HTTP servers. The CLI only needs the tester base URL, and for `optimize`, the editor base URL.
+`dari-docs` runs against tester and editor services that you deploy. The bundled services are a Python runner, `harbor_runner.py`, built on [Harbor](https://docs.harborframework.com). For each workflow request, the runner starts a Harbor trial: it creates a fresh sandbox, runs an agent harness inside it, collects the result files, and tears the sandbox down. The CLI only needs the tester base URL, and for `optimize`, the editor base URL.
 
-The bundled path is Modal: `dari-docs init` extracts two Flue agent folders plus a Modal deploy file. The deployed Modal endpoints are lightweight gateways; each workflow request runs the actual Flue agent inside a fresh Modal Sandbox.
+The defaults are the `claude-code` harness, the `anthropic/claude-sonnet-4-6` model, and the `modal` sandbox.
 
 ## Initialize
 
@@ -16,15 +16,15 @@ This extracts:
 
 ```text
 .dari-docs/agents/modal_app.py
-.dari-docs/agents/docs-user-tester-agent/
-.dari-docs/agents/docs-editor-agent/
+.dari-docs/agents/harbor_runner.py
+.dari-docs/agents/requirements.txt
 ```
 
-Each agent project is a normal, editable Flue folder with visible source files: `package.json`, `bun.lock`, `flue.config.ts`, `app.ts`, an agent entrypoint under `agents/`, one workflow under `workflows/`, prompts, and skills. There is no hidden `.flue/` directory in the initialized output.
+`requirements.txt` pins `harbor[modal]==0.24.0`. `modal_app.py` deploys `harbor_runner.py` as two Modal web endpoints, one for the tester service and one for the editor service.
 
 ## Deploy To Modal
 
-Create a Modal secret for model provider keys. Include whichever providers your model choices need:
+Create a Modal secret for model provider keys. Include whichever providers your harness and model choices need:
 
 ```bash
 uvx modal setup
@@ -33,18 +33,20 @@ uvx modal secret create dari-docs-model-providers \
   OPENAI_API_KEY=...
 ```
 
-Deploy both agents:
+Deploy both services:
 
 ```bash
 uvx modal deploy .dari-docs/agents/modal_app.py
 ```
 
-Modal prints two HTTPS URLs: one for the `tester` gateway and one for the `editor` gateway. The CLI calls:
+Modal prints two HTTPS URLs: one for the `tester` endpoint and one for the `editor` endpoint. The CLI calls:
 
 ```text
 POST <tester-url>/workflows/test?wait=result
 POST <editor-url>/workflows/edit?wait=result
 ```
+
+Both calls block until the Harbor trial finishes and its result has been collected. Keep `--timeout-minutes` long enough for sandbox startup plus the agent run.
 
 If you want a different Modal secret name, set it when deploying:
 
@@ -52,6 +54,30 @@ If you want a different Modal secret name, set it when deploying:
 DARI_DOCS_MODAL_SECRET=my-model-provider-secret \
   uvx modal deploy .dari-docs/agents/modal_app.py
 ```
+
+## Protect The Endpoints
+
+The endpoints start agents that can run shell commands. To require a bearer token, add `DARI_DOCS_RUNNER_TOKEN` to the runner's environment, for example in the Modal secret, and redeploy:
+
+```bash
+uvx modal secret create dari-docs-model-providers --force \
+  ANTHROPIC_API_KEY=... \
+  DARI_DOCS_RUNNER_TOKEN=...
+uvx modal deploy .dari-docs/agents/modal_app.py
+```
+
+When the token is set, requests without `Authorization: Bearer <token>` are rejected. Tell the CLI which local environment variable holds the token:
+
+```bash
+export DARI_DOCS_RUNNER_TOKEN=...
+
+dari-docs check . \
+  --tester-url https://your-tester-url.modal.run \
+  --runner-token-env DARI_DOCS_RUNNER_TOKEN \
+  --task "Install the SDK and make a first API call"
+```
+
+The CLI reads the token from that variable locally; it is not written to `.dari-docs/`.
 
 ## Run Checks
 
@@ -61,7 +87,7 @@ dari-docs check . \
   --task "Install the SDK and make a first API call"
 ```
 
-`check` writes reports to `.dari-docs/runs/` and `.dari-docs/aggregate-feedback.md`.
+The tester agent writes `feedback.md` in its sandbox. The runner collects it and returns it as the tester response. `check` writes reports to `.dari-docs/runs/` and `.dari-docs/aggregate-feedback.md`.
 
 ## Run Optimize
 
@@ -72,7 +98,7 @@ dari-docs optimize . \
   --task "Install the SDK and make a first API call"
 ```
 
-`optimize` runs the tester workflow first, then sends the aggregate feedback and source docs to the editor workflow. Proposed files are written to `.dari-docs/updated/`.
+`optimize` runs the tester workflow first, then sends the aggregate feedback and source docs to the editor workflow. The editor agent writes complete proposed files under `updated-docs/files/` and a summary in `changelog.md`. The runner collects and validates those files on the trusted host before the sandbox is torn down, and the CLI writes them to `.dari-docs/updated/`.
 
 Use `--apply` only after you are comfortable overwriting matching files in your repo.
 
@@ -86,52 +112,42 @@ dari-docs init \
   --editor-url https://your-editor-url.modal.run
 ```
 
-## Local Development
+## Run The Runner Locally
 
-For local development instead of Modal, run an extracted app directly. The templates use Bun for install/build and Node 22+ for runtime; `bun run start` invokes `node dist/server.mjs` because Flue currently imports Node runtime modules that Bun does not implement.
-
-Tester app:
+You can run the runner on your machine instead of Modal. It needs Python 3.12 or newer. With the default `modal` sandbox, the runner still creates sandboxes in your Modal account, so run `uvx modal setup` first, or pass `--sandbox docker` to `dari-docs` to use local Docker.
 
 ```bash
-cd .dari-docs/agents/docs-user-tester-agent
-bun install --frozen-lockfile
-bun run build
-PORT=8787 ANTHROPIC_API_KEY=... bun run start
+cd .dari-docs/agents
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+
+ANTHROPIC_API_KEY=... python harbor_runner.py --service tester --port 8000
 ```
 
-Editor app:
+Run the editor service on another port:
 
 ```bash
-cd .dari-docs/agents/docs-editor-agent
-bun install --frozen-lockfile
-bun run build
-PORT=8788 ANTHROPIC_API_KEY=... bun run start
+ANTHROPIC_API_KEY=... python harbor_runner.py --service editor --port 8001
 ```
 
-The workflow URLs must be reachable by the `dari-docs` CLI. Modal URLs can execute an agent that runs shell commands. Keep them private to your org, or add authentication/private ingress before using them with sensitive docs or secrets.
-
-## Parallel Runs And Model Configuration
-
-The Modal template is configured for sandbox fanout. Each tester workflow request creates its own Modal Sandbox, starts the Flue tester server in that sandbox, forwards `POST /workflows/test?wait=result`, then terminates the sandbox after the result. Use `--parallel` to control how many tester workflow calls the CLI keeps in flight, then it combines the finished reports into the normal aggregate feedback file.
-
-The Flue app has a default model, and each `dari-docs` run can request a model override in the workflow payload:
+Then point the CLI at them:
 
 ```bash
-dari-docs check . \
-  --tester-url https://your-tester-url.modal.run \
-  --parallel 30 \
-  --feedback-llm gpt-5.5 \
-  --feedback-llm claude-opus-4-8 \
-  --feedback-llm claude-sonnet-4-6 \
-  --task "Install the SDK"
+dari-docs optimize . \
+  --tester-url http://127.0.0.1:8000 \
+  --editor-url http://127.0.0.1:8001 \
+  --task "Follow the quickstart"
 ```
 
-Short model IDs are normalized for common providers: `claude-*` becomes `anthropic/claude-*`, and `gpt-*` becomes `openai/gpt-*`. The Modal secret or app environment still needs the matching provider key.
+## Parallel Runs
 
-Default provider key names:
+Use `--parallel` to control how many tester workflow calls the CLI keeps in flight. Each call runs in its own sandbox, and the CLI combines the finished reports into the normal aggregate feedback file. Sandbox provider quotas and model rate limits still apply.
 
-```text
-ANTHROPIC_API_KEY
-OPENAI_API_KEY
-OPENROUTER_API_KEY
-```
+## Progress And Live Trajectories
+
+Harbor emits trial lifecycle events (start, environment start, agent start, agent end, end, cancel) through hooks. The blocking `?wait=result` endpoints return only the final result, so the CLI does not show these events while a run is in progress.
+
+An asynchronous `/runs` API with progress reporting is planned. Until it is available, treat `POST /workflows/<name>?wait=result` as the only supported contract.
+
+Harbor can stream a live agent trajectory only for some harnesses: currently Claude Code and Codex, on supported sandboxes such as Modal and Docker. Other harnesses report their trajectory only after the run finishes.

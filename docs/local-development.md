@@ -14,31 +14,45 @@ go run ./cmd/dari-docs init --help
 go run ./cmd/dari-docs check --help
 ```
 
-The bundled Flue agent folders and Modal deploy file live under `agents/` and are embedded into the CLI binary. The embed patterns intentionally include visible source files such as `app.ts`, `agents/`, `workflows/`, `prompts/`, `skills/`, `modal_app.py`, and Bun lockfiles, but not local generated directories such as `.flue/`, `.flue-vite/`, `node_modules/`, or `dist/`.
+The bundled runner (`harbor_runner.py`), its `requirements.txt`, and the Modal deploy file (`modal_app.py`) live under `agents/` and are embedded into the CLI binary. `dari-docs init` extracts them to `.dari-docs/agents/`.
 
-After editing an app template, validate it from that app folder:
+## Test The Runner
+
+The runner needs Python 3.12 or newer. Create a virtual environment, install the pinned requirements, and run the Python tests:
 
 ```bash
-cd agents/docs-user-tester-agent
-bun install --frozen-lockfile
-bun run build
-PORT=8787 ANTHROPIC_API_KEY=... bun run start
+cd agents
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt pytest
+python -m pytest
 ```
 
-In another terminal, run a local check against that app:
+## Smoke-Test Locally
+
+Start the tester and editor services on different ports:
 
 ```bash
-go run ./cmd/dari-docs check . \
-  --tester-url http://127.0.0.1:8787 \
+cd agents
+. .venv/bin/activate
+ANTHROPIC_API_KEY=... python harbor_runner.py --service tester --port 8000
+```
+
+```bash
+cd agents
+. .venv/bin/activate
+ANTHROPIC_API_KEY=... python harbor_runner.py --service editor --port 8001
+```
+
+In another terminal, run a local optimize against both services:
+
+```bash
+go run ./cmd/dari-docs optimize . \
+  --tester-url http://127.0.0.1:8000 \
+  --editor-url http://127.0.0.1:8001 \
   --task "Follow the quickstart"
 ```
 
-Repeat the same build check for `agents/docs-editor-agent` when you change the editor template:
+The default sandbox is `modal`, so the runner creates sandboxes in your Modal account; run `uvx modal setup` first. To stay fully local, pass `--sandbox docker` to `dari-docs` with a Docker daemon running.
 
-```bash
-cd agents/docs-editor-agent
-bun install --frozen-lockfile
-bun run build
-```
-
-A full local optimize smoke test needs both apps running on different ports and both URLs passed to `dari-docs optimize`. For Modal sandbox-gateway changes, also smoke-check `uvx modal deploy .dari-docs/agents/modal_app.py` from an extracted template when credentials are available.
+For Modal deploy changes, also smoke-check `uvx modal deploy .dari-docs/agents/modal_app.py` from an extracted template when credentials are available.
