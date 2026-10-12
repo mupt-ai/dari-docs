@@ -1,169 +1,82 @@
-import asyncio
+"""Modal HTTP gateways and detached Harbor controllers (one task sandbox per run)."""
+
 import os
-import time
 from pathlib import Path
+from uuid import uuid4
 
 import modal
 
-APP_ROOT = Path(__file__).parent
-BUN_VERSION = "1.3.13"
-PORT = 8000
-MODEL_SECRET_NAME = os.environ.get("DARI_DOCS_MODAL_SECRET", "dari-docs-model-providers")
-
+ROOT = Path(__file__).parent
+SECRET_NAME = os.environ.get("DARI_DOCS_MODAL_SECRET", "dari-docs-model-providers")
 app = modal.App("dari-docs-agents")
-model_secret = modal.Secret.from_name(MODEL_SECRET_NAME)
+model_secret = modal.Secret.from_name(SECRET_NAME)
+runs = modal.Dict.from_name("dari-docs-harbor-runs", create_if_missing=True)
 
-
-def ignore_template_artifacts(path: Path) -> bool:
-    generated_parts = {
-        ".dari",
-        ".dari-docs",
-        ".flue",
-        ".flue-vite",
-        ".next",
-        ".turbo",
-        "build",
-        "coverage",
-        "dist",
-        "node_modules",
-        "package-lock.json",
-    }
-    return any(part in generated_parts for part in path.parts)
-
-
-runtime_image = (
+image = (
     modal.Image.debian_slim(python_version="3.13")
-    .apt_install("ca-certificates", "curl", "gnupg")
-    .run_commands(
-        "curl -fsSL https://deb.nodesource.com/setup_22.x | bash -",
-        "apt-get install -y nodejs",
-        f"npm install -g bun@{BUN_VERSION}",
-    )
-    .pip_install("fastapi==0.125.0", "httpx==0.28.1")
+    .apt_install("openssh-client", "ca-certificates")
+    .pip_install_from_requirements(str(ROOT / "requirements.txt"))
     .add_local_dir(
-        APP_ROOT / "docs-user-tester-agent",
-        remote_path="/app/tester",
+        ROOT,
+        remote_path="/app",
         copy=True,
-        ignore=ignore_template_artifacts,
+        ignore=["__pycache__", ".pytest_cache", ".venv", "tests", "*.go"],
     )
-    .add_local_dir(
-        APP_ROOT / "docs-editor-agent",
-        remote_path="/app/editor",
-        copy=True,
-        ignore=ignore_template_artifacts,
-    )
-    .run_commands(
-        "cd /app/tester && bun install --frozen-lockfile && bun run build",
-        "cd /app/editor && bun install --frozen-lockfile && bun run build",
-    )
+    .env({"PYTHONPATH": "/app"})
+    .workdir("/app")
 )
 
 
-def invoke_workflow_in_sandbox(
-    *,
-    workdir: str,
-    workflow: str,
-    body: bytes,
-    content_type: str,
-) -> tuple[int, str, bytes]:
-    import httpx
+class ModalBackend:
+    async def submit(self, workflow, payload):
+        from runner_api import initial_state
 
-    sandbox = modal.Sandbox.create(
-        "bun",
-        "run",
-        "start",
-        app=app,
-        image=runtime_image,
-        workdir=workdir,
-        env={"PORT": str(PORT)},
-        secrets=[model_secret],
-        encrypted_ports=[PORT],
-        timeout=3600,
-        idle_timeout=300,
-    )
-    try:
-        tunnels = sandbox.tunnels(timeout=120)
-        tunnel = tunnels[PORT]
-        base_url = tunnel.url.rstrip("/")
-        with httpx.Client(timeout=None) as client:
-            wait_for_health(client, base_url)
-            response = client.post(
-                f"{base_url}/workflows/{workflow}",
-                params={"wait": "result"},
-                content=body,
-                headers={"content-type": content_type or "application/json"},
-            )
-            return response.status_code, response.headers.get("content-type", "application/json"), response.content
-    finally:
-        sandbox.terminate(wait=False)
-
-
-def wait_for_health(client, base_url: str) -> None:
-    deadline = time.monotonic() + 120
-    last_error: Exception | None = None
-    while time.monotonic() < deadline:
+        run_id = str(uuid4())
+        await self.put(run_id, initial_state(workflow))
         try:
-            response = client.get(f"{base_url}/healthz", timeout=5)
-            if response.status_code == 200:
-                return
-            last_error = RuntimeError(f"health check returned HTTP {response.status_code}")
-        except Exception as exc:  # noqa: BLE001 - report the last startup failure.
-            last_error = exc
-        time.sleep(1)
-    raise RuntimeError(f"Flue sandbox did not become healthy: {last_error}")
+            await execute.spawn.aio(run_id, workflow, payload.model_dump())
+        except Exception:
+            state = await self.get(run_id)
+            state.update(status="failed", error="Unable to schedule controller")
+            await self.put(run_id, state)
+            raise
+        return run_id
+
+    async def get(self, run_id):
+        return await runs.get.aio(run_id, None)
+
+    async def put(self, run_id, state):
+        # Only the controller updates this record. Cancellation has a separate key.
+        await runs.put.aio(run_id, state)
+
+    async def cancel_requested(self, run_id):
+        return await runs.get.aio(f"cancel:{run_id}", False)
+
+    async def cancel(self, run_id):
+        await runs.put.aio(f"cancel:{run_id}", True)
 
 
-def gateway_app(*, workflow: str, workdir: str, service: str):
-    from fastapi import FastAPI, Request, Response
+@app.function(image=image, secrets=[model_secret], timeout=3500, max_containers=100)
+async def execute(run_id: str, workflow: str, payload: dict):
+    from harbor_runner import Payload
+    from runner_api import execute_run
 
-    web = FastAPI()
-
-    @web.get("/healthz")
-    def healthz():
-        return {"ok": True, "service": service, "runtime": "modal-sandbox-gateway"}
-
-    @web.post(f"/workflows/{workflow}")
-    async def run_workflow(request: Request):
-        body = await request.body()
-        status, media_type, content = await asyncio.to_thread(
-            invoke_workflow_in_sandbox,
-            workdir=workdir,
-            workflow=workflow,
-            body=body,
-            content_type=request.headers.get("content-type", "application/json"),
-        )
-        return Response(content=content, status_code=status, headers={"content-type": media_type})
-
-    return web
+    await execute_run(ModalBackend(), run_id, workflow, Payload.model_validate(payload))
 
 
-@app.function(
-    image=runtime_image,
-    timeout=3700,
-    max_containers=50,
-    scaledown_window=300,
-)
+@app.function(image=image, secrets=[model_secret], timeout=3600, max_containers=50)
 @modal.concurrent(max_inputs=100, target_inputs=30)
 @modal.asgi_app(label="tester")
 def tester():
-    return gateway_app(
-        workflow="test",
-        workdir="/app/tester",
-        service="docs-user-tester-agent",
-    )
+    from runner_api import create_app
+
+    return create_app("tester", ModalBackend())
 
 
-@app.function(
-    image=runtime_image,
-    timeout=3700,
-    max_containers=20,
-    scaledown_window=300,
-)
+@app.function(image=image, secrets=[model_secret], timeout=3600, max_containers=20)
 @modal.concurrent(max_inputs=50, target_inputs=10)
 @modal.asgi_app(label="editor")
 def editor():
-    return gateway_app(
-        workflow="edit",
-        workdir="/app/editor",
-        service="docs-editor-agent",
-    )
+    from runner_api import create_app
+
+    return create_app("editor", ModalBackend())

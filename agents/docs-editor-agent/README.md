@@ -1,38 +1,13 @@
-# docs-editor-agent
+# Documentation editor
 
-This is the bundled Flue editor app for `dari-docs`. The HTTP workflow is `workflows/edit.ts`, exposed as:
+The shared Python `harbor_runner.py` loads `prompts/system.md`, stages the source docs and aggregate tester feedback, and runs a Harbor trial. The agent writes complete proposed files under `/app/output/updated-docs/files/` and a changelog at `/app/output/changelog.md`. The controller returns validated `{"result":{"changelog":"...","files":[{"path":"README.md","content":"..."}]}}`.
 
-```text
-POST /workflows/edit?wait=result
-```
-
-The workflow receives docs files plus aggregate tester feedback and returns proposed files for the CLI to write under `.dari-docs/updated/`.
-
-## Deploy With Modal
-
-From the extracted `.dari-docs/agents/` directory, deploy both bundled agents:
+Local development, from the parent agents directory:
 
 ```bash
-uvx modal deploy modal_app.py
+python harbor_runner.py --service editor --port 8001
 ```
 
-The tester gateway creates one Modal Sandbox per workflow request and can be fanned out with `dari-docs check --parallel 30`; the editor gateway is called once after aggregate feedback is ready and also runs the editor inside a sandbox.
+Paths must remain repo-relative; symlinks and special files are rejected. Unchanged files are filtered. Missing output triggers one retry in the same session when the harness supports resume, otherwise a fresh prompt in the same workspace. A run with original docs but no changed files fails rather than returning an empty proposal.
 
-## Run Locally
-
-```bash
-bun install --frozen-lockfile
-bun run build
-PORT=8788 ANTHROPIC_API_KEY=... bun run start
-```
-
-Use it with a tester app:
-
-```bash
-dari-docs optimize . \
-  --tester-url http://127.0.0.1:8787 \
-  --editor-url http://127.0.0.1:8788 \
-  --task "Install the SDK"
-```
-
-The default model is `anthropic/claude-sonnet-4-6`. Change it in `agents/docs-editor-agent.ts` before rebuilding, set `DARI_DOCS_DEFAULT_MODEL`, or pass a model in the workflow payload via `dari-docs --llm` / `--editor-llm`.
+Select the editor separately with `--editor-harness`; model/provider and sandbox compatibility depend on the selected Harbor adapters. Provider credentials belong in the controller environment or Modal secret. The prompt and skill content are included in task instructions, including for custom harnesses without native skill support.
