@@ -35,6 +35,9 @@ var generatedTemplateParts = map[string]struct{}{
 	"node_modules":      {},
 	"package-lock.json": {},
 	"bun.lockb":         {},
+	"__pycache__":       {},
+	".pytest_cache":     {},
+	".venv":             {},
 }
 
 func Extract(dest string) error {
@@ -57,6 +60,14 @@ func Extract(dest string) error {
 			return os.MkdirAll(out, dirMode)
 		}
 
+		// User instructions survive runtime upgrades and repeated initialization.
+		if strings.Contains(templatePath, "/prompts/") || strings.Contains(templatePath, "/skills/") {
+			if _, err := os.Stat(out); err == nil {
+				return nil
+			} else if !os.IsNotExist(err) {
+				return err
+			}
+		}
 		b, err := agents.FS.ReadFile(templatePath)
 		if err != nil {
 			return err
@@ -78,6 +89,12 @@ func cleanGeneratedTemplateJunk(dest string) error {
 		}
 		for part := range generatedTemplateParts {
 			if err := os.RemoveAll(filepath.Join(root, part)); err != nil {
+				return err
+			}
+		}
+		// Remove only known former runtime files, preserving custom prompts/skills.
+		for _, rel := range []string{"package.json", "bun.lock", "flue.config.ts", "app.ts", "agents/" + agentDir + ".ts", "workflows/test.ts", "workflows/edit.ts"} {
+			if err := os.RemoveAll(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
 				return err
 			}
 		}

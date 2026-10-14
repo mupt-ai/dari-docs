@@ -1,4 +1,4 @@
-package flueclient
+package harborclient
 
 import (
 	"bytes"
@@ -17,27 +17,33 @@ import (
 	"time"
 
 	"github.com/mupt-ai/dari-docs/internal/bundle"
+	"github.com/mupt-ai/dari-docs/internal/projectconfig"
 	"github.com/mupt-ai/dari-docs/internal/runner"
 	"github.com/mupt-ai/dari-docs/internal/runtimeenv"
 	"github.com/mupt-ai/dari-docs/internal/workspace"
 )
 
+const defaultWorkflowTimeout = 60 * time.Minute
+
 type Config struct {
-	RepoRoot       string
-	OutDir         string
-	TesterURL      string
-	EditorURL      string
-	Tasks          []string
-	FeedbackModels []string
-	EditorModel    string
-	LiveVerify     bool
-	RuntimeSecrets map[string]string
-	PublicDocURLs  []string
-	PublicDocsOnly bool
-	SkipEditor     bool
-	Timeout        time.Duration
-	Parallel       int
-	BundleOptions  bundle.CreateOptions
+	Execution       *projectconfig.Execution
+	EditorExecution *projectconfig.Execution
+	RunnerToken     string
+	RepoRoot        string
+	OutDir          string
+	TesterURL       string
+	EditorURL       string
+	Tasks           []string
+	FeedbackModels  []string
+	EditorModel     string
+	LiveVerify      bool
+	RuntimeSecrets  map[string]string
+	PublicDocURLs   []string
+	PublicDocsOnly  bool
+	SkipEditor      bool
+	Timeout         time.Duration
+	Parallel        int
+	BundleOptions   bundle.CreateOptions
 }
 
 type Result struct {
@@ -52,12 +58,13 @@ type docFile struct {
 }
 
 type testerPayload struct {
-	Task           string            `json:"task"`
-	Model          string            `json:"model,omitempty"`
-	Files          []docFile         `json:"files,omitempty"`
-	PublicDocURLs  []string          `json:"publicDocUrls,omitempty"`
-	LiveVerify     bool              `json:"liveVerify,omitempty"`
-	RuntimeSecrets map[string]string `json:"runtimeSecrets,omitempty"`
+	Execution      *projectconfig.Execution `json:"execution,omitempty"`
+	Task           string                   `json:"task"`
+	Model          string                   `json:"model,omitempty"`
+	Files          []docFile                `json:"files,omitempty"`
+	PublicDocURLs  []string                 `json:"publicDocUrls,omitempty"`
+	LiveVerify     bool                     `json:"liveVerify,omitempty"`
+	RuntimeSecrets map[string]string        `json:"runtimeSecrets,omitempty"`
 }
 
 type testerResult struct {
@@ -65,11 +72,12 @@ type testerResult struct {
 }
 
 type editorPayload struct {
-	Files          []docFile         `json:"files"`
-	Feedback       string            `json:"feedback"`
-	Model          string            `json:"model,omitempty"`
-	LiveVerify     bool              `json:"liveVerify,omitempty"`
-	RuntimeSecrets map[string]string `json:"runtimeSecrets,omitempty"`
+	Execution      *projectconfig.Execution `json:"execution,omitempty"`
+	Files          []docFile                `json:"files"`
+	Feedback       string                   `json:"feedback"`
+	Model          string                   `json:"model,omitempty"`
+	LiveVerify     bool                     `json:"liveVerify,omitempty"`
+	RuntimeSecrets map[string]string        `json:"runtimeSecrets,omitempty"`
 }
 
 type editorResult struct {
@@ -78,7 +86,51 @@ type editorResult struct {
 }
 
 type workflowResponse[T any] struct {
-	Result T `json:"result"`
+	Result *T `json:"result"`
+}
+
+// UnmarshalJSON requires both file fields while allowing intentionally empty content.
+func (f *docFile) UnmarshalJSON(data []byte) error {
+	var fields struct {
+		Path    *string `json:"path"`
+		Content *string `json:"content"`
+	}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if fields.Path == nil || fields.Content == nil {
+		return fmt.Errorf("documentation file requires path and content strings")
+	}
+	f.Path, f.Content = *fields.Path, *fields.Content
+	return nil
+}
+
+func (r testerResult) validate() error {
+	if strings.TrimSpace(r.Feedback) == "" {
+		return fmt.Errorf("tester result requires nonempty feedback")
+	}
+	return nil
+}
+
+func (r editorResult) validate() error {
+	if strings.TrimSpace(r.Changelog) == "" {
+		return fmt.Errorf("editor result requires nonempty changelog")
+	}
+	if r.Files == nil {
+		return fmt.Errorf("editor result requires a files array")
+	}
+	seen := make(map[string]bool, len(r.Files))
+	for _, file := range r.Files {
+		path := normalizeEditedPath(file.Path)
+		if err := bundle.ValidateRelativePath(path); err != nil {
+			return fmt.Errorf("editor result path: %w", err)
+		}
+		if seen[path] {
+			return fmt.Errorf("editor result contains duplicate file path %q", path)
+		}
+		seen[path] = true
+	}
+	return nil
 }
 
 type httpError struct {
@@ -87,24 +139,35 @@ type httpError struct {
 }
 
 func (e *httpError) Error() string {
-	return fmt.Sprintf("flue workflow http %d: %s", e.Status, e.Body)
+	return fmt.Sprintf("harbor workflow http %d: %s", e.Status, e.Body)
 }
 
 func Run(ctx context.Context, cfg Config) (Result, error) {
+	cfg.Execution = projectconfig.MergeExecution(nil, cfg.Execution)
+	cfg.EditorExecution = projectconfig.MergeExecution(cfg.Execution, cfg.EditorExecution)
+	if err := cfg.Execution.Validate(); err != nil {
+		return Result{}, err
+	}
+	if err := cfg.EditorExecution.Validate(); err != nil {
+		return Result{}, err
+	}
 	if cfg.OutDir == "" {
 		cfg.OutDir = filepath.Join(cfg.RepoRoot, ".dari-docs")
 	}
+	if cfg.Timeout < 0 {
+		return Result{}, fmt.Errorf("workflow timeout must be positive")
+	}
 	if cfg.Timeout == 0 {
-		cfg.Timeout = 30 * time.Minute
+		cfg.Timeout = defaultWorkflowTimeout
 	}
 	if len(cfg.Tasks) == 0 {
 		return Result{}, fmt.Errorf("at least one --task or --tasks-file entry is required")
 	}
 	if strings.TrimSpace(cfg.TesterURL) == "" {
-		return Result{}, fmt.Errorf("missing Flue tester URL; pass --tester-url or save it in .dari-docs/config.json")
+		return Result{}, fmt.Errorf("missing Harbor tester URL; pass --tester-url or save it in .dari-docs/config.json")
 	}
 	if !cfg.SkipEditor && strings.TrimSpace(cfg.EditorURL) == "" {
-		return Result{}, fmt.Errorf("missing Flue editor URL; pass --editor-url or save it in .dari-docs/config.json")
+		return Result{}, fmt.Errorf("missing Harbor editor URL; pass --editor-url or save it in .dari-docs/config.json")
 	}
 	if err := os.MkdirAll(cfg.OutDir, 0o755); err != nil {
 		return Result{}, err
@@ -147,7 +210,8 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		return res, nil
 	}
 	aggregate := runner.AggregateFeedback(reports)
-	edited, err := callWorkflow[editorResult](ctx, client, cfg.EditorURL, "edit", editorPayload{
+	edited, err := callWorkflow[editorResult](ctx, client, cfg.EditorURL, "edit", cfg.RunnerToken, editorPayload{
+		Execution:      cfg.EditorExecution,
 		Files:          files,
 		Feedback:       aggregate,
 		Model:          cfg.EditorModel,
@@ -156,6 +220,9 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	})
 	if err != nil {
 		return res, err
+	}
+	if len(files) > 0 && len(edited.Files) == 0 {
+		return res, fmt.Errorf("editor result contains no proposed documentation files")
 	}
 	updatedDir := filepath.Join(cfg.OutDir, "updated")
 	_ = os.RemoveAll(updatedDir)
@@ -213,7 +280,8 @@ func runTesterWorkflows(ctx context.Context, client *http.Client, cfg Config, fi
 		go func() {
 			defer wg.Done()
 			for spec := range jobs {
-				result, err := callWorkflow[testerResult](ctx, client, cfg.TesterURL, "test", testerPayload{
+				result, err := callWorkflow[testerResult](ctx, client, cfg.TesterURL, "test", cfg.RunnerToken, testerPayload{
+					Execution:      cfg.Execution,
 					Task:           spec.Task,
 					Model:          spec.Model,
 					Files:          files,
@@ -269,7 +337,7 @@ func runTesterWorkflows(ctx context.Context, client *http.Client, cfg Config, fi
 	return reports, nil
 }
 
-func callWorkflow[T any](ctx context.Context, client *http.Client, baseURL, workflow string, payload any) (T, error) {
+func callWorkflow[T interface{ validate() error }](ctx context.Context, client *http.Client, baseURL, workflow, token string, payload any) (T, error) {
 	var zero T
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -284,6 +352,9 @@ func callWorkflow[T any](ctx context.Context, client *http.Client, baseURL, work
 		return zero, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return zero, err
@@ -298,15 +369,21 @@ func callWorkflow[T any](ctx context.Context, client *http.Client, baseURL, work
 	}
 	var out workflowResponse[T]
 	if err := json.Unmarshal(respBody, &out); err != nil {
-		return zero, fmt.Errorf("decode response: %w; body=%s", err, string(respBody))
+		return zero, fmt.Errorf("decode %s response: %w", workflow, err)
 	}
-	return out.Result, nil
+	if out.Result == nil {
+		return zero, fmt.Errorf("%s response requires a nonnull result object", workflow)
+	}
+	if err := (*out.Result).validate(); err != nil {
+		return zero, fmt.Errorf("invalid %s response: %w", workflow, err)
+	}
+	return *out.Result, nil
 }
 
 func workflowURL(baseURL, workflow string) (string, error) {
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
-		return "", fmt.Errorf("missing Flue URL")
+		return "", fmt.Errorf("missing Harbor URL")
 	}
 	u, err := url.Parse(baseURL)
 	if err != nil {

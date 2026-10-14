@@ -40,6 +40,23 @@ jobs:
       - name: go build
         run: go build ./...
 
+  harbor:
+    name: harbor
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: agents/requirements.txt
+      - name: Install runner and test dependencies
+        run: pip install -r agents/requirements.txt pytest pytest-asyncio
+      - name: Unit and HTTP contract tests
+        run: python -m pytest -q agents/tests
+      - name: Real Harbor Docker artifact smoke tests (no inference credentials)
+        run: RUN_HARBOR_DOCKER_TESTS=1 python -m pytest -q agents/tests/test_docker.py
+
   web:
     name: web
     runs-on: blacksmith-4vcpu-ubuntu-2404

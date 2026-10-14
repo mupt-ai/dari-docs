@@ -1,4 +1,4 @@
-package flueclient
+package harborclient
 
 import (
 	"context"
@@ -28,7 +28,7 @@ func TestRunSendsTesterModelMatrix(t *testing.T) {
 			t.Fatal(err)
 		}
 		gotModels = append(gotModels, payload.Model)
-		_ = json.NewEncoder(w).Encode(workflowResponse[testerResult]{Result: testerResult{Feedback: "ok " + payload.Model}})
+		_ = json.NewEncoder(w).Encode(workflowResponse[testerResult]{Result: &testerResult{Feedback: "ok " + payload.Model}})
 	}))
 	defer server.Close()
 
@@ -80,7 +80,7 @@ func TestRunRunsTesterWorkflowsInParallel(t *testing.T) {
 		mu.Lock()
 		active--
 		mu.Unlock()
-		_ = json.NewEncoder(w).Encode(workflowResponse[testerResult]{Result: testerResult{Feedback: "ok " + payload.Task}})
+		_ = json.NewEncoder(w).Encode(workflowResponse[testerResult]{Result: &testerResult{Feedback: "ok " + payload.Task}})
 	}))
 	defer server.Close()
 

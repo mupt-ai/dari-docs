@@ -15,9 +15,10 @@ func TestPrepareUsesPublicDocsURLWithoutBundlingCWD(t *testing.T) {
 		t.Fatal(err)
 	}
 	opts := &checkOptimizeOptions{
-		Command:       "check",
-		TaskInputs:    []string{"Read docs"},
-		PublicDocURLs: []string{"https://docs.dari.dev/llms.txt"},
+		Command:        "check",
+		TimeoutMinutes: 60,
+		TaskInputs:     []string{"Read docs"},
+		PublicDocURLs:  []string{"https://docs.dari.dev/llms.txt"},
 	}
 	if err := opts.prepare(); err != nil {
 		t.Fatal(err)
@@ -39,10 +40,11 @@ func TestPrepareUsesPublicDocsURLWithoutBundlingCWD(t *testing.T) {
 func TestPrepareRejectsOptimizeWithPublicDocsURL(t *testing.T) {
 	repo := t.TempDir()
 	opts := &checkOptimizeOptions{
-		Command:       "optimize",
-		RepoArg:       repo,
-		TaskInputs:    []string{"Improve docs"},
-		PublicDocURLs: []string{"https://example.com/llms.txt"},
+		Command:        "optimize",
+		TimeoutMinutes: 60,
+		RepoArg:        repo,
+		TaskInputs:     []string{"Improve docs"},
+		PublicDocURLs:  []string{"https://example.com/llms.txt"},
 	}
 	err := opts.prepare()
 	if err == nil || !strings.Contains(err.Error(), "support check only") {
@@ -73,7 +75,7 @@ func TestWaitFlagIsUnsupported(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unsupported --wait error")
 	}
-	if !strings.Contains(err.Error(), "--wait is not supported for Flue runs") {
+	if !strings.Contains(err.Error(), "--wait is not supported for Harbor runs") {
 		t.Fatalf("error = %q, want --wait unsupported", err.Error())
 	}
 }
@@ -104,14 +106,14 @@ func TestCheckHelpShowsModelFlagsAndHidesManagedFlags(t *testing.T) {
 			t.Fatalf("check help should not contain %q:\n%s", hidden, help)
 		}
 	}
-	for _, shown := range []string{"--tester-url", "--task", "--docs-url", "--llm", "--feedback-llm", "--parallel"} {
+	for _, shown := range []string{"--tester-url", "--task", "--docs-url", "--llm", "--feedback-llm", "--parallel", "--harness", "--editor-harness", "--sandbox", "--agent-kwarg", "--agent-env", "--sandbox-kwarg", "--runner-token-env"} {
 		if !strings.Contains(help, shown) {
 			t.Fatalf("check help missing %q:\n%s", shown, help)
 		}
 	}
 }
 
-func TestInitHelpShowsFlueURLFlags(t *testing.T) {
+func TestInitHelpShowsHarborURLFlags(t *testing.T) {
 	cmd := newInitCommand()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
@@ -132,7 +134,7 @@ func TestInitHelpShowsFlueURLFlags(t *testing.T) {
 	}
 }
 
-func TestRootHelpShowsOnlyFlueCommands(t *testing.T) {
+func TestRootHelpShowsOnlyHarborCommands(t *testing.T) {
 	cmd := newRootCommand()
 	var out bytes.Buffer
 	cmd.SetOut(&out)

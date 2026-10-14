@@ -7,62 +7,50 @@ import (
 	"testing"
 )
 
-func TestExtractedAgentsAreSimpleFlueProjects(t *testing.T) {
+func TestExtractedAgentsAreHarborTemplates(t *testing.T) {
 	dir := t.TempDir()
 	if err := Extract(dir); err != nil {
 		t.Fatal(err)
 	}
-	modalApp := readText(t, filepath.Join(dir, "modal_app.py"))
-	if !strings.Contains(modalApp, "modal.App") || !strings.Contains(modalApp, "modal.Sandbox.create") || !strings.Contains(modalApp, "@modal.asgi_app") || !strings.Contains(modalApp, "encrypted_ports=[PORT]") {
-		t.Fatalf("modal_app.py missing Modal sandbox gateway setup:\n%s", modalApp)
-	}
-
-	for _, tt := range []struct {
-		name     string
-		workflow string
-	}{
-		{name: "docs-user-tester-agent", workflow: "test.ts"},
-		{name: "docs-editor-agent", workflow: "edit.ts"},
+	for _, rel := range []string{
+		"modal_app.py", "harbor_runner.py", "runner_api.py", "requirements.txt", "Dockerfile",
+		"docs-user-tester-agent/README.md", "docs-user-tester-agent/prompts/system.md", "docs-user-tester-agent/skills/docs-user-test/SKILL.md",
+		"docs-editor-agent/README.md", "docs-editor-agent/prompts/system.md", "docs-editor-agent/skills/documentation-editor/SKILL.md",
 	} {
-		agentDir := filepath.Join(dir, tt.name)
-		config := readText(t, filepath.Join(agentDir, "flue.config.ts"))
-		if !strings.Contains(config, "defineConfig") || !strings.Contains(config, "target: 'node'") {
-			t.Fatalf("%s missing node Flue config:\n%s", tt.name, config)
+		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("missing extracted template %s: %v", rel, err)
 		}
-		if _, err := os.Stat(filepath.Join(agentDir, "app.ts")); err != nil {
-			t.Fatalf("%s missing visible Flue app entrypoint: %v", tt.name, err)
-		}
-		entry := filepath.Join(agentDir, "agents", tt.name+".ts")
-		if _, err := os.Stat(entry); err != nil {
-			t.Fatalf("%s missing Flue entrypoint: %v", tt.name, err)
-		}
-		workflow := filepath.Join(agentDir, "workflows", tt.workflow)
-		if _, err := os.Stat(workflow); err != nil {
-			t.Fatalf("%s missing Flue workflow %s: %v", tt.name, tt.workflow, err)
-		}
-		pkg := readText(t, filepath.Join(agentDir, "package.json"))
-		if !strings.Contains(pkg, "@flue/runtime") || !strings.Contains(pkg, "@flue/cli") || !strings.Contains(pkg, "valibot") || !strings.Contains(pkg, "bun@") {
-			t.Fatalf("%s package.json missing Flue/Bun dependencies:\n%s", tt.name, pkg)
-		}
-		if _, err := os.Stat(filepath.Join(agentDir, "bun.lock")); err != nil {
-			t.Fatalf("%s missing Bun lockfile: %v", tt.name, err)
-		}
-		assertNoGeneratedTemplateJunk(t, agentDir)
 	}
+	if requirements := readText(t, filepath.Join(dir, "requirements.txt")); !strings.Contains(requirements, "harbor[modal]==0.24.0") {
+		t.Fatalf("Harbor must be pinned: %s", requirements)
+	}
+	modalApp := readText(t, filepath.Join(dir, "modal_app.py"))
+	for _, marker := range []string{"modal.App", "modal.Dict.from_name", "@modal.asgi_app", "execute.spawn.aio"} {
+		if !strings.Contains(modalApp, marker) {
+			t.Fatalf("Modal template missing %s", marker)
+		}
+	}
+	if !strings.Contains(readText(t, filepath.Join(dir, "harbor_runner.py")), "Trial.create") {
+		t.Fatal("runner must execute Harbor trials")
+	}
+	assertNoGeneratedTemplateJunk(t, dir)
 }
 
-func TestExtractRemovesStaleGeneratedJunk(t *testing.T) {
+func TestExtractRemovesLegacyRuntimePreservesCustomFiles(t *testing.T) {
 	dir := t.TempDir()
-	stalePaths := []string{
-		filepath.Join("docs-user-tester-agent", ".flue", "workflows", "test.ts"),
-		filepath.Join("docs-user-tester-agent", "node_modules", "pkg", "index.js"),
-		filepath.Join("docs-user-tester-agent", "dist", "server.mjs"),
-		filepath.Join("docs-editor-agent", ".flue", "workflows", "edit.ts"),
-		filepath.Join("docs-editor-agent", ".flue-vite", "_entry.ts"),
-		filepath.Join("docs-editor-agent", "package-lock.json"),
+	legacy := []string{
+		"docs-user-tester-agent/.flue/workflows/test.ts",
+		"docs-user-tester-agent/node_modules/pkg/index.js",
+		"docs-user-tester-agent/dist/server.mjs",
+		"docs-user-tester-agent/workflows/test.ts",
+		"docs-user-tester-agent/agents/docs-user-tester-agent.ts",
+		"docs-editor-agent/package.json", "docs-editor-agent/bun.lock", "docs-editor-agent/flue.config.ts",
+		"docs-editor-agent/app.ts", "docs-editor-agent/workflows/edit.ts",
 	}
-	for _, rel := range stalePaths {
-		path := filepath.Join(dir, rel)
+	custom := "docs-editor-agent/skills/custom/SKILL.md"
+	prompt := "docs-editor-agent/prompts/system.md"
+	for _, rel := range append(legacy, custom, prompt) {
+		path := filepath.Join(dir, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -70,50 +58,30 @@ func TestExtractRemovesStaleGeneratedJunk(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-
 	if err := Extract(dir); err != nil {
 		t.Fatal(err)
 	}
-
-	for _, rel := range stalePaths {
-		if _, err := os.Stat(filepath.Join(dir, rel)); !os.IsNotExist(err) {
-			t.Fatalf("stale generated path %s still exists, stat err=%v", rel, err)
+	for _, rel := range legacy {
+		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel))); !os.IsNotExist(err) {
+			t.Fatalf("legacy path %s still exists: %v", rel, err)
 		}
 	}
-	for _, rel := range []string{
-		filepath.Join("docs-user-tester-agent", "workflows", "test.ts"),
-		filepath.Join("docs-editor-agent", "workflows", "edit.ts"),
-	} {
-		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
-			t.Fatalf("missing extracted source %s: %v", rel, err)
-		}
+	if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(custom))); err != nil {
+		t.Fatalf("custom skill should be preserved: %v", err)
+	}
+	if got := readText(t, filepath.Join(dir, filepath.FromSlash(prompt))); got != "stale\n" {
+		t.Fatalf("customized bundled prompt overwritten: %q", got)
 	}
 }
 
 func TestValidateTemplatePathRejectsGeneratedJunk(t *testing.T) {
-	tests := []struct {
-		name    string
-		path    string
-		wantErr bool
-	}{
-		{name: "source file", path: "docs-user-tester-agent/workflows/test.ts"},
-		{name: "hidden flue directory", path: "docs-user-tester-agent/.flue/workflows/test.ts", wantErr: true},
-		{name: "node modules", path: "docs-user-tester-agent/node_modules/pkg/index.js", wantErr: true},
-		{name: "build output", path: "docs-user-tester-agent/dist/server.mjs", wantErr: true},
-		{name: "flue vite output", path: "docs-user-tester-agent/.flue-vite/_entry.ts", wantErr: true},
-		{name: "npm lock", path: "docs-user-tester-agent/package-lock.json", wantErr: true},
+	for _, path := range []string{"__pycache__/runner.pyc", ".venv/bin/python", "node_modules/index.js", ".env", "dist/server.py", ".flue/test.ts"} {
+		if err := validateTemplatePath(path); err == nil {
+			t.Fatalf("expected rejection of %s", path)
+		}
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateTemplatePath(tt.path)
-			if tt.wantErr && err == nil {
-				t.Fatal("expected error")
-			}
-			if !tt.wantErr && err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-		})
+	if err := validateTemplatePath("harbor_runner.py"); err != nil {
+		t.Fatal(err)
 	}
 }
 
