@@ -1,5 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="295" height="40" viewBox="0 0 295 40" role="img" aria-label="Harness / Model / Sandbox">
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="36" viewBox="0 0 256 36" role="img" aria-label="Harness / Model / Sandbox">
   <title>Harness / Model / Sandbox</title>
-  <rect x="0.5" y="0.5" width="294" height="39" fill="#121110" stroke="#39342e"/>
-  <text x="147.5" y="25" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#eeece9">Harness / Model / Sandbox →</text>
+  <style>.ink { fill: #111111 } @media (prefers-color-scheme: dark) { .ink { stroke: #3a4450; stroke-width: 1 } }</style>
+  <rect class="ink" x="0.5" y="0.5" width="255" height="35"/>
+  <text x="128" y="22.5" text-anchor="middle" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="0.8" fill="#ffffff">HARNESS / MODEL / SANDBOX →</text>
 </svg>

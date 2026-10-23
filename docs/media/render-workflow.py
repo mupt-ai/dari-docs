@@ -1,7 +1,9 @@
 """Render the README's illustrated workflow (not a recording).
 
 Run: uv run --with pillow python docs/media/render-workflow.py
-Uses Menlo on macOS, or DejaVu Sans Mono on Linux. No external assets.
+Writes docs-workflow-light.gif and docs-workflow-dark.gif, using the selfbench.dev
+palettes (warm paper and ink blue). Uses Menlo on macOS, or DejaVu Sans Mono on Linux.
+No external assets.
 """
 
 from pathlib import Path
@@ -10,12 +12,26 @@ from PIL import Image, ImageDraw, ImageFont
 
 HERE = Path(__file__).resolve().parent
 WIDTH, HEIGHT = 1200, 640
-BACKGROUND = "#0b0a09"
-CARD = "#121110"
-BORDER = "#2a2724"
-FOREGROUND = "#eeece9"
-MUTED = "#a19b94"
-BRAND = "#f9b12a"
+
+# Tokens from selfbench's review/src/public-site/palette.css, converted to hex.
+THEMES = {
+    "light": {
+        "background": "#f5f3ef",
+        "card": "#eeebe6",
+        "border": "#ddd7d0",
+        "foreground": "#211f1c",
+        "muted": "#67615b",
+        "accent": "#307e57",
+    },
+    "dark": {
+        "background": "#090c10",
+        "card": "#10151b",
+        "border": "#22282f",
+        "foreground": "#d4dbe2",
+        "muted": "#89939f",
+        "accent": "#45a173",
+    },
+}
 
 FONT_PATH = next(
     path
@@ -37,11 +53,11 @@ PHASES = [
         "subtitle": "What should a developer be able to do?",
         "label": "YOUR INPUT",
         "lines": [
-            ("$ dari-docs optimize . \\", FOREGROUND),
-            ('    --task "Install the SDK" \\', FOREGROUND),
-            ("    --harness claude-code \\", BRAND),
-            ("    --llm anthropic/claude-sonnet-4-6 \\", BRAND),
-            ("    --sandbox modal", BRAND),
+            ("$ dari-docs optimize . \\", "foreground"),
+            ('    --task "Install the SDK" \\', "foreground"),
+            ("    --harness claude-code \\", "accent"),
+            ("    --llm anthropic/claude-sonnet-4-6 \\", "accent"),
+            ("    --sandbox modal", "accent"),
         ],
         "detail": [
             ("SOURCE", "Selected docs or a public URL*"),
@@ -55,11 +71,11 @@ PHASES = [
         "subtitle": "The agent follows your docs, not a checklist.",
         "label": "ILLUSTRATIVE ATTEMPT",
         "lines": [
-            ("01  Read the quickstart", FOREGROUND),
-            ("02  Run the install command", FOREGROUND),
-            ("03  Try the documented import", FOREGROUND),
-            ("04  Record errors and missing steps", BRAND),
-            ("    No scores. Just what actually happened.", MUTED),
+            ("01  Read the quickstart", "foreground"),
+            ("02  Run the install command", "foreground"),
+            ("03  Try the documented import", "foreground"),
+            ("04  Record errors and missing steps", "accent"),
+            ("    No scores. Just what actually happened.", "muted"),
         ],
         "detail": [
             ("BOUNDARY", "Isolated task workspace"),
@@ -73,11 +89,11 @@ PHASES = [
         "subtitle": "Get evidence and the smallest useful docs fixes.",
         "label": "ILLUSTRATIVE FEEDBACK",
         "lines": [
-            ("Tried: install package, then import Client", FOREGROUND),
-            ("Blocked: the documented import failed", BRAND),
-            ("Missing: an explicit API-key setup step", BRAND),
-            ("Fix: verify the import and show auth setup", FOREGROUND),
-            ("→ .dari-docs/aggregate-feedback.md", MUTED),
+            ("Tried: install package, then import Client", "foreground"),
+            ("Blocked: the documented import failed", "accent"),
+            ("Missing: an explicit API-key setup step", "accent"),
+            ("Fix: verify the import and show auth setup", "foreground"),
+            ("→ .dari-docs/aggregate-feedback.md", "muted"),
         ],
         "detail": [
             ("REPORT", "Attempts / outcomes / blockers"),
@@ -91,11 +107,11 @@ PHASES = [
         "subtitle": "Optimize proposes changes. You decide what ships.",
         "label": "FILES TO REVIEW",
         "lines": [
-            (".dari-docs/", MUTED),
-            ("  aggregate-feedback.md", FOREGROUND),
-            ("  updated/", BRAND),
-            ("    README.md       ← proposed documentation", FOREGROUND),
-            ("    CHANGELOG.md    ← summary of changes", FOREGROUND),
+            (".dari-docs/", "muted"),
+            ("  aggregate-feedback.md", "foreground"),
+            ("  updated/", "accent"),
+            ("    README.md       ← proposed documentation", "foreground"),
+            ("    CHANGELOG.md    ← summary of changes", "foreground"),
         ],
         "detail": [
             ("EDITOR", "Uses the aggregate feedback"),
@@ -107,88 +123,100 @@ PHASES = [
 ]
 
 
-def render(phase, tick):
-    image = Image.new("RGB", (WIDTH, HEIGHT), BACKGROUND)
+def render(theme, phase, tick):
+    c = THEMES[theme]
+    image = Image.new("RGB", (WIDTH, HEIGHT), c["background"])
     draw = ImageDraw.Draw(image)
-    draw.rectangle((0, 0, WIDTH, 4), fill=BRAND)
-    draw.text((44, 31), "DARI DOCS", font=font(18), fill=FOREGROUND)
+    draw.text((44, 31), "DARI DOCS", font=font(18), fill=c["foreground"])
     draw.text(
         (1156, 34),
         "HOW OPTIMIZE WORKS / ILLUSTRATED",
         font=font(12),
-        fill=MUTED,
+        fill=c["muted"],
         anchor="ra",
     )
-    draw.line((44, 75, 1156, 75), fill=BORDER)
+    draw.line((44, 75, 1156, 75), fill=c["border"])
     data = PHASES[phase]
-    draw.text((44, 102), data["name"], font=font(34), fill=FOREGROUND)
-    draw.text((46, 154), data["subtitle"], font=font(16), fill=MUTED)
+    draw.text((44, 102), data["name"], font=font(34), fill=c["foreground"])
+    draw.text((46, 154), data["subtitle"], font=font(16), fill=c["muted"])
 
     labels = ["Task", "Tester", "Feedback", "Editor"]
     for index, label in enumerate(labels):
         x = 44 + index * 284
         active = index == phase
         draw.rectangle(
-            (x, 211, x + 260, 268), fill=CARD, outline=BRAND if active else BORDER
+            (x, 211, x + 260, 268),
+            fill=c["card"],
+            outline=c["accent"] if active else c["border"],
         )
         draw.text(
             (x + 17, 231),
             f"0{index + 1}",
             font=font(12),
-            fill=BRAND if active else MUTED,
+            fill=c["accent"] if active else c["muted"],
         )
         draw.text(
-            (x + 57, 228), label, font=font(17), fill=FOREGROUND if active else MUTED
+            (x + 57, 228),
+            label,
+            font=font(17),
+            fill=c["foreground"] if active else c["muted"],
         )
         if index < 3:
-            draw.text((x + 267, 231), ">", font=font(12), fill=MUTED)
+            draw.text((x + 267, 231), ">", font=font(12), fill=c["muted"])
 
-    draw.rectangle((44, 301, 703, 555), fill=CARD, outline=BORDER)
-    draw.text((65, 322), data["label"], font=font(11), fill=BRAND)
-    draw.line((65, 350, 681, 350), fill=BORDER)
-    for index, (text, color) in enumerate(data["lines"]):
-        draw.text((65, 375 + index * 32), text, font=font(13), fill=color)
+    draw.rectangle((44, 301, 703, 555), fill=c["card"], outline=c["border"])
+    draw.text((65, 322), data["label"], font=font(11), fill=c["accent"])
+    draw.line((65, 350, 681, 350), fill=c["border"])
+    for index, (text, role) in enumerate(data["lines"]):
+        draw.text((65, 375 + index * 32), text, font=font(13), fill=c[role])
 
-    draw.rectangle((727, 301, 1156, 555), fill=CARD, outline=BORDER)
+    draw.rectangle((727, 301, 1156, 555), fill=c["card"], outline=c["border"])
     draw.text(
         (750, 322),
         "RUN CONFIGURATION" if phase == 0 else "WHAT YOU GET",
         font=font(11),
-        fill=MUTED,
+        fill=c["muted"],
     )
     for index, (key, value) in enumerate(data["detail"]):
         y = 367 + index * 44
-        draw.text((750, y), key, font=font(9), fill=MUTED)
-        draw.text((750, y + 14), value, font=font(12), fill=FOREGROUND)
+        draw.text((750, y), key, font=font(9), fill=c["muted"])
+        draw.text((750, y + 14), value, font=font(12), fill=c["foreground"])
 
-    draw.line((44, 585, 1156, 585), fill=BORDER)
+    draw.line((44, 585, 1156, 585), fill=c["border"])
     footer = (
         "* Public URL sources support check only."
         if phase == 0
         else "Self-deployed on your keys. Harbor adapters determine compatibility."
     )
-    draw.text((44, 605), footer, font=font(10), fill=MUTED)
+    draw.text((44, 605), footer, font=font(10), fill=c["muted"])
     for index in range(4):
         x = 1057 + index * 25
-        draw.rectangle((x, 606, x + 14, 609), fill=BRAND if index == phase else BORDER)
+        draw.rectangle(
+            (x, 606, x + 14, 609),
+            fill=c["accent"] if index == phase else c["border"],
+        )
     # Small progress rail adds movement without flashing or hiding any text.
     start = 44 + phase * 278
-    draw.rectangle((start, 584, start + int(278 * tick), 586), fill=BRAND)
+    draw.rectangle((start, 584, start + int(278 * tick), 586), fill=c["accent"])
     return image
 
 
 def main():
-    frames = [render(phase, tick / 4) for phase in range(4) for tick in range(1, 5)]
-    frames[0].save(
-        HERE / "docs-workflow.gif",
-        save_all=True,
-        append_images=frames[1:],
-        duration=800,
-        loop=0,
-        optimize=True,
-        disposal=1,
-    )
-    print(f"Rendered {len(frames)} frames: {HERE / 'docs-workflow.gif'}")
+    for theme in THEMES:
+        frames = [
+            render(theme, phase, tick / 4) for phase in range(4) for tick in range(1, 5)
+        ]
+        output = HERE / f"docs-workflow-{theme}.gif"
+        frames[0].save(
+            output,
+            save_all=True,
+            append_images=frames[1:],
+            duration=800,
+            loop=0,
+            optimize=True,
+            disposal=1,
+        )
+        print(f"Rendered {len(frames)} frames: {output}")
 
 
 if __name__ == "__main__":
