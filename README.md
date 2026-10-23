@@ -18,13 +18,16 @@
 
 <p align="center">
   <a href="https://github.com/mupt-ai/dari-docs/actions/workflows/pr-checks.yml"><img src="https://github.com/mupt-ai/dari-docs/actions/workflows/pr-checks.yml/badge.svg" alt="PR Checks"></a>
-  <a href="https://github.com/mupt-ai/dari-docs/releases"><img src="https://img.shields.io/github/v/release/mupt-ai/dari-docs?color=f9b12a" alt="Latest release"></a>
-  <a href="https://docs.harborframework.com"><img src="https://img.shields.io/badge/Powered_by-Harbor-39342e" alt="Powered by Harbor"></a>
+  <a href="https://github.com/mupt-ai/dari-docs/releases"><img src="https://img.shields.io/github/v/release/mupt-ai/dari-docs?color=0f9d76" alt="Latest release"></a>
+  <a href="https://docs.harborframework.com"><img src="https://img.shields.io/badge/Powered_by-Harbor-111111" alt="Powered by Harbor"></a>
 </p>
 
 <p align="center">
   <a href="#how-it-works">
-    <img src="docs/media/docs-workflow.gif" alt="Illustrated workflow: choose a task, let a tester agent attempt it, inspect actionable feedback, and review proposed documentation edits. The animation shows example content, not a terminal recording." width="100%">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/media/docs-workflow-dark.gif">
+      <img src="docs/media/docs-workflow-light.gif" alt="Illustrated workflow: choose a task, let a tester agent attempt it, inspect actionable feedback, and review proposed documentation edits. The animation shows example content, not a terminal recording." width="100%">
+    </picture>
   </a>
   <br>
   <sub>Illustrated optimize workflow. Runner setup is required; outputs shown are examples.</sub>
