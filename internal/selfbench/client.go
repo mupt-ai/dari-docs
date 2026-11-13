@@ -360,18 +360,54 @@ func (c *Client) Connected(ctx context.Context, repo string) (bool, error) {
 	return err == nil, err
 }
 
-// CatalogModel is a model evaluations can run.
+// CatalogModel is a model evaluations or generation can run.
 type CatalogModel struct {
-	ID     string `json:"id"`
-	Label  string `json:"label"`
-	Vendor string `json:"vendor,omitempty"`
+	ID        string   `json:"id"`
+	Label     string   `json:"label"`
+	Provider  string   `json:"provider,omitempty"`
+	Harnesses []string `json:"harnesses,omitempty"`
 }
 
-// Catalog lists the models a repository's evaluations can run.
-func (c *Client) Catalog(ctx context.Context, repo string) ([]CatalogModel, error) {
-	var out struct {
-		Models []CatalogModel `json:"models"`
-	}
+// Managed is what the deployment runs on its own account, without a workspace credential.
+type Managed struct {
+	Models  bool `json:"models"`
+	Sandbox bool `json:"sandbox"`
+}
+
+// Catalog is what a repository's evaluations can run.
+type Catalog struct {
+	Models    []CatalogModel `json:"models"`
+	Sandboxes []string       `json:"sandboxes"`
+	Managed   Managed        `json:"managed"`
+}
+
+// Catalog lists the models and sandboxes a repository's evaluations can run.
+func (c *Client) Catalog(ctx context.Context, repo string) (Catalog, error) {
+	var out Catalog
 	err := c.do(ctx, http.MethodGet, c.Repo(repo)+"/evaluations/catalog", nil, &out)
-	return out.Models, err
+	return out, err
+}
+
+// Credential is a workspace credential: a model provider's key or sign-in, or a sandbox account.
+type Credential struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+	Auth string `json:"auth,omitempty"`
+}
+
+// GenerationOptions are the models, sandboxes, and credentials SelfBench can write and build tasks with.
+type GenerationOptions struct {
+	Available   *bool          `json:"available,omitempty"`
+	Models      []CatalogModel `json:"models"`
+	Sandboxes   []string       `json:"sandboxes"`
+	Credentials []Credential   `json:"credentials"`
+	Managed     Managed        `json:"managed"`
+}
+
+// GenerationOptions reads what a repository's task generation can use.
+func (c *Client) GenerationOptions(ctx context.Context, repo string) (GenerationOptions, error) {
+	var out GenerationOptions
+	err := c.do(ctx, http.MethodGet, c.Repo(repo)+"/generation-options", nil, &out)
+	return out, err
 }

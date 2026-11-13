@@ -50,7 +50,7 @@ curl -fsSL https://github.com/mupt-ai/dari-docs/releases/latest/download/install
 dari-docs init
 ```
 
-`init` uses your `self-bench` login, checks the repository is connected, picks a model from SelfBench's catalog, and writes `.dari-docs/config.json` and `.github/workflows/dari-docs.yml`.
+`init` uses your `self-bench` login, checks the repository is connected, picks a model from SelfBench's catalog and the workspace's credentials to run it on, and writes `.dari-docs/config.json` and `.github/workflows/dari-docs.yml`.
 
 **3. Add tasks.** A task is something a reader of your docs should be able to do. SelfBench turns each one into a task with tests:
 

@@ -6,10 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/mupt-ai/dari-docs/internal/config"
-	"github.com/mupt-ai/dari-docs/internal/selfbench"
+	"github.com/mupt-ai/dari-docs/internal/setup"
 	"github.com/spf13/cobra"
 )
 
@@ -55,6 +54,7 @@ func runInit(ctx context.Context, o initOptions) error {
 	}
 
 	var todo []string
+	var plan *setup.Plan
 	sb, err := connection(config.Config{Org: o.Org})
 	switch {
 	case err != nil:
@@ -72,20 +72,36 @@ func runInit(ctx context.Context, o initOptions) error {
 			todo = append(todo, fmt.Sprintf("Connect %s in SelfBench: %s (workspace %s).", o.Repo, sb.BaseURL, sb.Org))
 		default:
 			fmt.Printf("%s is connected to SelfBench workspace %s.\n", o.Repo, sb.Org)
-			if o.Model == "" {
-				if models, err := sb.Catalog(ctx, o.Repo); err == nil {
-					o.Model = defaultModel(models)
-				}
+			catalog, err := sb.Catalog(ctx, o.Repo)
+			if err != nil {
+				fmt.Println("dari-docs: reading the model catalog:", err)
+				break
+			}
+			gen, err := sb.GenerationOptions(ctx, o.Repo)
+			if err != nil {
+				fmt.Println("dari-docs: reading generation options:", err)
+				break
+			}
+			chosen := setup.Choose(catalog, gen, o.Model)
+			plan = &chosen
+			for _, m := range chosen.Missing {
+				todo = append(todo, "Add "+m+", then rerun `dari-docs init --force`.")
 			}
 		}
 	}
-	if o.Model == "" {
-		todo = append(todo, "Set `models[0].catalogId` in .dari-docs/config.json (`self-bench catalog --repo OWNER/NAME` lists them).")
-	} else {
-		fmt.Printf("Checks will run %s on Claude Code; change `models` in the config to add or swap models.\n", o.Model)
-	}
 
 	cfg := config.Template(o.Org, o.Repo, o.Model)
+	if plan != nil {
+		cfg.Models = []config.Model{plan.Model}
+		cfg.Sandbox, cfg.SandboxCredentialID, cfg.Generation = plan.Sandbox, plan.SandboxCredentialID, plan.Generation
+		fmt.Printf("Checks will run %s on %s", plan.Model.CatalogID, plan.Model.Harnesses[0])
+		if plan.Sandbox != "" {
+			fmt.Printf(", in %s", plan.Sandbox)
+		}
+		fmt.Println("; edit `models` in the config to add or swap models.")
+	} else if o.Model == "" {
+		todo = append(todo, "Set `models[0].catalogId` in .dari-docs/config.json (`self-bench catalog --repo OWNER/NAME` lists them).")
+	}
 	if err := config.Save(configPath, cfg); err != nil {
 		return err
 	}
@@ -111,22 +127,6 @@ func runInit(ctx context.Context, o initOptions) error {
 		fmt.Printf("  %d. %s\n", i+1, t)
 	}
 	return nil
-}
-
-// defaultModel is the newest Claude Sonnet the catalog lists (it lists newest first), else its first
-// model that isn't a router.
-func defaultModel(models []selfbench.CatalogModel) string {
-	for _, m := range models {
-		if strings.Contains(m.ID, "claude-sonnet") {
-			return m.ID
-		}
-	}
-	for _, m := range models {
-		if !strings.Contains(m.ID, "routing") {
-			return m.ID
-		}
-	}
-	return ""
 }
 
 const workflow = `name: dari-docs

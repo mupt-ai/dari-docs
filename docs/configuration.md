@@ -2,7 +2,7 @@
 
 ## `.dari-docs/config.json`
 
-`dari-docs init` writes it. Only `models` is required.
+`dari-docs init` writes it. Only `models` is required. When the SelfBench deployment offers no managed models or sandboxes, `init` names the workspace's own credentials in `models`, `sandbox`, and `generation`.
 
 | Field | Default | Does |
 | --- | --- | --- |
@@ -14,7 +14,7 @@
 | `tasks` | every approved task | Tasks checks run, as `runId/taskId`. `dari-docs tasks add` appends the ones it creates. |
 | `sandbox`, `sandboxCredentialId` | `managed`, `managed-sandbox` | Where trials run |
 | `judgeCredentialId` | none | Needed when a task is graded by an LLM judge |
-| `generation` | the deployment's managed settings | Passed to SelfBench when it builds the ablations and writes tasks (its `generation` body) |
+| `generation` | the deployment's managed settings | Passed to SelfBench when it builds the ablations and writes tasks: its [`generation` body](https://docs.selfbench.dev/api/build) (author and verifier model, reasoning, model and sandbox credentials) |
 | `failOnRegression` | `false` | Exit 2 when a task passes before the change and fails after |
 | `timeoutMinutes` | `240` | How long a check waits for builds and trials |
 

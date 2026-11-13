@@ -56,8 +56,8 @@ type Config struct {
 	SandboxCredentialID string   `json:"sandboxCredentialId,omitempty"`
 	// JudgeCredentialID is required when any task is graded by an LLM judge.
 	JudgeCredentialID string `json:"judgeCredentialId,omitempty"`
-	// Generation is passed through to SelfBench when building the docs ablations. Empty uses the
-	// deployment's managed models and sandbox.
+	// Generation is passed through to SelfBench when it writes tasks and builds the docs ablations.
+	// Empty uses the deployment's managed models and sandbox; init fills it in when there are none.
 	Generation json.RawMessage `json:"generation,omitempty"`
 	// FailOnRegression makes the check fail when a task passes before the change and fails after.
 	FailOnRegression bool `json:"failOnRegression,omitempty"`
