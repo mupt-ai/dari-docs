@@ -34,7 +34,7 @@ In GitHub Actions only the first two apply: store the key as the `SELFBENCH_API_
 - uses: actions/checkout@v4
   with:
     fetch-depth: 0          # the check diffs against the merge base
-- uses: mupt-ai/dari-docs@v1
+- uses: mupt-ai/dari-docs@v0.2.0   # init pins the release it came from
   with:
     selfbench-api-key: ${{ secrets.SELFBENCH_API_KEY }}
 ```

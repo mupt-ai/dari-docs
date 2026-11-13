@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/mupt-ai/dari-docs/internal/config"
 	"github.com/mupt-ai/dari-docs/internal/setup"
@@ -108,7 +109,7 @@ func runInit(ctx context.Context, o initOptions) error {
 	if err := os.MkdirAll(filepath.Dir(workflowPath), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+	if err := os.WriteFile(workflowPath, []byte(workflow()), 0o644); err != nil {
 		return err
 	}
 	fmt.Printf("wrote %s\nwrote %s\n", configPath, workflowPath)
@@ -129,7 +130,8 @@ func runInit(ctx context.Context, o initOptions) error {
 	return nil
 }
 
-const workflow = `name: dari-docs
+// workflowTemplate pins the action to the release this CLI came from (%s).
+const workflowTemplate = `name: dari-docs
 
 on:
   pull_request:
@@ -152,7 +154,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: mupt-ai/dari-docs@v1
+      - uses: mupt-ai/dari-docs@%s
         with:
           selfbench-api-key: ${{ secrets.SELFBENCH_API_KEY }}
 `
+
+// workflow is the workflow init writes. A release pins its own tag; a build from source, main.
+func workflow() string {
+	ref := "main"
+	if strings.HasPrefix(version, "v") || strings.Count(version, ".") == 2 {
+		ref = "v" + strings.TrimPrefix(version, "v")
+	}
+	return fmt.Sprintf(workflowTemplate, ref)
+}
