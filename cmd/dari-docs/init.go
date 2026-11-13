@@ -2,91 +2,109 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 
-	"github.com/mupt-ai/dari-docs/internal/agenttemplates"
-	"github.com/mupt-ai/dari-docs/internal/projectconfig"
+	"github.com/mupt-ai/dari-docs/internal/config"
 	"github.com/spf13/cobra"
 )
 
 type initOptions struct {
-	RepoArg               string
-	Deploy                bool
-	APIKeyEnv             string
-	APIKey                string
-	APIBaseURL            string
-	LLMAPIKeySecret       string
-	AnthropicAPIKeySecret string
-	OpenAIAPIKeySecret    string
-	TesterURL             string
-	EditorURL             string
-	AgentsDir             string
+	Dir   string
+	Org   string
+	Repo  string
+	Model string
+	Force bool
 }
 
 func newInitCommand() *cobra.Command {
-	opts := initOptions{}
+	o := initOptions{}
 	cmd := &cobra.Command{
-		Use:           "init [repo]",
-		Short:         "Extract bundled Harbor agent folders",
-		Args:          cobra.ArbitraryArgs,
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				opts.RepoArg = args[0]
-			}
-			return runInitWithOptions(cmd.Context(), opts)
-		},
+		Use:   "init",
+		Short: "Write .dari-docs/config.json and a GitHub workflow that checks docs pull requests",
+		Args:  cobra.NoArgs,
+		RunE:  func(cmd *cobra.Command, _ []string) error { return runInit(cmd.Context(), o) },
 	}
-	cmd.Flags().BoolVar(&opts.Deploy, "deploy", false, "unsupported; deploy .dari-docs/agents/modal_app.py with Modal")
-	cmd.Flags().StringVar(&opts.APIKeyEnv, "api-key-env", opts.APIKeyEnv, "unsupported; Dari API keys are not used by Harbor deployments")
-	cmd.Flags().StringVar(&opts.APIKey, "api-key", "", "unsupported; Dari API keys are not used by Harbor deployments")
-	cmd.Flags().StringVar(&opts.APIBaseURL, "api-base-url", opts.APIBaseURL, "unsupported; Dari API URLs are not used by Harbor deployments")
-	cmd.Flags().StringVar(&opts.LLMAPIKeySecret, "llm-api-key-secret", "", "unsupported; configure provider env vars on the Harbor deployment")
-	cmd.Flags().StringVar(&opts.AnthropicAPIKeySecret, "anthropic-api-key-secret", "", "unsupported; configure ANTHROPIC_API_KEY on the Harbor deployment")
-	cmd.Flags().StringVar(&opts.OpenAIAPIKeySecret, "openai-api-key-secret", "", "unsupported; configure OPENAI_API_KEY on the Harbor deployment")
-	cmd.Flags().StringVar(&opts.TesterURL, "tester-url", "", "base URL of a deployed tester Harbor app to save in config")
-	cmd.Flags().StringVar(&opts.EditorURL, "editor-url", "", "base URL of a deployed editor Harbor app to save in config")
-	cmd.Flags().StringVar(&opts.AgentsDir, "agents-dir", "", "where to extract Harbor agent folders (default: <repo>/.dari-docs/agents)")
-	_ = cmd.Flags().MarkHidden("deploy")
-	_ = cmd.Flags().MarkHidden("api-key-env")
-	_ = cmd.Flags().MarkHidden("api-key")
-	_ = cmd.Flags().MarkHidden("api-base-url")
-	_ = cmd.Flags().MarkHidden("llm-api-key-secret")
-	_ = cmd.Flags().MarkHidden("anthropic-api-key-secret")
-	_ = cmd.Flags().MarkHidden("openai-api-key-secret")
+	cmd.Flags().StringVar(&o.Dir, "dir", ".", "repository root")
+	cmd.Flags().StringVar(&o.Org, "org", os.Getenv("SELFBENCH_ORG"), "SelfBench workspace")
+	cmd.Flags().StringVar(&o.Repo, "repo", "", "connected repository, owner/name (default: the origin remote)")
+	cmd.Flags().StringVar(&o.Model, "model", "", "a SelfBench catalog model ID to check with")
+	cmd.Flags().BoolVar(&o.Force, "force", false, "overwrite existing files")
 	return cmd
 }
 
-func runInitWithOptions(ctx context.Context, opts initOptions) error {
-	_ = ctx
-	repoArg := opts.RepoArg
-	if repoArg == "" {
-		repoArg = "."
+func runInit(ctx context.Context, o initOptions) error {
+	if o.Repo == "" {
+		o.Repo, _ = repository(ctx, "", config.Config{})
 	}
-	absRepo, err := filepath.Abs(repoArg)
+	cfg := config.Template(o.Org, o.Repo, o.Model)
+	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	if opts.Deploy || opts.APIKeyEnv != "" || opts.APIKey != "" || opts.APIBaseURL != "" || opts.LLMAPIKeySecret != "" || opts.AnthropicAPIKeySecret != "" || opts.OpenAIAPIKeySecret != "" {
-		return fmt.Errorf("Dari deploy/credential flags are not supported; deploy .dari-docs/agents/modal_app.py with Modal and configure provider keys in a Modal secret")
+	files := []struct {
+		path    string
+		content []byte
+	}{
+		{config.Path(o.Dir), append(b, '\n')},
+		{filepath.Join(o.Dir, ".github", "workflows", "dari-docs.yml"), []byte(workflow)},
 	}
-
-	agentsDir := opts.AgentsDir
-	if agentsDir == "" {
-		agentsDir = filepath.Join(absRepo, ".dari-docs", "agents")
+	for _, f := range files {
+		if _, err := os.Stat(f.path); err == nil && !o.Force {
+			return fmt.Errorf("%s exists; pass --force to overwrite it", f.path)
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
-	if err := agenttemplates.Extract(agentsDir); err != nil {
-		return err
+	for _, f := range files {
+		if err := os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(f.path, f.content, 0o644); err != nil {
+			return err
+		}
+		fmt.Println("wrote", f.path)
 	}
-	fmt.Printf("Extracted bundled Harbor agent folders to %s\n", agentsDir)
-
-	cfg := projectconfig.Config{AgentsDir: agentsDir, AgentRuntime: "harbor", LLMMode: "harbor-env", TesterURL: opts.TesterURL, EditorURL: opts.EditorURL}
-	if err := projectconfig.Save(absRepo, cfg); err != nil {
-		return err
+	fmt.Print(`
+Next:
+  1. Connect the repository in SelfBench and approve some tasks. Tasks about using the docs work best:
+       dari-docs tasks add --title "Make a first API call" "A new user follows the quickstart to ..."
+  2. Set the model in .dari-docs/config.json (list them with: self-bench catalog --repo OWNER/NAME).
+  3. Add a SELFBENCH_API_KEY secret to the GitHub repository (SelfBench → Settings → API Keys).
+`)
+	if cfg.Org == "" {
+		fmt.Println("  4. Set `org` in .dari-docs/config.json to your SelfBench workspace.")
 	}
-	fmt.Printf("Wrote %s\n", projectconfig.Path(absRepo))
-	fmt.Println("Deploy the Modal app with `uvx modal deploy .dari-docs/agents/modal_app.py`, then run `dari-docs check --tester-url <tester-url>`.")
 	return nil
 }
+
+const workflow = `name: dari-docs
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: dari-docs-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    if: github.event.pull_request.draft == false || github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: mupt-ai/dari-docs@main
+        with:
+          selfbench-api-key: ${{ secrets.SELFBENCH_API_KEY }}
+`
