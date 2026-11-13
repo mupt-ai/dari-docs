@@ -56,14 +56,16 @@ func newTasksListCommand() *cobra.Command {
 				if title == "" && t.SourcePR != nil {
 					title = fmt.Sprintf("PR #%d", *t.SourcePR)
 				}
+				// SelfBench calls an approved task "accepted"; "needs_review" passed its checks.
+				approved := t.State == "accepted"
 				checked := "no"
 				switch {
-				case (len(cfg.Tasks) == 0 || listed[ref]) && t.State == "approved":
+				case (len(cfg.Tasks) == 0 || listed[ref]) && approved:
 					checked = "yes"
 				case listed[ref]:
 					checked = "once approved"
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", ref, t.State, checked, title)
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", ref, taskState(t.State), checked, title)
 			}
 			if err := w.Flush(); err != nil {
 				return err
@@ -171,4 +173,17 @@ older dari-docs task files use. A task's title is its first line unless --title 
 	cmd.Flags().StringVar(&commit, "commit", "HEAD", "commit, branch, or HEAD the tasks start from")
 	cmd.Flags().StringVar(&difficulty, "difficulty", "", "easy, medium, or hard")
 	return cmd
+}
+
+// taskState says a SelfBench task state the way the app does.
+func taskState(state string) string {
+	switch state {
+	case "accepted":
+		return "approved"
+	case "needs_review":
+		return "ready to approve"
+	case "in_progress":
+		return "being written"
+	}
+	return state
 }
