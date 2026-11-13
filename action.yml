@@ -31,7 +31,8 @@ runs:
     - uses: actions/setup-go@v5
       with:
         go-version-file: ${{ github.action_path }}/go.mod
-        cache-dependency-path: ${{ github.action_path }}/go.sum
+        # The action's go.sum is outside the caller's workspace, which setup-go's cache can't key on.
+        cache: false
     - name: Build dari-docs
       shell: bash
       working-directory: ${{ github.action_path }}
