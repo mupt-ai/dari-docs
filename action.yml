@@ -1,0 +1,48 @@
+name: dari-docs
+description: Check whether a pull request's docs change helps coding agents finish real tasks, on SelfBench.
+branding:
+  icon: book-open
+  color: green
+
+inputs:
+  selfbench-api-key:
+    description: SelfBench API key (Settings → API Keys). Store it as a secret.
+    required: true
+  selfbench-org:
+    description: SelfBench workspace. Defaults to `org` in the config.
+    required: false
+    default: ""
+  selfbench-api-url:
+    description: A self-hosted SelfBench. Defaults to `apiUrl` in the config, else app.selfbench.dev.
+    required: false
+    default: ""
+  config:
+    description: Path to the dari-docs config.
+    required: false
+    default: .dari-docs/config.json
+  github-token:
+    description: Token to comment on the pull request.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ github.action_path }}/go.mod
+        # The action's go.sum is outside the caller's workspace, which setup-go's cache can't key on.
+        cache: false
+    - name: Build dari-docs
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: go build -trimpath -o "$RUNNER_TEMP/dari-docs" ./cmd/dari-docs
+    - name: Check the docs change
+      shell: bash
+      env:
+        SELFBENCH_API_KEY: ${{ inputs.selfbench-api-key }}
+        SELFBENCH_ORG: ${{ inputs.selfbench-org }}
+        SELFBENCH_API_URL: ${{ inputs.selfbench-api-url }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        CONFIG: ${{ inputs.config }}
+      run: '"$RUNNER_TEMP/dari-docs" check --config "$CONFIG"'
