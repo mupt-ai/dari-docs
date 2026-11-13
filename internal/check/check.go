@@ -285,7 +285,7 @@ func runnable(before, after []selfbench.EnvironmentTask, only []string) ([]selfb
 	}
 	for k := range wanted {
 		if !keys[k] {
-			unbuilt[k] = "not an approved task in SelfBench"
+			unbuilt[k] = "not approved in SelfBench yet"
 		}
 	}
 	sort.Slice(tasks, func(i, j int) bool { return tasks[i].String() < tasks[j].String() })

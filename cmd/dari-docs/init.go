@@ -2,13 +2,14 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/mupt-ai/dari-docs/internal/config"
+	"github.com/mupt-ai/dari-docs/internal/selfbench"
 	"github.com/spf13/cobra"
 )
 
@@ -24,61 +25,108 @@ func newInitCommand() *cobra.Command {
 	o := initOptions{}
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Write .dari-docs/config.json and a GitHub workflow that checks docs pull requests",
-		Args:  cobra.NoArgs,
-		RunE:  func(cmd *cobra.Command, _ []string) error { return runInit(cmd.Context(), o) },
+		Short: "Set up a repository: write .dari-docs/config.json and the GitHub workflow",
+		Long: `init checks the repository is connected to SelfBench, picks a model from SelfBench's catalog, and
+writes .dari-docs/config.json and .github/workflows/dari-docs.yml. It uses your self-bench login
+(or SELFBENCH_API_KEY and SELFBENCH_ORG); without one it writes the files with placeholders.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error { return runInit(cmd.Context(), o) },
 	}
 	cmd.Flags().StringVar(&o.Dir, "dir", ".", "repository root")
-	cmd.Flags().StringVar(&o.Org, "org", os.Getenv("SELFBENCH_ORG"), "SelfBench workspace")
-	cmd.Flags().StringVar(&o.Repo, "repo", "", "connected repository, owner/name (default: the origin remote)")
-	cmd.Flags().StringVar(&o.Model, "model", "", "a SelfBench catalog model ID to check with")
+	cmd.Flags().StringVar(&o.Org, "org", "", "SelfBench workspace (default: SELFBENCH_ORG, then your self-bench login's)")
+	cmd.Flags().StringVar(&o.Repo, "repo", "", "repository, owner/name (default: the origin remote)")
+	cmd.Flags().StringVar(&o.Model, "model", "", "SelfBench catalog model ID (default: the newest Claude Sonnet in the catalog)")
 	cmd.Flags().BoolVar(&o.Force, "force", false, "overwrite existing files")
 	return cmd
 }
 
 func runInit(ctx context.Context, o initOptions) error {
-	if o.Repo == "" {
-		o.Repo, _ = repository(ctx, "", config.Config{})
-	}
-	cfg := config.Template(o.Org, o.Repo, o.Model)
-	b, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	files := []struct {
-		path    string
-		content []byte
-	}{
-		{config.Path(o.Dir), append(b, '\n')},
-		{filepath.Join(o.Dir, ".github", "workflows", "dari-docs.yml"), []byte(workflow)},
-	}
-	for _, f := range files {
-		if _, err := os.Stat(f.path); err == nil && !o.Force {
-			return fmt.Errorf("%s exists; pass --force to overwrite it", f.path)
+	configPath := config.Path(o.Dir)
+	workflowPath := filepath.Join(o.Dir, ".github", "workflows", "dari-docs.yml")
+	for _, p := range []string{configPath, workflowPath} {
+		if _, err := os.Stat(p); err == nil && !o.Force {
+			return fmt.Errorf("%s exists; pass --force to overwrite it", p)
 		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	}
-	for _, f := range files {
-		if err := os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(f.path, f.content, 0o644); err != nil {
-			return err
-		}
-		fmt.Println("wrote", f.path)
+	if o.Repo == "" {
+		o.Repo, _ = repository(ctx, "", config.Config{})
 	}
-	fmt.Print(`
-Next:
-  1. Connect the repository in SelfBench and approve some tasks. Tasks about using the docs work best:
-       dari-docs tasks add --title "Make a first API call" "A new user follows the quickstart to ..."
-  2. Set the model in .dari-docs/config.json (list them with: self-bench catalog --repo OWNER/NAME).
-  3. Add a SELFBENCH_API_KEY secret to the GitHub repository (SelfBench → Settings → API Keys).
-`)
-	if cfg.Org == "" {
-		fmt.Println("  4. Set `org` in .dari-docs/config.json to your SelfBench workspace.")
+
+	var todo []string
+	sb, err := connection(config.Config{Org: o.Org})
+	switch {
+	case err != nil:
+		todo = append(todo, "Sign in so dari-docs can reach SelfBench: `self-bench login` (or set SELFBENCH_API_KEY and SELFBENCH_ORG), then rerun `dari-docs init --force`.")
+		fmt.Println("dari-docs:", err)
+	case o.Repo == "":
+		todo = append(todo, "Set `repo` in .dari-docs/config.json to owner/name.")
+	default:
+		o.Org = sb.Org
+		connected, err := sb.Connected(ctx, o.Repo)
+		switch {
+		case err != nil:
+			fmt.Println("dari-docs: could not reach SelfBench:", err)
+		case !connected:
+			todo = append(todo, fmt.Sprintf("Connect %s in SelfBench: %s (workspace %s).", o.Repo, sb.BaseURL, sb.Org))
+		default:
+			fmt.Printf("%s is connected to SelfBench workspace %s.\n", o.Repo, sb.Org)
+			if o.Model == "" {
+				if models, err := sb.Catalog(ctx, o.Repo); err == nil {
+					o.Model = defaultModel(models)
+				}
+			}
+		}
+	}
+	if o.Model == "" {
+		todo = append(todo, "Set `models[0].catalogId` in .dari-docs/config.json (`self-bench catalog --repo OWNER/NAME` lists them).")
+	} else {
+		fmt.Printf("Checks will run %s on Claude Code; change `models` in the config to add or swap models.\n", o.Model)
+	}
+
+	cfg := config.Template(o.Org, o.Repo, o.Model)
+	if err := config.Save(configPath, cfg); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(workflowPath), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(workflowPath, []byte(workflow), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("wrote %s\nwrote %s\n", configPath, workflowPath)
+
+	secret := "gh secret set SELFBENCH_API_KEY"
+	if o.Repo != "" {
+		secret += " --repo " + o.Repo
+	}
+	todo = append(todo,
+		"Add the tasks checks run, then approve them in SelfBench when they're ready:\n       dari-docs tasks add --title \"First API call\" \"A new user follows the quickstart to ...\"\n     or import a file with one task per paragraph or bullet: dari-docs tasks add --file tasks.txt",
+		"Give the workflow a SelfBench API key (create one under Settings → API Keys):\n       "+secret,
+		"Commit .dari-docs/config.json and .github/workflows/dari-docs.yml. Pull requests that change docs get a comment.",
+	)
+	fmt.Println("\nNext:")
+	for i, t := range todo {
+		fmt.Printf("  %d. %s\n", i+1, t)
 	}
 	return nil
+}
+
+// defaultModel is the newest Claude Sonnet the catalog lists (it lists newest first), else its first
+// model that isn't a router.
+func defaultModel(models []selfbench.CatalogModel) string {
+	for _, m := range models {
+		if strings.Contains(m.ID, "claude-sonnet") {
+			return m.ID
+		}
+	}
+	for _, m := range models {
+		if !strings.Contains(m.ID, "routing") {
+			return m.ID
+		}
+	}
+	return ""
 }
 
 const workflow = `name: dari-docs
@@ -104,7 +152,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: mupt-ai/dari-docs@main
+      - uses: mupt-ai/dari-docs@v1
         with:
           selfbench-api-key: ${{ secrets.SELFBENCH_API_KEY }}
 `

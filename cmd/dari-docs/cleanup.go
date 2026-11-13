@@ -54,7 +54,7 @@ func runCleanup(ctx context.Context, o cleanupOptions) error {
 	if err != nil {
 		return err
 	}
-	sb, err := client(cfg)
+	sb, err := connection(cfg)
 	if err != nil {
 		return err
 	}

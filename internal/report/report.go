@@ -258,7 +258,7 @@ func (r Report) Markdown(c Context) string {
 		b.WriteString("\n</details>\n\n")
 	}
 	if len(r.Unbuilt) > 0 {
-		fmt.Fprintf(&b, "<details><summary>Tasks left out because a docs build failed (%d)</summary>\n\n", len(r.Unbuilt))
+		fmt.Fprintf(&b, "<details><summary>Tasks left out (%d)</summary>\n\n", len(r.Unbuilt))
 		keys := make([]string, 0, len(r.Unbuilt))
 		for k := range r.Unbuilt {
 			keys = append(keys, k)

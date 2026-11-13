@@ -5,11 +5,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -62,22 +64,49 @@ func (c *common) register(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&c.Repo, "repo", "", "connected repository, owner/name (default: config, then GITHUB_REPOSITORY, then the origin remote)")
 }
 
-// client is a SelfBench client from the config and environment: SELFBENCH_API_KEY, and
-// SELFBENCH_ORG and SELFBENCH_API_URL over the config's.
-func client(cfg config.Config) (*selfbench.Client, error) {
-	key := os.Getenv("SELFBENCH_API_KEY")
+// login is what `self-bench login` saved, which dari-docs uses when nothing else names a key.
+type login struct {
+	APIURL string `json:"apiUrl"`
+	APIKey string `json:"apiKey"`
+	Org    string `json:"org"`
+}
+
+func readLogin() login {
+	dir := os.Getenv("XDG_CONFIG_HOME")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return login{}
+		}
+		dir = filepath.Join(home, ".config")
+	}
+	var l login
+	b, err := os.ReadFile(filepath.Join(dir, "self-bench", "config.json"))
+	if err != nil || json.Unmarshal(b, &l) != nil {
+		return login{}
+	}
+	l.APIURL = strings.TrimRight(firstNonEmpty(l.APIURL, config.DefaultAPIURL), "/")
+	return l
+}
+
+// connection is where SelfBench is and who to call it as: SELFBENCH_API_URL, SELFBENCH_API_KEY, and
+// SELFBENCH_ORG first, then the config, then the self-bench CLI's login for the same deployment.
+func connection(cfg config.Config) (*selfbench.Client, error) {
+	l := readLogin()
+	base := strings.TrimRight(firstNonEmpty(os.Getenv("SELFBENCH_API_URL"), cfg.APIURL, l.APIURL, config.DefaultAPIURL), "/")
+	if l.APIURL != base {
+		// A login for another deployment holds a key this one won't take.
+		l = login{}
+	}
+	key := firstNonEmpty(os.Getenv("SELFBENCH_API_KEY"), l.APIKey)
 	if key == "" {
-		return nil, errors.New("set SELFBENCH_API_KEY (SelfBench → Settings → API Keys)")
+		return nil, fmt.Errorf("no SelfBench API key: run `self-bench login`, or set SELFBENCH_API_KEY (%s/settings/api-keys)", base)
 	}
-	org := firstNonEmpty(os.Getenv("SELFBENCH_ORG"), cfg.Org)
+	org := firstNonEmpty(os.Getenv("SELFBENCH_ORG"), cfg.Org, l.Org)
 	if org == "" {
-		return nil, errors.New("set the SelfBench workspace: `org` in the config or SELFBENCH_ORG")
+		return nil, errors.New("no SelfBench workspace: set `org` in the config or SELFBENCH_ORG")
 	}
-	return &selfbench.Client{
-		BaseURL: firstNonEmpty(os.Getenv("SELFBENCH_API_URL"), cfg.APIURL),
-		APIKey:  key,
-		Org:     org,
-	}, nil
+	return &selfbench.Client{BaseURL: base, APIKey: key, Org: org}, nil
 }
 
 // repository is the connected repository: the flag, the config, the Actions job's, or origin's.

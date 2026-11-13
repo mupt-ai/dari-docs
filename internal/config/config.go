@@ -38,9 +38,10 @@ type Model struct {
 
 // Config is the contents of .dari-docs/config.json.
 type Config struct {
-	// APIURL is the SelfBench deployment: hosted by default, or a self-hosted one.
+	// APIURL is the SelfBench deployment: hosted by default, or a self-hosted one. SELFBENCH_API_URL,
+	// then this, then the self-bench CLI's login, then app.selfbench.dev.
 	APIURL string `json:"apiUrl,omitempty"`
-	// Org is the SelfBench workspace. SELFBENCH_ORG overrides it.
+	// Org is the SelfBench workspace. SELFBENCH_ORG overrides it; the self-bench CLI's login fills it in.
 	Org string `json:"org,omitempty"`
 	// Repo is the connected repository, owner/name. Defaults to GITHUB_REPOSITORY or the origin remote.
 	Repo string `json:"repo,omitempty"`
@@ -48,7 +49,8 @@ type Config struct {
 	Docs []string `json:"docs,omitempty"`
 	// Models run on every task, before and after the docs change.
 	Models []Model `json:"models"`
-	// Tasks limits the check to these approved tasks, as runId/taskId. Empty means every approved task.
+	// Tasks limits the check to these tasks, as runId/taskId; `dari-docs tasks add` appends the ones
+	// it creates. Empty means every approved task, including ones built from merged pull requests.
 	Tasks               []string `json:"tasks,omitempty"`
 	Sandbox             string   `json:"sandbox,omitempty"`
 	SandboxCredentialID string   `json:"sandboxCredentialId,omitempty"`
@@ -68,6 +70,19 @@ func Path(repoRoot string) string { return filepath.Join(repoRoot, ".dari-docs",
 
 // Load reads and validates the config at path, filling defaults.
 func Load(path string) (Config, error) {
+	c, err := Read(path)
+	if err != nil {
+		return Config{}, err
+	}
+	c.applyDefaults()
+	if err := c.Validate(); err != nil {
+		return Config{}, fmt.Errorf("%s: %w", path, err)
+	}
+	return c, nil
+}
+
+// Read reads the config as written, without defaults, so Save writes back only what the user set.
+func Read(path string) (Config, error) {
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return Config{}, fmt.Errorf("%s not found: run `dari-docs init` first", path)
@@ -81,17 +96,41 @@ func Load(path string) (Config, error) {
 	if err := dec.Decode(&c); err != nil {
 		return Config{}, fmt.Errorf("%s: %w", path, err)
 	}
-	c.applyDefaults()
-	if err := c.Validate(); err != nil {
-		return Config{}, fmt.Errorf("%s: %w", path, err)
-	}
 	return c, nil
 }
 
-func (c *Config) applyDefaults() {
-	if c.APIURL == "" {
-		c.APIURL = DefaultAPIURL
+// Save writes a config read with Read, or a Template.
+func Save(path string, c Config) error {
+	b, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
 	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(b, '\n'), 0o644)
+}
+
+// AddTasks appends task references the config doesn't list yet, and reports how many it added.
+func (c *Config) AddTasks(refs ...string) int {
+	have := map[string]bool{}
+	for _, t := range c.Tasks {
+		have[t] = true
+	}
+	added := 0
+	for _, r := range refs {
+		if !have[r] {
+			c.Tasks = append(c.Tasks, r)
+			have[r] = true
+			added++
+		}
+	}
+	return added
+}
+
+// APIURL is left empty when the config names none, so a self-bench login's URL can apply; the
+// client falls back to DefaultAPIURL.
+func (c *Config) applyDefaults() {
 	c.APIURL = strings.TrimRight(c.APIURL, "/")
 	if len(c.Docs) == 0 {
 		c.Docs = append([]string(nil), DefaultDocs...)

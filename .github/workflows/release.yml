@@ -3,7 +3,8 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      # Versions only: the floating major tag (v1) that workflows pin to is moved by hand.
+      - "v[0-9]+.[0-9]+.[0-9]+*"
   release:
     types:
       - published

@@ -134,7 +134,7 @@ func runCheck(ctx context.Context, o checkOptions) error {
 		return nil
 	}
 
-	sb, err := client(cfg)
+	sb, err := connection(cfg)
 	if err != nil {
 		return err
 	}

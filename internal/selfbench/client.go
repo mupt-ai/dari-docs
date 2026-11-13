@@ -350,3 +350,28 @@ func (c *Client) CreateScenario(ctx context.Context, repo string, req ScenarioRe
 func (c *Client) WebURL(repo, page string) string {
 	return fmt.Sprintf("%s/repos/%s/%s", strings.TrimRight(c.BaseURL, "/"), repo, page)
 }
+
+// Connected reports whether the repository is connected in the client's workspace.
+func (c *Client) Connected(ctx context.Context, repo string) (bool, error) {
+	err := c.do(ctx, http.MethodGet, c.Repo(repo), nil, nil)
+	if IsStatus(err, http.StatusNotFound) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// CatalogModel is a model evaluations can run.
+type CatalogModel struct {
+	ID     string `json:"id"`
+	Label  string `json:"label"`
+	Vendor string `json:"vendor,omitempty"`
+}
+
+// Catalog lists the models a repository's evaluations can run.
+func (c *Client) Catalog(ctx context.Context, repo string) ([]CatalogModel, error) {
+	var out struct {
+		Models []CatalogModel `json:"models"`
+	}
+	err := c.do(ctx, http.MethodGet, c.Repo(repo)+"/evaluations/catalog", nil, &out)
+	return out.Models, err
+}
